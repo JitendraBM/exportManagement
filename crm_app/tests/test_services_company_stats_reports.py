@@ -36,12 +36,19 @@ def lut_details():
     return [{"lut_number": "LUT123", "financial_year": "2025-26", "is_primary": True}]
 
 
+def rcmc_details():
+    return [{"registration_number": "RCMC123", "registration_date": "2025-04-01",
+             "valid_until": "2030-03-31", "organisation_name": "CEPC",
+             "organisation_address": "New Delhi", "contact_number": "+91 11 1111 1111",
+             "email_address": "rcmc@cepc.test", "is_primary": True}]
+
+
 def save_company(container, user, **over):
     kwargs = dict(
         company_name="Acme Exports", address="Morbi, Gujarat", gstin="24AAAAA0000A1Z5",
         pan_no="AAAAA0000A", iec="1234567890", bin_no="BIN1",
         contact_details=contact_details(), contact_persons=contact_persons(),
-        bank_details=bank_details(), lut_details=lut_details(),
+        bank_details=bank_details(), lut_details=lut_details(), rcmc_details=rcmc_details(),
     )
     kwargs.update(over)
     return container.company_service.save(user, **kwargs)
@@ -161,7 +168,7 @@ class TestStatsService:
     def test_overview_counts_with_data(self, container, seed):
         make_lead(container, seed.employee)
         lead2 = make_lead(container, seed.employee, "Convert Me")
-        container.client_service.convert_lead(lead2.id, seed.admin)
+        container.buyer_service.convert_lead(lead2.id, seed.admin)
         counts = container.stats_service.overview_counts(seed.company_id)
         assert counts["total_leads"] == 2
         assert counts["total_clients"] == 1
@@ -210,14 +217,14 @@ class TestReportService:
 
     def test_payments_total_sums_amounts(self, container, seed, monkeypatch):
         lead = make_lead(container, seed.employee)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
 
         class _Resp:
             def raise_for_status(self): pass
             def json(self): return {"rates": {"INR": 80.0}}
 
         monkeypatch.setattr("app.services.requests.get", lambda *a, **k: _Resp())
-        container.client_service.add_payment(
+        container.buyer_service.add_payment(
             client.id, seed.admin, "Acct", "2026-05-05 10:00", 100, "USD")
         result = container.report_service.payments_received_total(
             seed.company_id, "2026-01-01", "2026-12-31")
@@ -231,47 +238,47 @@ class TestReportService:
 class TestAdvanceClientStatus:
     def _converted_client(self, container, seed):
         lead = make_lead(container, seed.employee)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         return lead, client
 
     def test_proforma_advances_to_purchase_order_pending(self, container, seed):
         lead, client = self._converted_client(container, seed)
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "proforma_invoice")
-        reloaded = container.client_repo.get_by_id(client.id)
+        reloaded = container.buyer_repo.get_by_id(client.id)
         assert reloaded.status == "purchase_order_submission_pending"
 
     def test_purchase_order_advances_to_purchase_invoice_pending(self, container, seed):
         lead, client = self._converted_client(container, seed)
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "purchase_order")
-        assert container.client_repo.get_by_id(client.id).status == \
+        assert container.buyer_repo.get_by_id(client.id).status == \
             "purchase_invoice_submission_pending"
 
     def test_never_walks_status_backwards(self, container, seed):
         lead, client = self._converted_client(container, seed)
         # Jump forward two stages...
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "export_invoice")
-        forward = container.client_repo.get_by_id(client.id).status
+        forward = container.buyer_repo.get_by_id(client.id).status
         # ...then re-run an earlier document type; status must not regress.
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "proforma_invoice")
-        assert container.client_repo.get_by_id(client.id).status == forward
+        assert container.buyer_repo.get_by_id(client.id).status == forward
 
     def test_packing_list_is_a_no_op(self, container, seed):
         lead, client = self._converted_client(container, seed)
-        before = container.client_repo.get_by_id(client.id).status
-        advance_client_status(container.client_repo, container.lead_repo,
+        before = container.buyer_repo.get_by_id(client.id).status
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "packing_list")
-        assert container.client_repo.get_by_id(client.id).status == before
+        assert container.buyer_repo.get_by_id(client.id).status == before
 
     def test_unconverted_lead_is_a_no_op(self, container, seed):
         lead = make_lead(container, seed.employee)
         # Must not raise even though there's no client behind this lead.
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               lead.id, "proforma_invoice")
 
     def test_missing_lead_id_is_a_no_op(self, container, seed):
-        advance_client_status(container.client_repo, container.lead_repo,
+        advance_client_status(container.party_repos, container.lead_repo,
                               None, "proforma_invoice")
