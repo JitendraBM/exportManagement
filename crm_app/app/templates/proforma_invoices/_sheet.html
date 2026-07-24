@@ -12,8 +12,8 @@
 {% set pi_mode = invoice.display_mode or 'index' %}
 {% set main_items = invoice.items[:PI_ANNEX_START] %}
 {% set annex_items = invoice.items[PI_ANNEX_START:] %}
-{% set extra_rows = goods.extra_row_count(main_items, pi_mode) | int %}
-{% set filler_px = [260 - (main_items|length * 16) - (extra_rows * 13) - (30 if annex_items else 0), 30] | max %}
+{# The filler row's height is measured in the browser (templates/_page_filler.html)
+   so the sheet fills its page exactly whatever the items wrap to. #}
 <style>
   .pi-sheet {
     background: #fff;
@@ -71,7 +71,6 @@
   .pi-email-flex > div + div { border-left: 1px solid #000; }
   .pi-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
   .pi-items tbody tr.pi-goods td, .pi-items tbody tr.pi-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
-  .pi-items tbody tr.pi-filler td { height: {{ filler_px }}px; }
   .pi-items tbody tr.pi-group-gap td { height: 8px; padding: 0; }
   .pi-charge-label { text-align: center; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .pi-sign-cell { height: 92px; padding: 4px 6px; }
@@ -95,7 +94,7 @@
 {% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
 {% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
 
-<div class="pi-sheet">
+<div class="pi-sheet js-page-sheet">
   <div class="pi-title">PROFORMA INVOICE</div>
 
   <!-- Exporter / invoice references -->
@@ -250,7 +249,7 @@
         <td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
-      <tr class="pi-filler">
+      <tr class="pi-filler js-page-filler">
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
