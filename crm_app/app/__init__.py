@@ -28,6 +28,7 @@ from app.services import (
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
     QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
     PackingListService, BackupService, DocumentVersionService, ProformaFulfilmentService,
+    InventoryService,
 )
 from app.utils import register_template_helpers
 
@@ -102,6 +103,7 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
+        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
@@ -201,6 +203,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.company import company_bp
     from app.routes.reports import reports_bp
     from app.routes.products import products_bp
+    from app.routes.inventory import inventory_bp
     from app.routes.quotations import quotations_bp
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
@@ -222,6 +225,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(company_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(products_bp)
+    app.register_blueprint(inventory_bp)
     app.register_blueprint(quotations_bp)
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)
