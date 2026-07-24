@@ -21,13 +21,13 @@ from app.repositories import (
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository,
+    ExportInvoiceRepository, PackingListRepository, DocumentVersionRepository, PermitRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, CurrencyService,
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
     QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
-    PackingListService, BackupService, DocumentVersionService, ProformaFulfilmentService,
+    ExportInvoiceService, PackingListService, BackupService, DocumentVersionService, ProformaFulfilmentService,
     InventoryService, PermitService,
 )
 from app.utils import register_template_helpers
@@ -62,6 +62,7 @@ class ServiceContainer:
         self.proforma_invoice_repo = ProformaInvoiceRepository(db)
         self.purchase_order_repo = PurchaseOrderRepository(db)
         self.purchase_invoice_repo = PurchaseInvoiceRepository(db)
+        self.export_invoice_repo = ExportInvoiceRepository(db)
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
@@ -141,11 +142,18 @@ class ServiceContainer:
             self.document_version_service, self.party_repos, self.supplier_repo,
             Config.PURCHASE_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
+        self.export_invoice_service = ExportInvoiceService(
+            self.export_invoice_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
+            self.purchase_order_repo, self.purchase_invoice_repo, self.company_repo,
+            self.document_version_service, self.party_repos,
+            Config.EXPORT_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
+        )
         self.backup_service = BackupService(
             db, Config.DATABASE_PATH,
             {
                 "uploads/products": Config.PRODUCT_UPLOAD_FOLDER,
                 "uploads/purchase_invoices": Config.PURCHASE_INVOICE_UPLOAD_FOLDER,
+                "uploads/export_invoices": Config.EXPORT_INVOICE_UPLOAD_FOLDER,
                 "uploads/permits": Config.PERMIT_UPLOAD_FOLDER,
             },
             Config.SCHEMA_PATH,
@@ -215,6 +223,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
     from app.routes.purchase_invoices import purchase_invoices_bp
+    from app.routes.export_invoices import export_invoices_bp
     from app.routes.packing_lists import packing_lists_bp
     from app.routes.profile import profile_bp
     from app.routes.backup import backup_bp
@@ -238,6 +247,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)
     app.register_blueprint(purchase_invoices_bp)
+    app.register_blueprint(export_invoices_bp)
     app.register_blueprint(packing_lists_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(backup_bp)

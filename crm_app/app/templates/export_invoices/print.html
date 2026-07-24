@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ invoice.export_invoice_number }} · Export Invoice</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+      .ei-annexure { page-break-before: always; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  {% if historical_version %}
+  <div class="quote-toolbar no-print" style="background:#fff4d6;">
+    <div>Viewing <strong>version {{ historical_version.version_number }}</strong> of {{ invoice.export_invoice_number }} - saved {{ historical_version.created_at | friendly_date }} by {{ historical_version.changed_by_name }}. Read-only.</div>
+    <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">View current version →</a>
+  </div>
+  {% endif %}
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('export_invoices.list_export_invoices') }}" class="btn btn-ghost btn-sm">← All export invoices</a>
+    </div>
+    <div class="flex gap-8">
+      {% if not historical_version %}
+      {% if invoice.shipping_bill_pdf_path %}
+      <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank" class="btn btn-ghost btn-sm">📎 Shipping bill</a>
+      {% endif %}
+      <a href="{{ url_for('export_invoices.edit_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('export_invoices.export_invoice_versions', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Version history</a>
+      {% endif %}
+      <form method="POST" action="{{ url_for('export_invoices.delete_export_invoice', export_invoice_id=invoice.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this export invoice?');">
+        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+      </form>
+      {% endif %}
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'export_invoices/_sheet.html' %}
+  {% include 'export_invoices/_annexure.html' %}
+  {% include '_page_filler.html' %}
+
+  <script>
+    function confirmDeleteWithPassword(form, message) {
+      if (!window.confirm(message)) return false;
+      var password = window.prompt('Enter your password to confirm deletion:');
+      if (!password) return false;
+      var input = form.querySelector('input[name="delete_password"]');
+      if (!input) {
+        input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_password';
+        form.appendChild(input);
+      }
+      input.value = password;
+      return true;
+    }
+  </script>
+</body>
+</html>

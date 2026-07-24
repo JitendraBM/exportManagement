@@ -1,0 +1,183 @@
+{# Export Invoice page 2: the SELF SEALING OF CONTAINERS FOR EXPORT
+   examination report annexure. Always generated. Section 05 (examination
+   date) defaults to the creation date; 08B is a free textbox; section 09
+   lists the four costliest product lines and repeats the front page's
+   FOB/CNF; section 11B has one row per physical container (Tare/Gross weight
+   are printed columns left blank); section 13's top cell is the fixed claim
+   text, its bottom cell the imported EPCG info (or "-"). #}
+<style>
+  .ei-annexure { background: #fff; color: #000; width: 205mm; margin: 24px auto 48px; padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25); font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.2; }
+  .ei-annexure .ei-a-title { border: 1px solid #000; text-align: center; font-size: 12px; font-weight: bold; padding: 3px 0; }
+  .ei-annexure table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
+  .ei-annexure td { border: 1px solid #000; padding: 2px 4px; vertical-align: top; text-align: left; word-wrap: break-word; }
+  .ei-a-c { text-align: center; }
+  .ei-a-v { font-weight: bold; }
+  .ei-a-lbl { font-size: 8px; }
+  @media print { .ei-annexure { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+</style>
+
+{% macro admy(val) -%}
+  {%- if val -%}
+    {%- set p = (val|string)[:10].split('-') -%}
+    {%- if p|length == 3 %}{{ p[2]|int }}/{{ p[1]|int }}/{{ p[0] }}{% else %}{{ val }}{% endif -%}
+  {%- else -%}-{%- endif -%}
+{%- endmacro %}
+{% macro ausd(v) -%}{%- if v %}$&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}$&nbsp;-{% endif -%}{%- endmacro %}
+
+<div class="ei-annexure js-page-sheet">
+  <div class="ei-a-title">ANNEXURE — SELF SEALING OF CONTAINERS FOR EXPORT</div>
+
+  <table>
+    <colgroup><col style="width:33%"><col style="width:34%"><col style="width:33%"></colgroup>
+    <tr>
+      <td class="ei-a-c ei-a-lbl">RANGE</td>
+      <td class="ei-a-c ei-a-lbl">DIVISION</td>
+      <td class="ei-a-c ei-a-lbl">COMMISSIONERATE</td>
+    </tr>
+  </table>
+
+  <table>
+    <tr><td class="ei-a-c ei-a-v" style="font-size:10px;">EXAMINATION REPORT FOR FACTORY SEALED PACKAGES / CONTAINER</td></tr>
+  </table>
+
+  <table>
+    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:40%"><col style="width:15%"><col style="width:20%"></colgroup>
+    <tr>
+      <td class="ei-a-c">01</td>
+      <td class="ei-a-lbl">Name &amp; Address of Exporter</td>
+      <td class="ei-a-v">{{ company.company_name|upper if company else '' }}<br>{{ (company.address or '')|upper|replace('\n','<br>')|safe if company else '' }}</td>
+      <td class="ei-a-lbl">IEC / GSTIN</td>
+      <td class="ei-a-v">{{ company.iec if company else '-' }}<br>{{ company.gstin if company else '-' }}</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c">03 &amp; 04</td>
+      <td class="ei-a-lbl">Name &amp; Address of Manufacturer</td>
+      <td class="ei-a-v" colspan="3">{{ (invoice.manufacturer_name or '-')|upper }}{% if invoice.manufacturer_address %}<br>{{ invoice.manufacturer_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c">05</td>
+      <td class="ei-a-lbl">Date Of Examination</td>
+      <td class="ei-a-v">{{ admy(invoice.examination_date) }}</td>
+      <td class="ei-a-lbl">08B — Location Code</td>
+      <td class="ei-a-v">{{ invoice.location_code_08b or '-' }}</td>
+    </tr>
+  </table>
+
+  <!-- 09: particulars of export invoice - top 4 costliest product lines,
+       plus the same FOB/CNF as the front page. -->
+  <table>
+    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:45%"><col style="width:15%"><col style="width:15%"></colgroup>
+    <tr>
+      <td class="ei-a-c" rowspan="6">09</td>
+      <td class="ei-a-lbl" rowspan="6">Particulars Of Export Invoice</td>
+      <td class="ei-a-lbl">Invoice No &amp; Date</td>
+      <td class="ei-a-v" colspan="2">{{ invoice.export_invoice_number }} — {{ admy(invoice.invoice_date) }}</td>
+    </tr>
+    {% for item in invoice.top_costliest_items %}
+    <tr>
+      <td class="ei-a-v">{{ item.product_name }}{% if item.hsn_code %} - HSN {{ item.hsn_code }}{% endif %}</td>
+      <td class="ei-a-lbl">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
+      <td class="ei-a-v">{{ ausd(item.total_usd) }}</td>
+    </tr>
+    {% endfor %}
+    {% for i in range(invoice.top_costliest_items | length, 4) %}
+    <tr><td>&nbsp;</td><td></td><td></td></tr>
+    {% endfor %}
+    <tr>
+      <td class="ei-a-lbl">CNF Value / FOB Value</td>
+      <td class="ei-a-v">{{ ausd(invoice.cnf_value) }}</td>
+      <td class="ei-a-v">{{ ausd(invoice.fob_value) }}</td>
+    </tr>
+  </table>
+
+  <table>
+    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:75%"></colgroup>
+    <tr>
+      <td class="ei-a-c">09C</td>
+      <td class="ei-a-lbl">Name &amp; Address Of The Consignee Abroad</td>
+      <td class="ei-a-v">{{ (invoice.consignee_name or '-')|upper }}{% if invoice.consignee_address %}<br>{{ invoice.consignee_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
+    </tr>
+  </table>
+
+  <!-- 11B: one row per physical container. Tare/Gross weight are left blank. -->
+  <table>
+    <colgroup><col style="width:4%"><col style="width:14%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:14%"><col style="width:9%"><col style="width:9%"></colgroup>
+    <tr>
+      <td class="ei-a-c ei-a-lbl" colspan="8"><strong>11B — Seal Nos. For Containerised Cargo</strong></td>
+    </tr>
+    <tr>
+      <td class="ei-a-c ei-a-lbl">SR</td>
+      <td class="ei-a-c ei-a-lbl">Container Type</td>
+      <td class="ei-a-c ei-a-lbl">Container No.</td>
+      <td class="ei-a-c ei-a-lbl">Line Seal No.</td>
+      <td class="ei-a-c ei-a-lbl">RFID Seal No.</td>
+      <td class="ei-a-c ei-a-lbl">Vehicle No.</td>
+      <td class="ei-a-c ei-a-lbl">Tare Weight</td>
+      <td class="ei-a-c ei-a-lbl">Gross Weight</td>
+    </tr>
+    {% for cd in invoice.container_details %}
+    <tr>
+      <td class="ei-a-c">{{ loop.index }}</td>
+      <td class="ei-a-v">{{ cd.container_type or '' }}</td>
+      <td class="ei-a-v">{{ cd.container_no or '' }}</td>
+      <td class="ei-a-v">{{ cd.line_seal_no or '' }}</td>
+      <td class="ei-a-v">{{ cd.rfid_seal_no or '' }}</td>
+      <td class="ei-a-v">{{ cd.vehicle_no or '' }}</td>
+      <td></td>
+      <td></td>
+    </tr>
+    {% else %}
+    <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    {% endfor %}
+    {# Blank filler cells: sized by _page_filler.html so the container table
+       grows with empty rows and the annexure fills its A4 page exactly. #}
+    <tr class="js-page-filler">
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+    </tr>
+  </table>
+
+  <table>
+    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:75%"></colgroup>
+    <tr>
+      <td class="ei-a-c">12A</td>
+      <td class="ei-a-lbl">Permission No &amp; Date</td>
+      <td class="ei-a-v">{{ invoice.permission_no or '-' }}{% if invoice.permission_date %} — DATED {{ admy(invoice.permission_date) }}{% endif %}{% if invoice.permission_expiry %} (Expiry {{ admy(invoice.permission_expiry) }}){% endif %}</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c">12C</td>
+      <td class="ei-a-lbl">Issuing Authority &amp; Address</td>
+      <td class="ei-a-v">{{ (invoice.issuing_authority or '-')|upper }}{% if invoice.issuing_authority_address %}<br>{{ invoice.issuing_authority_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
+    </tr>
+  </table>
+
+  <!-- 13: top cell always the fixed claim text; bottom cell the EPCG info
+       (or "-" when there is no EPCG). -->
+  <table>
+    <colgroup><col style="width:3%"><col style="width:34%"><col style="width:63%"></colgroup>
+    <tr>
+      <td class="ei-a-c" rowspan="2">13</td>
+      <td class="ei-a-lbl" rowspan="2">Examined the goods covered under this as above particulars of export scheme</td>
+      <td class="ei-a-v">We Claim Under "MEIS &amp; DBK" Scheme &amp; Other Benefit Avail Under Chapter 3 FTP</td>
+    </tr>
+    <tr>
+      <td class="ei-a-v">{% if invoice.epcg_number %}EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ admy(invoice.epcg_date) }}{% endif %}{% else %}-{% endif %}</td>
+    </tr>
+  </table>
+
+  <!-- Declaration + signatory -->
+  <table>
+    <colgroup><col style="width:60%"><col style="width:40%"></colgroup>
+    <tr>
+      <td style="height:60px;">
+        <span class="ei-a-lbl">Self Sealing Declaration</span><br>
+        {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '')|replace('\n','<br>')|safe }}
+      </td>
+      <td style="text-align:right;height:60px;vertical-align:bottom;">
+        <div class="ei-a-v">FOR {{ company.company_name|upper if company else '' }}</div>
+        <div class="ei-a-v">Authorised Signatory</div>
+        {% if invoice.authorised_person_designation %}<div>{{ invoice.authorised_person_designation }}</div>{% endif %}
+        {% if invoice.authorised_person_name %}<div class="ei-a-v">{{ invoice.authorised_person_name }}</div>{% endif %}
+      </td>
+    </tr>
+  </table>
+</div>
