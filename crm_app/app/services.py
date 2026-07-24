@@ -36,13 +36,15 @@ from app.models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
     DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
+    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_CGST_SGST,
+    EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
 )
 from app.repositories import (
     TenantRepository, UserRepositoryBase, LeadRepositoryBase, PartyRepositoryBase, SupplierRepositoryBase,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository,
+    ExportInvoiceRepository, PackingListRepository, DocumentVersionRepository, PermitRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 
@@ -733,7 +735,8 @@ class CompanyService:
 
     def save(self, current_user: User, company_name: str, address: str, gstin: str, pan_no: str, iec: str,
               bin_no: str, contact_details: list, contact_persons: list, bank_details: list, lut_details: list,
-              rcmc_details: list, logo_file=None, remove_logo: bool = False) -> None:
+              rcmc_details: list, logo_file=None, remove_logo: bool = False,
+              self_sealing_declaration: str = "") -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can edit our company's profile.")
         if not company_name or not company_name.strip():
@@ -775,7 +778,8 @@ class CompanyService:
 
         existing = self.company_repo.get(current_user.company_id)
         our_company_id = self.company_repo.upsert(
-            current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no
+            current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no,
+            (self_sealing_declaration or "").strip() or None,
         )
         self.company_repo.replace_contact_details(our_company_id, valid_details)
         self.company_repo.replace_contact_persons(our_company_id, valid_persons)
@@ -1539,6 +1543,7 @@ _VERSIONED_TYPES = {
     "proforma_invoice": (ProformaInvoice, ProformaInvoiceItem, "invoice_number"),
     "purchase_order": (PurchaseOrder, PurchaseOrderItem, "po_number"),
     "purchase_invoice": (PurchaseInvoice, PurchaseInvoiceItem, "purchase_invoice_number"),
+    "export_invoice": (ExportInvoice, ExportInvoiceItem, "export_invoice_number"),
     "packing_list": (PackingList, PackingListItem, "packing_list_number"),
 }
 
@@ -2692,6 +2697,479 @@ class PurchaseInvoiceService:
         self._assert_can_modify(existing, current_user)
         self._delete_pdf_file(existing.supplier_pdf_path)
         self.purchase_invoice_repo.delete(purchase_invoice_id)
+
+
+# ============================================================
+# EXPORT INVOICE SERVICE
+# ============================================================
+class ExportInvoiceService:
+    """The customer/customs-facing Export Invoice at the buyer end of the
+    pipeline. Mirrors ProformaInvoiceService, with the additions that make
+    this document what it is:
+
+    - It references MANY proforma invoices (many-to-many). Goods are
+      prefilled from those PIs (build_prefill_from_proformas) then edited.
+    - Tax is computed per-product: each line snapshots its product's IGST %,
+      the amounts are summed and shown as IGST or CGST/SGST per tax_mode
+      (see ExportInvoice.tax_total_inr / igst_amount_inr / ...).
+    - The exchange rate is typed in manually; once a value is set only an
+      admin may change it (enforced in update()).
+    - EPCG number/date, the "export under" text and the supplier
+      GSTIN/invoice-no purchase-detail rows are imported (when present) by
+      walking each linked PI -> its purchase orders -> their purchase
+      invoices; the exemption rows come from POs whose purchase_type is
+      'exemption'.
+    - An optional Shipping Bill PDF is stored the same way a Purchase
+      Invoice stores the supplier's PDF (_save_pdf/_delete_pdf_file).
+    - No draft/confirmed lock (always editable), but admin version history is
+      kept via DocumentVersionService."""
+
+    def __init__(self, export_invoice_repo: ExportInvoiceRepository, product_repo: ProductRepository,
+                 lead_repo: LeadRepositoryBase, proforma_invoice_repo: ProformaInvoiceRepository,
+                 purchase_order_repo: PurchaseOrderRepository, purchase_invoice_repo: PurchaseInvoiceRepository,
+                 company_repo: CompanyRepository, version_service: "DocumentVersionService",
+                 party_repos: Optional[dict] = None, upload_folder: str = "",
+                 allowed_extensions: set = frozenset()):
+        self.export_invoice_repo = export_invoice_repo
+        self.product_repo = product_repo
+        self.lead_repo = lead_repo
+        self.proforma_invoice_repo = proforma_invoice_repo
+        self.purchase_order_repo = purchase_order_repo
+        self.purchase_invoice_repo = purchase_invoice_repo
+        self.company_repo = company_repo
+        self.version_service = version_service
+        self.party_repos = party_repos
+        self.upload_folder = upload_folder
+        self.allowed_extensions = allowed_extensions
+
+    # ---- reads --------------------------------------------------
+    def get(self, invoice_id: int, company_id: int) -> ExportInvoice:
+        invoice = self.export_invoice_repo.get_by_id(invoice_id)
+        if not invoice or invoice.company_id != company_id:
+            raise NotFoundError(f"Export invoice #{invoice_id} not found.")
+        return invoice
+
+    def list_all(self, company_id: int) -> List[ExportInvoice]:
+        return self.export_invoice_repo.list_all(company_id)
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, invoice: ExportInvoice, current_user: User):
+        if current_user.is_admin:
+            return
+        if invoice.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage export invoices you created yourself.")
+
+    # ---- number generation --------------------------------------------------
+    def _generate_number(self, company_id: int, invoice_date: str) -> str:
+        """EXPINV{YYYYMMDD}{seq} - that day's export invoice count + 1 for
+        this company, zero-padded to 3 digits."""
+        date_part = invoice_date.replace("-", "")
+        prefix = f"EXPINV{date_part}"
+        seq = self.export_invoice_repo.count_for_date_prefix(company_id, prefix) + 1
+        return f"{prefix}{seq:03d}"
+
+    # ---- prefill from selected proforma invoices --------------------------------------------------
+    def _load_proformas(self, proforma_ids: list, company_id: int) -> List[ProformaInvoice]:
+        """Load only the proforma invoices that belong to this company - a
+        crafted id in the request can never pull another company's PI in."""
+        result = []
+        for pid in dict.fromkeys(proforma_ids or []):
+            try:
+                pi = self.proforma_invoice_repo.get_by_id(int(pid))
+            except (TypeError, ValueError):
+                continue
+            if pi and pi.company_id == company_id:
+                result.append(pi)
+        return result
+
+    def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
+        """Merge the selected PIs' goods lines and import EPCG / export-under
+        / supplier-exemption rows by walking each PI -> its purchase orders ->
+        their purchase invoices. Returns a dict the form/route consumes."""
+        proformas = self._load_proformas(proforma_ids, company_id)
+        first = proformas[0] if proformas else None
+
+        # Goods: every line from every selected PI, in selection order.
+        items = []
+        for pi in proformas:
+            for it in pi.items:
+                items.append({
+                    "product_id": it.product_id, "product_name": it.product_name,
+                    "hsn_code": it.hsn_code, "surface": it.surface, "pallets": it.pallets,
+                    "quantity_boxes": it.quantity_boxes, "quantity_value": it.quantity_value,
+                    "unit": it.unit, "price_usd": it.price_usd,
+                    "igst_percent": self._product_igst_percent(it.product_id, company_id),
+                })
+
+        # Buyer orders: the PIs under one export invoice normally share the
+        # SAME buyer order number, so collapse identical order numbers into a
+        # single row (keyed case-insensitively) rather than repeating it once
+        # per PI - each distinct order keeps its first PI as the link.
+        buyer_orders = []
+        seen_orders = set()
+        for pi in proformas:
+            if not pi.buyer_order_no:
+                continue
+            key = pi.buyer_order_no.strip().lower()
+            if key in seen_orders:
+                continue
+            seen_orders.add(key)
+            buyer_orders.append({"order_no": pi.buyer_order_no, "order_date": pi.invoice_date,
+                                 "proforma_invoice_id": pi.id})
+
+        # Walk the chain for EPCG / export-under / exemption purchase details.
+        epcg_number = epcg_date = None
+        purchase_details = []
+        seen_pd = set()
+        for pi in proformas:
+            for po in self.purchase_order_repo.list_for_proforma(pi.id):
+                if po.company_id != company_id:
+                    continue
+                pinvs = [p for p in self.purchase_invoice_repo.list_for_purchase_order(po.id)
+                         if p.company_id == company_id]
+                for pinv in pinvs:
+                    if not epcg_number and pinv.epcg_number:
+                        epcg_number, epcg_date = pinv.epcg_number, pinv.epcg_date
+                # Exemption purchases contribute a supplier GSTIN + invoice-no row.
+                if getattr(po, "purchase_type", "") == "exemption":
+                    if pinvs:
+                        for pinv in pinvs:
+                            key = ((pinv.seller_gstin or po.seller_gstin or ""), (pinv.invoice_number or ""))
+                            if key not in seen_pd:
+                                seen_pd.add(key)
+                                purchase_details.append({
+                                    "supplier_gstin": pinv.seller_gstin or po.seller_gstin,
+                                    "supplier_invoice_no": pinv.invoice_number,
+                                })
+                    elif po.seller_gstin:
+                        key = (po.seller_gstin, "")
+                        if key not in seen_pd:
+                            seen_pd.add(key)
+                            purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None})
+
+        # "Export under" default text: the company's primary LUT line, which
+        # the sample prints as "SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF
+        # IGST (LUT NO : ...)". Editable afterwards.
+        export_under = None
+        company = self.company_repo.get(company_id)
+        if company and company.lut_details:
+            primary_lut = next((l for l in company.lut_details if l.get("is_primary")), company.lut_details[0])
+            lut_no = primary_lut.get("lut_number")
+            if lut_no:
+                export_under = f"SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST (LUT NO : {lut_no})"
+
+        fields = {
+            "proforma_invoice_ids": [pi.id for pi in proformas],
+            "lead_id": first.lead_id if first else None,
+            "consignee_name": first.consignee_name if first else None,
+            "consignee_address": first.consignee_address if first else None,
+            "notify_name": first.notify_name if first else None,
+            "notify_address": first.notify_address if first else None,
+            "country_of_origin": first.country_of_origin if first else "INDIA",
+            "country_of_destination": first.country_of_destination if first else None,
+            "port_of_loading": first.port_of_loading if first else None,
+            "port_of_discharge": first.port_of_discharge if first else None,
+            "final_destination": first.final_destination if first else None,
+            "payment_terms": first.payment_terms if first else None,
+            "bank_name": first.bank_name if first else None,
+            "bank_account_number": first.bank_account_number if first else None,
+            "bank_ifsc_code": first.bank_ifsc_code if first else None,
+            "bank_swift_code": first.bank_swift_code if first else None,
+            "bank_branch": first.bank_branch if first else None,
+            "bank_address": first.bank_address if first else None,
+            "export_under": export_under,
+            "epcg_number": epcg_number,
+            "epcg_date": epcg_date,
+            "self_sealing_declaration": company.self_sealing_declaration if company else None,
+        }
+        return {"fields": fields, "items": items, "buyer_orders": buyer_orders,
+                "purchase_details": purchase_details}
+
+    def _product_igst_percent(self, product_id, company_id: int) -> float:
+        if not product_id:
+            return 0.0
+        product = self.product_repo.get_by_id(int(product_id))
+        if not product or product.company_id != company_id:
+            return 0.0
+        return product.igst_percent or 0.0
+
+    # ---- validation --------------------------------------------------
+    def _build_items(self, company_id: int, raw_items: list) -> List[ExportInvoiceItem]:
+        items = []
+        for i, raw in enumerate(raw_items, start=1):
+            product_name = (raw.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            try:
+                quantity_value = float(raw.get("quantity_value") or 0)
+                price_usd = float(raw.get("price_usd") or 0)
+                quantity_boxes = float(raw["quantity_boxes"]) if raw.get("quantity_boxes") else None
+                pallets = float(raw["pallets"]) if raw.get("pallets") else None
+            except ValueError:
+                raise ValidationError(f"Row {i}: quantity, pallets and price must be numbers.")
+            product_id = int(raw["product_id"]) if raw.get("product_id") else None
+
+            # Snapshot the product's IGST % (and re-derive qty from boxes)
+            # only for a product that belongs to this same company.
+            igst_percent = 0.0
+            if product_id:
+                product = self.product_repo.get_by_id(product_id)
+                if not product or product.company_id != company_id:
+                    product_id = None
+                else:
+                    igst_percent = product.igst_percent or 0.0
+                    if quantity_boxes and product.alternate_quantity:
+                        try:
+                            quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                        except ValueError:
+                            pass
+
+            if quantity_value <= 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
+            if price_usd < 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): price can't be negative.")
+            items.append(ExportInvoiceItem(
+                id=None, export_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
+                hsn_code=(raw.get("hsn_code") or "").strip() or None,
+                surface=(raw.get("surface") or "").strip() or None,
+                pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                unit=(raw.get("unit") or "SQM").strip() or "SQM",
+                price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
+                igst_percent=igst_percent,
+            ))
+        if not items:
+            raise ValidationError("At least one product line is compulsory.")
+        return items
+
+    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem]) -> ExportInvoice:
+        consignee_name = (fields.get("consignee_name") or "").strip()
+        if not consignee_name:
+            raise ValidationError("Consignee name is compulsory.")
+        invoice_date = (fields.get("invoice_date") or "").strip() or date.today().isoformat()
+
+        def _float(key, default=0):
+            raw = fields.get(key)
+            try:
+                return float(raw) if raw not in (None, "") else default
+            except ValueError:
+                raise ValidationError(f"'{key}' must be a number.")
+
+        lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
+        if lead_id is not None:
+            lead = self.lead_repo.get_by_id(lead_id)
+            if not lead or lead.company_id != current_user.company_id:
+                lead_id = None
+
+        tax_mode = fields.get("tax_mode") if fields.get("tax_mode") in dict(EXPORT_TAX_MODES) else EXPORT_TAX_MODE_IGST
+        loading_type = fields.get("loading_type") if fields.get("loading_type") in dict(EXPORT_LOADING_TYPES) else EXPORT_LOADING_SELF_SEALING
+
+        # Authorised Signatory: the form is just a dropdown of the company's
+        # contact-person NAMES; the designation printed beneath it is looked
+        # up here so it always matches the current Our-Company profile.
+        authorised_name = (fields.get("authorised_person_name") or "").strip() or None
+        authorised_desig = (fields.get("authorised_person_designation") or "").strip() or None
+        if authorised_name and not authorised_desig:
+            company = self.company_repo.get(current_user.company_id)
+            if company:
+                match = next((p for p in company.contact_persons
+                              if (p.get("name") or "").strip() == authorised_name), None)
+                if match:
+                    authorised_desig = (match.get("designation") or "").strip() or None
+
+        invoice = ExportInvoice(
+            id=None, company_id=current_user.company_id, export_invoice_number="", invoice_date=invoice_date,
+            consignee_name=consignee_name, created_by=current_user.id, lead_id=lead_id,
+            consignee_address=(fields.get("consignee_address") or "").strip() or None,
+            notify_name=(fields.get("notify_name") or "").strip() or None,
+            notify_address=(fields.get("notify_address") or "").strip() or None,
+            country_of_origin=(fields.get("country_of_origin") or "").strip() or "INDIA",
+            country_of_destination=(fields.get("country_of_destination") or "").strip() or None,
+            place_of_receipt=(fields.get("place_of_receipt") or "").strip() or None,
+            pre_carriage_by=(fields.get("pre_carriage_by") or "").strip() or None,
+            port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
+            port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
+            final_destination=(fields.get("final_destination") or "").strip() or None,
+            nature_of_contract=(fields.get("nature_of_contract") or "").strip() or None,
+            payment_terms=(fields.get("payment_terms") or "").strip() or None,
+            export_under=(fields.get("export_under") or "").strip() or None,
+            epcg_number=(fields.get("epcg_number") or "").strip() or None,
+            epcg_date=(fields.get("epcg_date") or "").strip() or None,
+            loading_type=loading_type, tax_mode=tax_mode,
+            exchange_rate=_float("exchange_rate", 0),
+            sea_freight=_float("sea_freight", 0),
+            insurance=_float("insurance", 0),
+            certification=_float("certification", 0),
+            other_charges=_float("other_charges", 0),
+            discount_amount=_float("discount_amount", 0),
+            fob_value=_float("fob_value", 0),
+            cnf_value=_float("cnf_value", 0),
+            bank_name=(fields.get("bank_name") or "").strip() or None,
+            bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
+            bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
+            bank_swift_code=(fields.get("bank_swift_code") or "").strip() or None,
+            bank_branch=(fields.get("bank_branch") or "").strip() or None,
+            bank_address=(fields.get("bank_address") or "").strip() or None,
+            authorised_person_name=authorised_name,
+            authorised_person_designation=authorised_desig,
+            self_sealing_declaration=(fields.get("self_sealing_declaration") or "").strip() or None,
+            examination_date=(fields.get("examination_date") or "").strip() or None,
+            location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
+            issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
+            issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
+            permission_no=(fields.get("permission_no") or "").strip() or None,
+            permission_date=(fields.get("permission_date") or "").strip() or None,
+            permission_expiry=(fields.get("permission_expiry") or "").strip() or None,
+            manufacturer_name=(fields.get("manufacturer_name") or "").strip() or None,
+            manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+            items=items,
+        )
+        invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
+        invoice.buyer_orders = self._clean_buyer_orders(fields.get("buyer_orders"), invoice.proforma_invoice_ids)
+        invoice.containers = self._clean_containers(fields.get("containers"))
+        invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
+        invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
+        return invoice
+
+    def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
+        result = []
+        for pid in dict.fromkeys(raw_ids or []):
+            try:
+                pi = self.proforma_invoice_repo.get_by_id(int(pid))
+            except (TypeError, ValueError):
+                continue
+            if pi and pi.company_id == company_id:
+                result.append(pi.id)
+        return result
+
+    @staticmethod
+    def _clean_buyer_orders(raw, valid_pi_ids: List[int]) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            order_no = (r.get("order_no") or "").strip()
+            order_date = (r.get("order_date") or "").strip()
+            if not order_no and not order_date:
+                continue
+            pi_id = r.get("proforma_invoice_id")
+            try:
+                pi_id = int(pi_id) if pi_id else None
+            except (TypeError, ValueError):
+                pi_id = None
+            if pi_id not in valid_pi_ids:
+                pi_id = None  # only link to a PI this export invoice actually references
+            rows.append({"order_no": order_no or None, "order_date": order_date or None,
+                         "proforma_invoice_id": pi_id})
+        return rows
+
+    @staticmethod
+    def _clean_containers(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            ctype = (r.get("container_type") or "").strip()
+            try:
+                count = int(r.get("container_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not ctype and count <= 0:
+                continue
+            rows.append({"container_type": ctype, "container_count": max(count, 0)})
+        return rows
+
+    @staticmethod
+    def _clean_container_details(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            values = {k: (r.get(k) or "").strip() or None
+                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
+            if any(values.values()):
+                rows.append(values)
+        return rows
+
+    @staticmethod
+    def _clean_purchase_details(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            gstin = (r.get("supplier_gstin") or "").strip()
+            inv_no = (r.get("supplier_invoice_no") or "").strip()
+            if not gstin and not inv_no:
+                continue
+            rows.append({"supplier_gstin": gstin or None, "supplier_invoice_no": inv_no or None})
+        return rows
+
+    # ---- shipping bill PDF storage --------------------------------------------------
+    def _save_pdf(self, file_storage) -> Optional[str]:
+        if not file_storage or not file_storage.filename:
+            return None
+        filename = secure_filename(file_storage.filename)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in self.allowed_extensions:
+            raise ValidationError(f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(self.allowed_extensions))}.")
+        os.makedirs(self.upload_folder, exist_ok=True)
+        stored_name = f"{uuid.uuid4().hex}_{filename}"
+        file_storage.save(os.path.join(self.upload_folder, stored_name))
+        return f"uploads/export_invoices/{stored_name}"
+
+    def _delete_pdf_file(self, relative_path: Optional[str]) -> None:
+        if not relative_path:
+            return
+        full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, raw_items: list, pdf_file=None) -> ExportInvoice:
+        items = self._build_items(current_user.company_id, raw_items)
+        invoice = self._build_header(current_user, fields, items)
+        # Examination date defaults to the creation date, not a later edit.
+        if not invoice.examination_date:
+            invoice.examination_date = invoice.invoice_date
+        invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
+        invoice.export_invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
+        created = self.export_invoice_repo.create(invoice)
+        self.version_service.record("export_invoice", created, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, created.lead_id, "export_invoice")
+        return created
+
+    def update(self, current_user: User, invoice_id: int, fields: dict, raw_items: list,
+               pdf_file=None, remove_pdf: bool = False) -> ExportInvoice:
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        items = self._build_items(current_user.company_id, raw_items)
+        invoice = self._build_header(current_user, fields, items)
+
+        # Exchange rate is set once by anyone; changing it later is admin-only.
+        # (The form disables the field for non-admins, so a normal edit
+        # doesn't even submit it - default back to the stored value then.)
+        if existing.exchange_rate and not current_user.is_admin:
+            if invoice.exchange_rate not in (0, existing.exchange_rate):
+                raise PermissionDeniedError("Only an admin can change the exchange rate once it has been set.")
+            invoice.exchange_rate = existing.exchange_rate
+
+        # Examination date is fixed at creation - keep the stored value.
+        invoice.examination_date = invoice.examination_date or existing.examination_date
+
+        if pdf_file and pdf_file.filename:
+            invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
+            self._delete_pdf_file(existing.shipping_bill_pdf_path)
+        elif remove_pdf:
+            self._delete_pdf_file(existing.shipping_bill_pdf_path)
+            invoice.shipping_bill_pdf_path = None
+        else:
+            invoice.shipping_bill_pdf_path = existing.shipping_bill_pdf_path
+
+        self.export_invoice_repo.update(invoice_id, invoice)
+        updated = self.get(invoice_id, current_user.company_id)
+        self.version_service.record("export_invoice", updated, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, updated.lead_id, "export_invoice")
+        return updated
+
+    def delete(self, current_user: User, invoice_id: int) -> None:
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self._delete_pdf_file(existing.shipping_bill_pdf_path)
+        self.export_invoice_repo.delete(invoice_id)
 
 
 # ============================================================

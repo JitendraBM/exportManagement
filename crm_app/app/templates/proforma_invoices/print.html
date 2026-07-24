@@ -51,6 +51,7 @@
         </div>
       </details>
       <a href="{{ url_for('purchase_orders.new_purchase_order', proforma_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">＋ New purchase order</a>
+      <a href="{{ url_for('export_invoices.new_export_invoice', proforma_invoice_ids=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 New export invoice</a>
       {% if invoice.is_confirmed %}
         {% if current_user.is_admin %}
         <form method="POST" action="{{ url_for('proforma_invoices.set_proforma_invoice_status', proforma_invoice_id=invoice.id) }}" onsubmit="return confirm('Move this confirmed invoice back to draft? It becomes editable again.');">

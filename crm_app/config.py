@@ -79,6 +79,11 @@ class Config:
     PURCHASE_INVOICE_UPLOAD_FOLDER = os.path.join(BASE_DIR, "app", "static", "uploads", "purchase_invoices")
     ALLOWED_DOCUMENT_EXTENSIONS = {"pdf"}
 
+    # Where an Export Invoice's optional Shipping Bill PDF gets saved - unlike
+    # the invoice itself (which the app generates), the shipping bill is an
+    # external document attached to the record. Same upload pattern as above.
+    EXPORT_INVOICE_UPLOAD_FOLDER = os.path.join(BASE_DIR, "app", "static", "uploads", "export_invoices")
+
     # Where an uploaded Permit ("Permission", managed under Our Company) PDF
     # gets saved - each permit optionally carries the company's own permit
     # document. Lives under static/ so Flask serves it via url_for('static', ...).
