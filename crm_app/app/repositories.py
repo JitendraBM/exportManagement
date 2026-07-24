@@ -22,6 +22,7 @@ from app.models import (
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
+    ExportInvoice, ExportInvoiceItem,
     PackingList, PackingListItem, DocumentVersion,
 )
 
@@ -726,21 +727,22 @@ class CompanyRepository:
         return company
 
     def upsert(self, company_id: int, company_name: str, address: str, gstin: str,
-               pan_no: str, iec: str, bin_no: str) -> int:
+               pan_no: str, iec: str, bin_no: str, self_sealing_declaration: str = None) -> int:
         """Returns the `our_company.id` row (not the tenant's company_id) -
         callers need it to scope the four detail-table replace_* calls."""
         existing = self.db.query_one("SELECT id FROM our_company WHERE company_id = ?", (company_id,))
         if existing:
             self.db.execute(
                 """UPDATE our_company SET company_name = ?, address = ?, gstin = ?, pan_no = ?, iec = ?, bin = ?,
+                                           self_sealing_declaration = ?,
                                            updated_at = datetime('now') WHERE company_id = ?""",
-                (company_name, address, gstin, pan_no, iec, bin_no, company_id),
+                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, company_id),
             )
             return existing["id"]
         return self.db.execute(
-            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (company_id, company_name, address, gstin, pan_no, iec, bin_no),
+            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration),
         )
 
     def set_logo(self, our_company_id: int, logo_path: Optional[str]) -> None:
@@ -789,13 +791,14 @@ class CompanyRepository:
                 )
 
     def replace_contact_persons(self, our_company_id: int, persons: list) -> None:
-        """persons: [{'name': str, 'is_primary': bool}]"""
+        """persons: [{'name': str, 'designation': str, 'is_primary': bool}]"""
         with self.db.get_connection() as conn:
             conn.execute("DELETE FROM our_company_contact_persons WHERE our_company_id = ?", (our_company_id,))
             for p in persons:
                 conn.execute(
-                    "INSERT INTO our_company_contact_persons (our_company_id, name, is_primary) VALUES (?, ?, ?)",
-                    (our_company_id, p["name"], int(p["is_primary"])),
+                    "INSERT INTO our_company_contact_persons (our_company_id, name, designation, is_primary) "
+                    "VALUES (?, ?, ?, ?)",
+                    (our_company_id, p["name"], (p.get("designation") or "").strip() or None, int(p["is_primary"])),
                 )
 
     def replace_bank_details(self, our_company_id: int, bank_details: list) -> None:
@@ -1598,6 +1601,221 @@ class ProformaInvoiceRepository:
         from this proforma invoice."""
         with self.db.get_connection() as conn:
             _cascade_delete_proforma_invoice(conn, invoice_id)
+
+
+class ExportInvoiceRepository:
+    """Persistence for the Export Invoice: the header row plus its items and
+    the four child lists (proforma links, buyer orders, containers, per-
+    container 11B rows, purchase details). It is a leaf of the pipeline -
+    nothing is generated from it - so delete just cascades its own children
+    (all ON DELETE CASCADE). Mirrors ProformaInvoiceRepository."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS cnt FROM export_invoices WHERE company_id = ? AND export_invoice_number LIKE ?",
+            (company_id, f"{number_prefix}%"),
+        )
+        return row["cnt"] if row else 0
+
+    def get_by_id(self, invoice_id: int) -> Optional[ExportInvoice]:
+        row = self.db.query_one(
+            """SELECT ei.*, u.full_name AS created_by_name FROM export_invoices ei
+               JOIN users u ON u.id = ei.created_by WHERE ei.id = ?""",
+            (invoice_id,),
+        )
+        if not row:
+            return None
+        invoice = ExportInvoice.from_row(row)
+        invoice.items = [
+            ExportInvoiceItem.from_row(r) for r in self.db.query(
+                "SELECT * FROM export_invoice_items WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.proforma_invoice_ids = [
+            r["proforma_invoice_id"] for r in self.db.query(
+                "SELECT proforma_invoice_id FROM export_invoice_proforma_links WHERE export_invoice_id = ? ORDER BY id",
+                (invoice_id,),
+            )
+        ]
+        invoice.linked_proformas = [
+            dict(r) for r in self.db.query(
+                """SELECT pi.id, pi.invoice_number, pi.invoice_date
+                   FROM export_invoice_proforma_links l
+                   JOIN proforma_invoices pi ON pi.id = l.proforma_invoice_id
+                   WHERE l.export_invoice_id = ? ORDER BY pi.invoice_date, pi.id""",
+                (invoice_id,),
+            )
+        ]
+        invoice.buyer_orders = [
+            dict(r) for r in self.db.query(
+                "SELECT order_no, order_date, proforma_invoice_id FROM export_invoice_buyer_orders "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.containers = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_count FROM export_invoice_containers "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.container_details = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no "
+                "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.purchase_details = [
+            dict(r) for r in self.db.query(
+                "SELECT supplier_gstin, supplier_invoice_no FROM export_invoice_purchase_details "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        return invoice
+
+    def list_all(self, company_id: int) -> List[ExportInvoice]:
+        rows = self.db.query(
+            """SELECT ei.*, u.full_name AS created_by_name,
+                      COALESCE((SELECT SUM(total_usd) FROM export_invoice_items WHERE export_invoice_id = ei.id), 0) AS items_total,
+                      (SELECT COUNT(*) FROM export_invoice_proforma_links WHERE export_invoice_id = ei.id) AS proforma_link_count
+               FROM export_invoices ei
+               JOIN users u ON u.id = ei.created_by
+               WHERE ei.company_id = ?
+               ORDER BY ei.invoice_date DESC, ei.id DESC""",
+            (company_id,),
+        )
+        invoices = []
+        for r in rows:
+            invoice = ExportInvoice.from_row(r)
+            # list view doesn't load the link rows; carry just the count as a
+            # placeholder list so templates can show "how many PIs".
+            invoice.proforma_invoice_ids = [None] * (r["proforma_link_count"] or 0)
+            invoices.append(invoice)
+        return invoices
+
+    def create(self, invoice: ExportInvoice) -> ExportInvoice:
+        new_id = self.db.execute(
+            """INSERT INTO export_invoices
+               (company_id, export_invoice_number, invoice_date, lead_id, consignee_name, consignee_address,
+                notify_name, notify_address, country_of_origin, country_of_destination, place_of_receipt,
+                pre_carriage_by, port_of_loading, port_of_discharge, final_destination, nature_of_contract,
+                payment_terms, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
+                sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
+                bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
+                authorised_person_name, authorised_person_designation, self_sealing_declaration,
+                shipping_bill_pdf_path, examination_date, location_code_08b, issuing_authority,
+                issuing_authority_address, permission_no, permission_date, permission_expiry,
+                manufacturer_name, manufacturer_address, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
+        )
+        self._replace_children(new_id, invoice)
+        return self.get_by_id(new_id)
+
+    def update(self, invoice_id: int, invoice: ExportInvoice) -> None:
+        self.db.execute(
+            """UPDATE export_invoices SET invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
+                   notify_name = ?, notify_address = ?, country_of_origin = ?, country_of_destination = ?,
+                   place_of_receipt = ?, pre_carriage_by = ?, port_of_loading = ?, port_of_discharge = ?,
+                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, export_under = ?,
+                   epcg_number = ?, epcg_date = ?, loading_type = ?, tax_mode = ?, exchange_rate = ?,
+                   sea_freight = ?, insurance = ?, certification = ?, other_charges = ?, discount_amount = ?,
+                   fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
+                   bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
+                   authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
+                   examination_date = ?, location_code_08b = ?, issuing_authority = ?, issuing_authority_address = ?,
+                   permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
+                   manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            self._header_params(invoice) + (invoice_id,),
+        )
+        self._replace_children(invoice_id, invoice)
+
+    def _header_params(self, invoice: ExportInvoice) -> tuple:
+        """The EDITABLE header column values, in the exact order both INSERT
+        and UPDATE list them (from invoice_date onward). company_id and
+        export_invoice_number are immutable, so create() prepends them and
+        update() never touches them. Kept as one tuple so the two long column
+        lists can never drift apart."""
+        return (
+            invoice.invoice_date, invoice.lead_id,
+            invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
+            invoice.country_of_origin, invoice.country_of_destination, invoice.place_of_receipt,
+            invoice.pre_carriage_by, invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
+            invoice.nature_of_contract, invoice.payment_terms, invoice.export_under, invoice.epcg_number,
+            invoice.epcg_date, invoice.loading_type, invoice.tax_mode, invoice.exchange_rate, invoice.sea_freight,
+            invoice.insurance, invoice.certification, invoice.other_charges, invoice.discount_amount,
+            invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
+            invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
+            invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
+            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b,
+            invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
+            invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
+            invoice.manufacturer_address, invoice.remarks,
+        )
+
+    def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM export_invoice_items WHERE export_invoice_id = ?", (invoice_id,))
+            for item in invoice.items:
+                conn.execute(
+                    """INSERT INTO export_invoice_items
+                       (export_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code, surface,
+                        pallets, quantity_boxes, quantity_value, unit, price_usd, total_usd, igst_percent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm, item.hsn_code,
+                     item.surface, item.pallets, item.quantity_boxes, item.quantity_value, item.unit,
+                     item.price_usd, item.total_usd, item.igst_percent),
+                )
+
+            conn.execute("DELETE FROM export_invoice_proforma_links WHERE export_invoice_id = ?", (invoice_id,))
+            for pid in dict.fromkeys(invoice.proforma_invoice_ids):  # de-dup, keep order
+                conn.execute(
+                    "INSERT INTO export_invoice_proforma_links (export_invoice_id, proforma_invoice_id) VALUES (?, ?)",
+                    (invoice_id, pid),
+                )
+
+            conn.execute("DELETE FROM export_invoice_buyer_orders WHERE export_invoice_id = ?", (invoice_id,))
+            for i, bo in enumerate(invoice.buyer_orders, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_buyer_orders (export_invoice_id, sr_no, order_no, order_date, proforma_invoice_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (invoice_id, i, bo.get("order_no") or None, bo.get("order_date") or None,
+                     bo.get("proforma_invoice_id") or None),
+                )
+
+            conn.execute("DELETE FROM export_invoice_containers WHERE export_invoice_id = ?", (invoice_id,))
+            for i, c in enumerate(invoice.containers, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_containers (export_invoice_id, sr_no, container_type, container_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, c.get("container_type") or "", int(c.get("container_count") or 0)),
+                )
+
+            conn.execute("DELETE FROM export_invoice_container_details WHERE export_invoice_id = ?", (invoice_id,))
+            for i, cd in enumerate(invoice.container_details, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_container_details "
+                    "(export_invoice_id, sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, cd.get("container_type") or None, cd.get("container_no") or None,
+                     cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None),
+                )
+
+            conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))
+            for i, pd in enumerate(invoice.purchase_details, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_purchase_details (export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None),
+                )
+
+    def delete(self, invoice_id: int) -> None:
+        # Leaf document - the child tables all cascade, nothing downstream to null.
+        self.db.execute("DELETE FROM export_invoices WHERE id = ?", (invoice_id,))
 
 
 class PurchaseOrderRepository:

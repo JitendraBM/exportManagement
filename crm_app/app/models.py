@@ -388,9 +388,10 @@ class OurCompany:
     bin: Optional[str] = None
     address: Optional[str] = None
     logo_path: Optional[str] = None  # relative to static/, shown in the app sidebar and on generated documents
+    self_sealing_declaration: Optional[str] = None  # printed on the Export Invoice's declaration block
     updated_at: Optional[str] = None
     contact_details: List[dict] = field(default_factory=list)  # [{type, value, is_primary}]
-    contact_persons: List[dict] = field(default_factory=list)  # [{name, is_primary}]
+    contact_persons: List[dict] = field(default_factory=list)  # [{name, designation, is_primary}]
     bank_details: List[dict] = field(default_factory=list)  # [{bank_name, account_number, ifsc_code, branch, is_primary}]
     lut_details: List[dict] = field(default_factory=list)  # [{lut_number, financial_year, is_primary}]
     rcmc_details: List[dict] = field(default_factory=list)  # [{registration_number, registration_date, valid_until, organisation_name, organisation_address, contact_number, email_address, is_primary}]
@@ -407,6 +408,7 @@ class OurCompany:
             bin=row["bin"] if "bin" in row.keys() else None,
             address=row["address"] if "address" in row.keys() else None,
             logo_path=row["logo_path"] if "logo_path" in row.keys() else None,
+            self_sealing_declaration=row["self_sealing_declaration"] if "self_sealing_declaration" in row.keys() else None,
             updated_at=row["updated_at"],
         )
 
@@ -1360,6 +1362,254 @@ class ProformaInvoice:
     def invoice_value_usd(self) -> float:
         return (self.subtotal_usd + self.sea_freight + self.insurance
                 + self.certification + self.other_charges - self.discount_amount)
+
+
+EXPORT_TAX_MODE_IGST = "igst"
+EXPORT_TAX_MODE_CGST_SGST = "cgst_sgst"
+EXPORT_TAX_MODES = [(EXPORT_TAX_MODE_IGST, "IGST"), (EXPORT_TAX_MODE_CGST_SGST, "CGST / SGST")]
+EXPORT_LOADING_BUFFER = "buffer"
+EXPORT_LOADING_SELF_SEALING = "self_sealing"
+EXPORT_LOADING_TYPES = [(EXPORT_LOADING_BUFFER, "Buffer loading"), (EXPORT_LOADING_SELF_SEALING, "Self-sealing")]
+
+
+@dataclass
+class ExportInvoiceItem:
+    """One goods line on an Export Invoice - same shape as
+    ProformaInvoiceItem, plus a per-line igst_percent snapshot so the summed
+    tax is computed per-product (each HSN taxes differently) and stays stable
+    against later catalog edits."""
+    id: Optional[int]
+    export_invoice_id: Optional[int]
+    sr_no: int
+    product_name: str
+    product_id: Optional[int] = None
+    dimension_mm: Optional[str] = None
+    hsn_code: Optional[str] = None
+    surface: Optional[str] = None
+    pallets: Optional[float] = None
+    quantity_boxes: Optional[float] = None
+    quantity_value: float = 0
+    unit: str = "SQM"
+    price_usd: float = 0
+    total_usd: float = 0
+    igst_percent: float = 0
+
+    @property
+    def tax_usd(self) -> float:
+        return (self.total_usd or 0) * (self.igst_percent or 0) / 100.0
+
+    @staticmethod
+    def from_row(row) -> "ExportInvoiceItem":
+        return ExportInvoiceItem(
+            id=row["id"],
+            export_invoice_id=row["export_invoice_id"],
+            sr_no=row["sr_no"],
+            product_id=row["product_id"],
+            product_name=row["product_name"],
+            dimension_mm=row["dimension_mm"],
+            hsn_code=row["hsn_code"],
+            surface=row["surface"] if "surface" in row.keys() else None,
+            pallets=row["pallets"],
+            quantity_boxes=row["quantity_boxes"],
+            quantity_value=row["quantity_value"],
+            unit=row["unit"],
+            price_usd=row["price_usd"],
+            total_usd=row["total_usd"],
+            igst_percent=row["igst_percent"] if "igst_percent" in row.keys() else 0,
+        )
+
+
+@dataclass
+class ExportInvoice:
+    """The customer/customs-facing Export Invoice at the buyer end of the
+    pipeline. References one or more Proforma Invoices (many-to-many via
+    proforma_invoice_ids). Goods are prefilled from those PIs then edited.
+    Tax is computed per-product and shown as IGST or CGST/SGST per tax_mode;
+    the exchange rate is manual and admin-locked once set. The several child
+    lists (buyer_orders / containers / container_details / purchase_details)
+    back the front-page and page-2 annexure blocks."""
+    id: Optional[int]
+    company_id: int
+    export_invoice_number: str
+    invoice_date: str
+    consignee_name: str
+    created_by: int
+    lead_id: Optional[int] = None
+    consignee_address: Optional[str] = None
+    notify_name: Optional[str] = None
+    notify_address: Optional[str] = None
+    country_of_origin: Optional[str] = "INDIA"
+    country_of_destination: Optional[str] = None
+    place_of_receipt: Optional[str] = None
+    pre_carriage_by: Optional[str] = None
+    port_of_loading: Optional[str] = None
+    port_of_discharge: Optional[str] = None
+    final_destination: Optional[str] = None
+    nature_of_contract: Optional[str] = None
+    payment_terms: Optional[str] = None
+    export_under: Optional[str] = None
+    epcg_number: Optional[str] = None
+    epcg_date: Optional[str] = None
+    loading_type: str = EXPORT_LOADING_SELF_SEALING
+    tax_mode: str = EXPORT_TAX_MODE_IGST
+    exchange_rate: float = 0
+    sea_freight: float = 0
+    insurance: float = 0
+    certification: float = 0
+    other_charges: float = 0
+    discount_amount: float = 0
+    fob_value: float = 0
+    cnf_value: float = 0
+    bank_name: Optional[str] = None
+    bank_account_number: Optional[str] = None
+    bank_ifsc_code: Optional[str] = None
+    bank_swift_code: Optional[str] = None
+    bank_branch: Optional[str] = None
+    bank_address: Optional[str] = None
+    authorised_person_name: Optional[str] = None
+    authorised_person_designation: Optional[str] = None
+    self_sealing_declaration: Optional[str] = None
+    shipping_bill_pdf_path: Optional[str] = None
+    examination_date: Optional[str] = None
+    location_code_08b: Optional[str] = None
+    issuing_authority: Optional[str] = None
+    issuing_authority_address: Optional[str] = None
+    permission_no: Optional[str] = None
+    permission_date: Optional[str] = None
+    permission_expiry: Optional[str] = None
+    manufacturer_name: Optional[str] = None
+    manufacturer_address: Optional[str] = None
+    remarks: Optional[str] = None
+    status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    items: List[ExportInvoiceItem] = field(default_factory=list)
+    proforma_invoice_ids: List[int] = field(default_factory=list)
+    buyer_orders: List[dict] = field(default_factory=list)  # [{order_no, order_date, proforma_invoice_id}]
+    containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no}]
+    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
+    linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
+    computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
+
+    @staticmethod
+    def from_row(row) -> "ExportInvoice":
+        keys = row.keys()
+
+        def g(name, default=None):
+            return row[name] if name in keys else default
+
+        return ExportInvoice(
+            id=row["id"],
+            company_id=row["company_id"],
+            export_invoice_number=row["export_invoice_number"],
+            invoice_date=row["invoice_date"],
+            lead_id=g("lead_id"),
+            consignee_name=row["consignee_name"],
+            consignee_address=g("consignee_address"),
+            notify_name=g("notify_name"),
+            notify_address=g("notify_address"),
+            country_of_origin=g("country_of_origin"),
+            country_of_destination=g("country_of_destination"),
+            place_of_receipt=g("place_of_receipt"),
+            pre_carriage_by=g("pre_carriage_by"),
+            port_of_loading=g("port_of_loading"),
+            port_of_discharge=g("port_of_discharge"),
+            final_destination=g("final_destination"),
+            nature_of_contract=g("nature_of_contract"),
+            payment_terms=g("payment_terms"),
+            export_under=g("export_under"),
+            epcg_number=g("epcg_number"),
+            epcg_date=g("epcg_date"),
+            loading_type=g("loading_type") or EXPORT_LOADING_SELF_SEALING,
+            tax_mode=g("tax_mode") or EXPORT_TAX_MODE_IGST,
+            exchange_rate=g("exchange_rate", 0) or 0,
+            sea_freight=g("sea_freight", 0) or 0,
+            insurance=g("insurance", 0) or 0,
+            certification=g("certification", 0) or 0,
+            other_charges=g("other_charges", 0) or 0,
+            discount_amount=g("discount_amount", 0) or 0,
+            fob_value=g("fob_value", 0) or 0,
+            cnf_value=g("cnf_value", 0) or 0,
+            bank_name=g("bank_name"),
+            bank_account_number=g("bank_account_number"),
+            bank_ifsc_code=g("bank_ifsc_code"),
+            bank_swift_code=g("bank_swift_code"),
+            bank_branch=g("bank_branch"),
+            bank_address=g("bank_address"),
+            authorised_person_name=g("authorised_person_name"),
+            authorised_person_designation=g("authorised_person_designation"),
+            self_sealing_declaration=g("self_sealing_declaration"),
+            shipping_bill_pdf_path=g("shipping_bill_pdf_path"),
+            examination_date=g("examination_date"),
+            location_code_08b=g("location_code_08b"),
+            issuing_authority=g("issuing_authority"),
+            issuing_authority_address=g("issuing_authority_address"),
+            permission_no=g("permission_no"),
+            permission_date=g("permission_date"),
+            permission_expiry=g("permission_expiry"),
+            manufacturer_name=g("manufacturer_name"),
+            manufacturer_address=g("manufacturer_address"),
+            remarks=g("remarks"),
+            created_by=row["created_by"],
+            created_at=g("created_at"),
+            updated_at=g("updated_at"),
+            created_by_name=g("created_by_name"),
+            computed_subtotal_usd=row["items_total"] if "items_total" in keys else None,
+        )
+
+    @property
+    def subtotal_usd(self) -> float:
+        if self.computed_subtotal_usd is not None:
+            return self.computed_subtotal_usd
+        return sum(item.total_usd for item in self.items)
+
+    @property
+    def invoice_value_usd(self) -> float:
+        return (self.subtotal_usd + self.sea_freight + self.insurance
+                + self.certification + self.other_charges - self.discount_amount)
+
+    @property
+    def invoice_value_inr(self) -> float:
+        return self.invoice_value_usd * (self.exchange_rate or 0)
+
+    @property
+    def tax_total_inr(self) -> float:
+        """Per-product tax, summed. Each line's USD total is converted to INR
+        at the invoice's exchange rate then taxed at that product's own IGST
+        percentage - so a mixed-HSN invoice totals each line separately."""
+        rate = self.exchange_rate or 0
+        return sum((item.total_usd or 0) * rate * (item.igst_percent or 0) / 100.0 for item in self.items)
+
+    @property
+    def igst_amount_inr(self) -> float:
+        return self.tax_total_inr if self.tax_mode == EXPORT_TAX_MODE_IGST else 0
+
+    @property
+    def cgst_amount_inr(self) -> float:
+        return self.tax_total_inr / 2.0 if self.tax_mode == EXPORT_TAX_MODE_CGST_SGST else 0
+
+    @property
+    def sgst_amount_inr(self) -> float:
+        return self.tax_total_inr / 2.0 if self.tax_mode == EXPORT_TAX_MODE_CGST_SGST else 0
+
+    @property
+    def tax_mode_label(self) -> str:
+        return dict(EXPORT_TAX_MODES).get(self.tax_mode, self.tax_mode)
+
+    @property
+    def loading_type_label(self) -> str:
+        return dict(EXPORT_LOADING_TYPES).get(self.loading_type, self.loading_type)
+
+    @property
+    def total_containers(self) -> int:
+        return sum(int(c.get("container_count") or 0) for c in self.containers)
+
+    @property
+    def top_costliest_items(self) -> List[ExportInvoiceItem]:
+        """Section 09 lists the four costliest product lines (by line total)."""
+        return sorted(self.items, key=lambda i: i.total_usd or 0, reverse=True)[:4]
 
 
 @dataclass
