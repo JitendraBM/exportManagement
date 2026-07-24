@@ -1,0 +1,85 @@
+{# Sizes the blank filler cell that closes a sheet's item list so the sheet
+   fills its A4 page exactly - no more, no less - however few items it has.
+
+   The alternative (guessing the leftover space in Jinja from the item count)
+   drifts as soon as anything wraps: a three-line consignee address, a tall
+   logo or a product name that spills onto a second line all change the height
+   the arithmetic assumed, and the sheet either leaves a ragged gap or tips
+   onto a second page. Measuring the rendered sheet can't drift.
+
+   Markup contract:
+     - the sheet root carries  class="js-page-sheet"
+     - the filler <tr> carries class="js-page-filler"
+   A sheet with no filler row is left alone, so this can be included once per
+   printable page and cover every sheet on it (invoice + annexure, quotation +
+   packing details, ...). Include it after the sheets themselves. #}
+<style>
+  /* Fillers start at the floor height, so a sheet still looks deliberate in
+     the (unlikely) case the script never runs. */
+  tr.js-page-filler > td { height: 30px; }
+</style>
+<script>
+(function () {
+  /* A4 portrait 297mm less the 6mm @page margins top and bottom. Sheets are
+     laid out at their print size on screen too, so one number serves both. */
+  var PAGE_MM = 285;
+  var MIN_PX = 30;
+
+  function mmToPx(mm) {
+    var probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;visibility:hidden;height:' + mm + 'mm;';
+    document.body.appendChild(probe);
+    var px = probe.getBoundingClientRect().height;
+    probe.parentNode.removeChild(probe);
+    return px;
+  }
+
+  /* The sheet's padding differs between screen and print, so measure what the
+     page actually has to hold - the content box - not the border box. */
+  function contentHeight(sheet) {
+    var cs = window.getComputedStyle(sheet);
+    return sheet.getBoundingClientRect().height
+      - parseFloat(cs.paddingTop || 0) - parseFloat(cs.paddingBottom || 0);
+  }
+
+  function sizeFillers() {
+    var pagePx = mmToPx(PAGE_MM);
+    var sheets = document.querySelectorAll('.js-page-sheet');
+    for (var i = 0; i < sheets.length; i++) {
+      var rows = sheets[i].querySelectorAll('tr.js-page-filler');
+      if (!rows.length) continue;
+
+      /* Collapse first, so the measurement is of everything *except* the
+         filler - and so re-running (resize, print) is idempotent. */
+      var cells = [];
+      for (var r = 0; r < rows.length; r++) {
+        var tds = rows[r].children;
+        for (var c = 0; c < tds.length; c++) {
+          tds[c].style.height = '0px';
+          cells.push(tds[c]);
+        }
+      }
+
+      var leftover = (pagePx - contentHeight(sheets[i])) / rows.length;
+      var h = Math.max(MIN_PX, Math.floor(leftover)) + 'px';
+      for (var k = 0; k < cells.length; k++) cells[k].style.height = h;
+    }
+  }
+
+  /* Run once the sheet is laid out, then again after images (the exporter
+     logo and any design photos) land and change the height under us. */
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', sizeFillers);
+  } else {
+    sizeFillers();
+  }
+  window.addEventListener('load', sizeFillers);
+  window.addEventListener('beforeprint', sizeFillers);
+
+  var t;
+  window.addEventListener('resize', function () {
+    clearTimeout(t);
+    t = setTimeout(sizeFillers, 150);
+  });
+})();
+</script>

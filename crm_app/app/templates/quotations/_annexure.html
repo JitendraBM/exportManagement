@@ -19,7 +19,7 @@
   .quote-annex-page { break-before: page; page-break-before: always; }
 </style>
 
-<div class="quote-annex-page quote-sheet">
+<div class="quote-annex-page quote-sheet js-page-sheet">
   <div class="quote-banner">ANNEXURE</div>
 
   <table class="quote-items-table">
@@ -52,6 +52,9 @@
         <td class="num">$ {{ '{:,.2f}'.format(item.total_usd) }}</td>
       </tr>
       {% endfor %}
+      <tr class="js-page-filler">
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
       <tr class="quote-total-row">
         <td colspan="7" class="num"><strong>TOTAL</strong></td>
         <td class="num"><strong>$ {{ '{:,.2f}'.format(axns.total) }}</strong></td>

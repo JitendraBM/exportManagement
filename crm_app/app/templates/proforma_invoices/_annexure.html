@@ -31,7 +31,7 @@
 {% endfor %}
 
 <div class="pi-annex-page">
-  <div class="pi-sheet">
+  <div class="pi-sheet js-page-sheet">
     <div class="pi-title">ANNEXURE</div>
 
     <table class="pi-items">
@@ -56,6 +56,9 @@
       </thead>
       <tbody>
         {{ goods.rows(annex_items, pi_mode, annex_sr_start) }}
+        <tr class="pi-filler js-page-filler">
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        </tr>
         <tr>
           <td></td>
           <td class="pi-val pi-center">TOTAL</td>
