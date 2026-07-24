@@ -78,12 +78,13 @@ class TestPackingListBuildItems:
             {"product_name": "P", "quantity_boxes": "30", "box_per_pallet": "10"}])
         assert items[0].pallets == 3.0
 
-    def test_partial_pallet_keeps_user_typed_value(self, container, seed):
-        # 35 boxes / 10 per pallet = 3.5 -> not clean, so the typed value stands.
+    def test_partial_pallet_derived_as_decimal(self, container, seed):
+        # Pallets always auto-derives from boxes / box_per_pallet to 2 decimals,
+        # so 35 boxes / 10 per pallet = 3.5, overriding any typed value.
         items = self._build(container, seed, [
             {"product_name": "P", "quantity_boxes": "35", "box_per_pallet": "10",
              "pallets": "4"}])
-        assert items[0].pallets == 4.0
+        assert items[0].pallets == 3.5
 
     def test_loose_row_has_no_pallets(self, container, seed):
         # No box_per_pallet selected = the built-in 'loose' option.

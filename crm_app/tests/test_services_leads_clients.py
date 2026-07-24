@@ -142,45 +142,46 @@ class TestConvertLead:
 
     def test_admin_converts_lead_to_client(self, container, seed):
         lead = self._make_lead(container, seed.employee)
-        client = container.client_service.convert_lead(lead.id, seed.admin, "Buyer")
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         assert client.id is not None
         assert client.lead_id == lead.id
-        assert client.client_type == "Buyer"
+        assert container.lead_repo.get_by_id(lead.id).converted_client_type == "Buyer"
         assert client.status == "proforma_invoice_submission_pending"
 
     def test_conversion_copies_contacts(self, container, seed):
         lead = self._make_lead(container, seed.employee)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         # Re-fetch: get_by_id is what eagerly loads a client's contacts.
-        reloaded = container.client_service.get(client.id, seed.company_id)
+        reloaded = container.buyer_service.get(client.id, seed.company_id)
         assert any(c.name == "Bob" for c in reloaded.contacts)
 
     def test_employee_cannot_convert(self, container, seed):
         lead = self._make_lead(container, seed.employee)
         with pytest.raises(PermissionDeniedError):
-            container.client_service.convert_lead(lead.id, seed.employee)
+            container.buyer_service.convert_lead(lead.id, seed.employee)
 
     def test_double_conversion_rejected(self, container, seed):
         lead = self._make_lead(container, seed.employee)
-        container.client_service.convert_lead(lead.id, seed.admin)
+        container.buyer_service.convert_lead(lead.id, seed.admin)
         with pytest.raises(ValidationError):
-            container.client_service.convert_lead(lead.id, seed.admin)
+            container.buyer_service.convert_lead(lead.id, seed.admin)
 
-    def test_unknown_client_type_defaults_to_buyer(self, container, seed):
+    def test_buyer_service_converts_into_buyers_table(self, container, seed):
         lead = self._make_lead(container, seed.employee)
-        client = container.client_service.convert_lead(lead.id, seed.admin, "NotAType")
-        assert client.client_type == "Buyer"
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
+        assert container.buyer_repo.get_by_id(client.id) is not None
+        assert container.lead_repo.get_by_id(lead.id).converted_client_type == "Buyer"
 
     def test_convert_missing_lead_is_not_found(self, container, seed):
         with pytest.raises(NotFoundError):
-            container.client_service.convert_lead(99999, seed.admin)
+            container.buyer_service.convert_lead(99999, seed.admin)
 
 
 class TestClientPayments:
     def _client(self, container, seed):
         lead = container.lead_service.create_lead(
             seed.employee, "Acme", "1", "a@x.com", None, None, None, _contacts("Bob"))
-        return container.client_service.convert_lead(lead.id, seed.admin)
+        return container.buyer_service.convert_lead(lead.id, seed.admin)
 
     def test_add_payment_converts_to_inr(self, container, seed, monkeypatch):
         client = self._client(container, seed)
@@ -188,7 +189,7 @@ class TestClientPayments:
             "app.services.requests.get",
             lambda *a, **k: _FakeResp({"rates": {"INR": 86.0}}),
         )
-        entry = container.client_service.add_payment(
+        entry = container.buyer_service.add_payment(
             client.id, seed.admin, "Main Acct", "2025-01-01 10:00", 100, "USD")
         assert entry.currency_code == "USD"
         assert entry.amount_inr == 8600.0
@@ -197,7 +198,7 @@ class TestClientPayments:
     def test_add_payment_rejects_inr(self, container, seed):
         client = self._client(container, seed)
         with pytest.raises(ValidationError):
-            container.client_service.add_payment(
+            container.buyer_service.add_payment(
                 client.id, seed.admin, "Acct", "2025-01-01 10:00", 100, "INR")
 
 
