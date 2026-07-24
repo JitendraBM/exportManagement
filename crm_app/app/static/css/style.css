@@ -618,17 +618,12 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
   .quote-remarks {
     border-color: var(--color-ink) !important;
   }
-  /* Stretch the main quotation sheet to a full A4 page: the items table
-     absorbs the leftover height (flex: 1) and each product row carries a
-     percentage height (set inline by the template), so with fewer than the
-     maximum products the rows thicken until the sheet fills the page.
-     278mm fits inside both print.html (8mm @page margin) and
-     print_combined.html (6mm). The annexure sheet is deliberately excluded. */
-  .quote-fill-sheet {
-    display: flex; flex-direction: column;
-    height: 278mm; box-sizing: border-box;
-  }
-  .quote-fill-sheet .quote-items-table { flex: 1 1 auto; }
+  /* The quotation sheet used to be forced to a fixed 278mm and its rows
+     stretched by percentage to fill it. The blank filler row at the end of the
+     item list now absorbs the leftover space instead, measured against the
+     real page height (templates/_page_filler.html), so the sheet fills one
+     page without the rows changing thickness with the item count - and
+     without pushing itself onto a second page when the content is tall. */
 }
 
 .login-shell {

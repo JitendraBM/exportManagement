@@ -3,7 +3,16 @@
    INR). Shared by print.html (standalone) and print_combined.html (PO +
    packing details in one printable document). Expects `purchase_order`,
    `company` and (optionally) `packing_lists` in context; brings its own
-   scoped .po-* styles along. #}
+   scoped .po-* styles along.
+
+   Items beyond what fits on the order page spill onto the ANNEXURE sheet
+   (_annexure.html), exactly as on the proforma invoice - the order page then
+   shows a "(CONTINUE TO ANNEXURE----->)" marker, a per-page TOTAL and an
+   ANNEXURE line in the tax block. Keep PO_ANNEX_START in sync with
+   _annexure.html. #}
+{% set PO_ANNEX_START = 10 %}
+{% set main_items = purchase_order.items[:PO_ANNEX_START] %}
+{% set annex_items = purchase_order.items[PO_ANNEX_START:] %}
 <style>
   .po-sheet {
     background: #fff;
@@ -54,8 +63,8 @@
   .po-buyer-logo { position: absolute; top: 1px; right: 6px; bottom: 1px; display: flex; align-items: center; }
   .po-buyer-logo img { max-height: 100%; width: auto; max-width: 110px; object-fit: contain; }
   .po-items thead td { text-align: center; vertical-align: middle; font-size: 9px; font-weight: bold; }
-  .po-items tbody tr.po-goods td { border-top: none; border-bottom: none; padding: 2px 5px; }
-  .po-items tbody tr.po-filler td { height: 120px; }
+  .po-items tbody tr.po-goods td, .po-items tbody tr.po-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
+  {# .po-filler's height is measured in the browser - see templates/_page_filler.html #}
   .po-charge-label { text-align: center; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .po-sign-cell { height: 92px; padding: 4px 6px; }
   .po-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
@@ -78,7 +87,7 @@
   {%- if v is not none and v != '' and v != 0 %}{{ '{:g}'.format(v | round(2)) }}{% endif -%}
 {%- endmacro %}
 
-<div class="po-sheet">
+<div class="po-sheet js-page-sheet">
   <div class="po-title">PURCHASE ORDER</div>
 
   <!-- Buyer (our company) / order references -->
@@ -160,8 +169,18 @@
         <td>PER</td>
       </tr>
     </thead>
+    {# per-page totals: this TOTAL row covers only the items printed on the
+       order page - the annexure items total appears as the ANNEXURE line in
+       the tax block and again on the annexure sheet's own TOTAL row #}
+    {% set ns = namespace(boxes=0, qty=0, amount=0) %}
+    {% for item in main_items %}
+      {% set ns.boxes = ns.boxes + (item.quantity_boxes or 0) %}
+      {% set ns.qty = ns.qty + (item.quantity_value or 0) %}
+      {% set ns.amount = ns.amount + (item.total_inr or 0) %}
+    {% endfor %}
+    {% set annex_total = annex_items | sum(attribute='total_inr') %}
     <tbody>
-      {% for item in purchase_order.items %}
+      {% for item in main_items %}
       <tr class="po-goods">
         <td class="po-center">{{ item.sr_no }}</td>
         <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
@@ -172,16 +191,23 @@
         <td class="po-right">{{ inr(item.total_inr) }}</td>
       </tr>
       {% endfor %}
-      <tr class="po-filler">
+      {% if annex_items %}
+      <tr class="po-goods">
+        <td></td>
+        <td class="po-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
+        <td></td><td></td><td></td><td></td><td></td>
+      </tr>
+      {% endif %}
+      <tr class="po-filler js-page-filler">
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="po-val po-center">TOTAL QUANTITY</td>
-        <td class="po-val po-center">{{ num(purchase_order.total_boxes) }}</td>
-        <td class="po-val po-right">{{ '{:,.2f}'.format(purchase_order.total_quantity) }}</td>
+        <td class="po-val po-center">{{ num(ns.boxes) }}</td>
+        <td class="po-val po-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
         <td class="po-val po-center" colspan="2">TOTAL AMOUNT</td>
-        <td class="po-val po-right">{{ inr(purchase_order.subtotal_inr) }}</td>
+        <td class="po-val po-right">{{ inr(ns.amount) }}</td>
       </tr>
     </tbody>
   </table>
@@ -192,7 +218,13 @@
       <col style="width:53%"><col style="width:15%"><col style="width:12%"><col style="width:20%">
     </colgroup>
     <tr>
-      <td class="po-val po-mid" rowspan="5">ORDER VALUE SAY IN WORD :<br>{{ purchase_order.order_value_inr | inr_in_words }}</td>
+      <td class="po-val po-mid" rowspan="{{ 6 if annex_items else 5 }}">ORDER VALUE SAY IN WORD :<br>{{ purchase_order.order_value_inr | inr_in_words }}</td>
+      {% if annex_items %}
+      <td class="po-charge-label" colspan="2">ANNEXURE</td>
+      <td class="po-val po-right">{{ inr(annex_total) }}</td>
+    </tr>
+    <tr>
+      {% endif %}
       <td class="po-charge-label">IGST</td>
       <td class="po-val po-right">{{ '{:.2f}'.format(purchase_order.igst_percent) }}%</td>
       <td class="po-val po-right">{{ inr(purchase_order.igst_amount) }}</td>
