@@ -1369,6 +1369,52 @@ class ProductService:
             os.remove(full_path)
 
 
+class InventoryService:
+    """Read-only view of the catalog focused on stock on hand. It reuses
+    ProductService for all catalog navigation (categories, products, sub
+    categories, designs) and adds the stock numbers on top: a design's
+    CURRENT STOCK is everything bought in (placed on a purchase order's
+    packing list) minus everything sold. Sales aren't modelled yet, so stock
+    currently equals the purchased totals; the shape below already leaves
+    room to subtract sales once they exist."""
+
+    def __init__(self, product_service: "ProductService", packing_list_repo: PackingListRepository):
+        self.products = product_service
+        self.packing_list_repo = packing_list_repo
+
+    def _stock_from_bought(self, bought: dict) -> dict:
+        """Turn a {boxes, pcs, quantity} purchased total into a stock figure.
+        Sales, once modelled, get subtracted here."""
+        return {
+            "boxes": bought.get("boxes", 0) or 0,
+            "pcs": bought.get("pcs", 0) or 0,
+            "quantity": bought.get("quantity", 0) or 0,
+            "unit": bought.get("unit") or None,  # the quantity's unit (SQM/PCS/...)
+        }
+
+    def stock_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} on hand, for the whole
+        company in one query. Designs never bought are simply absent."""
+        totals = self.packing_list_repo.bought_totals_by_design(company_id)
+        return {design_id: self._stock_from_bought(bought) for design_id, bought in totals.items()}
+
+    def stock_for_design(self, company_id: int, design_id: int) -> dict:
+        """Current stock for a single design (zeros when never bought)."""
+        return self.stock_by_design(company_id).get(
+            design_id, {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None}
+        )
+
+    def purchase_sale_history(self, company_id: int, design_id: int) -> List[dict]:
+        """The design's Purchase/Sale history, newest first. Every row is a
+        purchase for now (goods placed on a purchase order's packing list);
+        each is tagged so sales can join the same timeline later."""
+        history = []
+        for row in self.packing_list_repo.bought_history_for_design(company_id, design_id):
+            row["kind"] = "purchase"
+            history.append(row)
+        return history
+
+
 # ============================================================
 # DOCUMENT VERSION SERVICE (shared version-history mechanism for
 # quotations/proforma invoices/packing lists - see DocumentVersionRepository

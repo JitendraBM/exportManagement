@@ -2053,6 +2053,50 @@ class PackingListRepository:
         )
         return [dict(r) for r in rows]
 
+    # ---- inventory (designs bought = placed on a purchase order's packing list) ----
+    # A packing list carrying a purchase_order_id is a PO's packing list: the
+    # goods we've bought in. Summed per design, that's everything purchased;
+    # sales (yet to be modelled) will subtract from the same totals later.
+    def bought_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} bought across every purchase
+        order's packing list. Rows with no design_id (hand-typed lines) are
+        skipped - stock is only tracked for real catalog designs."""
+        rows = self.db.query(
+            """SELECT i.design_id AS design_id,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.pcs), 0) AS pcs,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(i.unit) AS unit
+               FROM packing_lists pl
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+                 AND i.design_id IS NOT NULL
+               GROUP BY i.design_id""",
+            (company_id,),
+        )
+        return {r["design_id"]: {"boxes": r["boxes"], "pcs": r["pcs"],
+                                 "quantity": r["quantity"], "unit": r["unit"]}
+                for r in rows}
+
+    def bought_history_for_design(self, company_id: int, design_id: int) -> List[dict]:
+        """One row per purchase-order packing list this design appears on -
+        the design's purchase history (the buy side of Purchase/Sale
+        history). Newest first."""
+        rows = self.db.query(
+            """SELECT po.po_number AS po_number, po.po_date AS po_date,
+                      po.seller_name AS seller_name, po.id AS purchase_order_id,
+                      pl.packing_list_number AS packing_list_number,
+                      i.quantity_boxes AS boxes, i.pcs AS pcs,
+                      i.quantity_value AS quantity, i.unit AS unit
+               FROM packing_lists pl
+               JOIN purchase_orders po ON po.id = pl.purchase_order_id
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               WHERE pl.company_id = ? AND i.design_id = ?
+               ORDER BY po.po_date DESC, po.id DESC""",
+            (company_id, design_id),
+        )
+        return [dict(r) for r in rows]
+
     def create(self, packing_list: PackingList) -> PackingList:
         new_id = self.db.execute(
             """INSERT INTO packing_lists
