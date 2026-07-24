@@ -48,7 +48,7 @@ class TestListPages:
     @pytest.mark.parametrize("path", [
         "/",
         "/leads/",
-        "/clients/",
+        "/buyers/",
         "/products/",
         "/quotations/",
         "/proforma-invoices/",
@@ -129,7 +129,7 @@ class TestLeadRoutes:
         lead = new_lead(container, admin)
         client.post(f"/leads/{lead.id}/convert", data={"client_type": "Buyer"},
                     follow_redirects=True)
-        assert len(container.client_repo.list_all(company_id)) == 1
+        assert len(container.buyer_repo.list_all(company_id)) == 1
 
 
 # ==========================================================================
@@ -139,12 +139,12 @@ class TestClientRoutes:
     def test_client_detail_page(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         lead = new_lead(container, admin)
-        c = container.client_service.convert_lead(lead.id, admin)
-        assert client.get(f"/clients/{c.id}").status_code == 200
+        c = container.buyer_service.convert_lead(lead.id, admin)
+        assert client.get(f"/buyers/{c.id}").status_code == 200
 
     def test_unknown_client_is_404(self, admin_ctx):
         client, *_ = admin_ctx
-        assert client.get("/clients/99999").status_code == 404
+        assert client.get("/buyers/99999").status_code == 404
 
 
 # ==========================================================================

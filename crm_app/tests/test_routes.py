@@ -18,7 +18,7 @@ import pytest
 class TestAppBoots:
     def test_create_app_registers_all_blueprints(self, app):
         expected = {
-            "auth", "dashboard", "leads", "clients", "admin", "company",
+            "auth", "dashboard", "leads", "buyers", "suppliers", "exporters", "admin", "company",
             "reports", "products", "quotations", "proforma_invoices",
             "purchase_orders", "packing_lists", "profile", "backup",
         }
@@ -37,7 +37,7 @@ class TestAuthGuards:
         resp = client.get("/login")
         assert resp.status_code == 200
 
-    @pytest.mark.parametrize("path", ["/", "/leads/", "/clients/", "/products/"])
+    @pytest.mark.parametrize("path", ["/", "/leads/", "/buyers/", "/products/"])
     def test_protected_pages_redirect_anonymous_to_login(self, client, path):
         resp = client.get(path, follow_redirects=False)
         # login_required redirects (302) to the login page.
