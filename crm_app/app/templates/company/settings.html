@@ -140,24 +140,34 @@
     </fieldset>
 
     <fieldset>
-      <legend>Contact person(s) <span class="text-soft text-sm">— at least one required; name is compulsory for every row</span></legend>
+      <legend>Contact person(s) <span class="text-soft text-sm">— at least one required; name is compulsory for every row. Designation is printed under the Authorised Signatory on the Export Invoice.</span></legend>
       <div id="person-rows">
         {% set persons = company.contact_persons if company and company.contact_persons else [] %}
         {% if persons %}
           {% for p in persons %}
           <div class="repeatable-row">
             <div class="field"><label>Name<span class="required-mark">*</span></label><input type="text" name="person_name[]" value="{{ p.name }}" required></div>
+            <div class="field"><label>Designation</label><input type="text" name="person_designation[]" value="{{ p.designation or '' }}" placeholder="e.g. Partner Of Aayu Exim"></div>
             <div class="radio-wrap"><input type="checkbox" name="person_primary[]" value="{{ loop.index0 }}" id="pp-{{ loop.index0 }}" {{ 'checked' if p.is_primary }}><label for="pp-{{ loop.index0 }}">Primary</label></div>
           </div>
           {% endfor %}
         {% else %}
           <div class="repeatable-row">
             <div class="field"><label>Name<span class="required-mark">*</span></label><input type="text" name="person_name[]" required></div>
+            <div class="field"><label>Designation</label><input type="text" name="person_designation[]" placeholder="e.g. Partner Of Aayu Exim"></div>
             <div class="radio-wrap"><input type="checkbox" name="person_primary[]" value="0" id="pp-0"><label for="pp-0">Primary</label></div>
           </div>
         {% endif %}
       </div>
       <button type="button" class="btn btn-ghost btn-sm" onclick="addPersonRow()">+ Add contact person</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Self-sealing declaration <span class="text-soft text-sm">— printed verbatim in the Export Invoice's declaration block</span></legend>
+      <div class="field">
+        <label>Declaration text</label>
+        <textarea name="self_sealing_declaration" rows="4" placeholder="(1) Certified That The Description &amp; Value Of Goods Covered By This Invoice Have Been Checked By Me &amp; That Goods Have Been Packed &amp; Sealed With One Time Seal (OTS) Under My Direct Supervision (2) We Have Follow The Procedure Laid Down In CBEC's Circular No. 426/59/98 CX Dt.12/10/1998 As Amended Against This Shipment">{{ company.self_sealing_declaration or '' if company else '' }}</textarea>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -223,6 +233,7 @@
     row.className = 'repeatable-row';
     row.innerHTML = `
       <div class="field"><label>Name<span class="required-mark">*</span></label><input type="text" name="person_name[]" required></div>
+      <div class="field"><label>Designation</label><input type="text" name="person_designation[]" placeholder="e.g. Partner Of Aayu Exim"></div>
       <div class="radio-wrap"><input type="checkbox" name="person_primary[]" value="${personCount}" id="pp-${personCount}"><label for="pp-${personCount}">Primary</label></div>`;
     wrap.appendChild(row);
     personCount++;

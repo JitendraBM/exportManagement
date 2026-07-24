@@ -43,6 +43,7 @@
 
   <div class="combined-page">
     {% include 'purchase_orders/_sheet.html' %}
+    {% include 'purchase_orders/_annexure.html' %}
   </div>
 
   {% for packing_list in packing_lists %}
@@ -51,5 +52,6 @@
   </div>
   {% endfor %}
 
+  {% include '_page_filler.html' %}
 </body>
 </html>

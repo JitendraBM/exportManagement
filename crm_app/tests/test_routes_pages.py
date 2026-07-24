@@ -242,8 +242,14 @@ class TestDocumentRoutes:
     def test_delete_quotation_via_post(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         q = self._quotation(container, admin)
-        client.post(f"/quotations/{q.id}/delete", follow_redirects=True)
+        client.post(f"/quotations/{q.id}/delete", data={"delete_password": "page-pass-1"}, follow_redirects=True)
         assert container.quotation_repo.get_by_id(q.id) is None
+
+    def test_delete_quotation_via_post_rejects_wrong_password(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        q = self._quotation(container, admin)
+        client.post(f"/quotations/{q.id}/delete", data={"delete_password": "wrong"}, follow_redirects=True)
+        assert container.quotation_repo.get_by_id(q.id) is not None
 
     def test_purchase_order_form_has_no_nested_form(self, admin_ctx):
         """The admin-only "Add new supplier" panel once shipped as a <form>
@@ -266,6 +272,17 @@ class TestDocumentRoutes:
         assert not re.search(r"\srequired[\s>]", panel)  # the attribute, not the required-mark class
         # ...and the submit button still lives inside the PO form.
         assert "Create purchase order" in markup
+
+    def test_purchase_order_form_derives_taxes_instead_of_asking_for_them(self, admin_ctx):
+        """The three GST percentages follow from "Purchase under" + the GSTIN
+        state-code comparison, so the form shows them rather than collecting
+        them - a posted percentage would only be a stale copy."""
+        client, *_ = admin_ctx
+        html = client.get("/purchase-orders/new").get_data(as_text=True)
+        assert "Purchase under" in html
+        assert 'value="full_tax"' in html and 'value="exemption"' in html
+        for field in ("igst_percent", "cgst_percent", "sgst_percent"):
+            assert f'name="{field}"' not in html
 
 
 # ==========================================================================

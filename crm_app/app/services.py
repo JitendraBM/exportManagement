@@ -29,19 +29,22 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Permit, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
-    PurchaseOrder, PurchaseOrderItem, PackingList, PackingListItem,
-    DocumentVersion,
+    PurchaseOrder, PurchaseOrderItem, PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
+    DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
+    PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
+    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_CGST_SGST,
+    EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
 )
 from app.repositories import (
     TenantRepository, UserRepositoryBase, LeadRepositoryBase, PartyRepositoryBase, SupplierRepositoryBase,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
-    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PackingListRepository,
-    DocumentVersionRepository,
+    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
+    ExportInvoiceRepository, PackingListRepository, DocumentVersionRepository, PermitRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 
@@ -550,8 +553,8 @@ class SupplierService:
         return self.supplier_repo.list_all(company_id, status)
 
     # ---- add directly (admin only, no originating lead) --------------------------------------------------
-    def create(self, current_user: User, company_name: str, address: str, gstin: str, pan_no: str, iec: str,
-               contact_details: list, contact_persons: list, bank_details: list) -> Supplier:
+    def create(self, current_user: User, company_name: str, address: str, gstin: str, cin_llp_no: str, pan_no: str,
+               iec: str, contact_details: list, contact_persons: list, bank_details: list) -> Supplier:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can add a new supplier.")
         if not company_name or not company_name.strip():
@@ -561,7 +564,8 @@ class SupplierService:
         supplier = Supplier(
             id=None, company_id=current_user.company_id, lead_id=None, company_name=company_name.strip(),
             status="proforma_invoice_submission_pending", created_by=current_user.id,
-            address=(address or "").strip() or None, gstin=gstin or None, pan_no=pan_no or None, iec=iec or None,
+            address=(address or "").strip() or None, gstin=gstin or None,
+            cin_llp_no=(cin_llp_no or "").strip() or None, pan_no=pan_no or None, iec=iec or None,
         )
         supplier = self.supplier_repo.create(supplier)
         self.supplier_repo.replace_contact_details(supplier.id, valid_details)
@@ -596,7 +600,7 @@ class SupplierService:
 
     # ---- writes --------------------------------------------------
     def update_profile(self, supplier_id: int, current_user: User, company_name: str, address: str,
-                        gstin: str, pan_no: str, iec: str, contact_details: list,
+                        gstin: str, cin_llp_no: str, pan_no: str, iec: str, contact_details: list,
                         contact_persons: list, bank_details: list) -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can edit a supplier's profile.")
@@ -607,7 +611,8 @@ class SupplierService:
 
         self.supplier_repo.update_profile(supplier_id, {
             "company_name": company_name.strip(), "address": address or None,
-            "gstin": gstin or None, "pan_no": pan_no or None, "iec": iec or None,
+            "gstin": gstin or None, "cin_llp_no": (cin_llp_no or "").strip() or None,
+            "pan_no": pan_no or None, "iec": iec or None,
         })
         self.supplier_repo.replace_contact_details(supplier_id, valid_details)
         self.supplier_repo.replace_contact_persons(supplier_id, valid_persons)
@@ -730,7 +735,8 @@ class CompanyService:
 
     def save(self, current_user: User, company_name: str, address: str, gstin: str, pan_no: str, iec: str,
               bin_no: str, contact_details: list, contact_persons: list, bank_details: list, lut_details: list,
-              rcmc_details: list, logo_file=None, remove_logo: bool = False) -> None:
+              rcmc_details: list, logo_file=None, remove_logo: bool = False,
+              self_sealing_declaration: str = "") -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can edit our company's profile.")
         if not company_name or not company_name.strip():
@@ -772,7 +778,8 @@ class CompanyService:
 
         existing = self.company_repo.get(current_user.company_id)
         our_company_id = self.company_repo.upsert(
-            current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no
+            current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no,
+            (self_sealing_declaration or "").strip() or None,
         )
         self.company_repo.replace_contact_details(our_company_id, valid_details)
         self.company_repo.replace_contact_persons(our_company_id, valid_persons)
@@ -808,6 +815,116 @@ class CompanyService:
         full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
         if os.path.exists(full_path):
             os.remove(full_path)
+
+
+# ============================================================
+# PERMIT SERVICE (the "Permissions" tab under Our Company)
+# ============================================================
+class PermitService:
+    """The permits ("permissions") a company holds. Each references one
+    supplier, records the issuing-authority details and place of stuffing,
+    is either valid until an expiry date OR a one-time permit, and can carry
+    an uploaded PDF (same save/delete pattern as PurchaseInvoiceService).
+    Admin-only, like the rest of the Our Company area - the route enforces
+    that; the service still keeps everything company-scoped."""
+
+    VALIDITY_TYPES = ("expiry", "one_time")
+
+    def __init__(self, permit_repo: PermitRepository, supplier_repo: SupplierRepositoryBase,
+                 upload_folder: str = "", allowed_extensions: set = frozenset()):
+        self.permit_repo = permit_repo
+        self.supplier_repo = supplier_repo
+        self.upload_folder = upload_folder
+        self.allowed_extensions = allowed_extensions
+
+    # ---- reads --------------------------------------------------
+    def get(self, permit_id: int, company_id: int) -> Permit:
+        permit = self.permit_repo.get_by_id(permit_id)
+        if not permit or permit.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's permit exists.
+            raise NotFoundError(f"Permit #{permit_id} not found.")
+        return permit
+
+    def list_all(self, company_id: int) -> List[Permit]:
+        return self.permit_repo.list_all(company_id)
+
+    # ---- PDF storage (mirrors PurchaseInvoiceService._save_pdf) --------------------------------------------------
+    def _save_pdf(self, file_storage) -> Optional[str]:
+        if not file_storage or not file_storage.filename:
+            return None
+        filename = secure_filename(file_storage.filename)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in self.allowed_extensions:
+            raise ValidationError(f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(self.allowed_extensions))}.")
+        os.makedirs(self.upload_folder, exist_ok=True)
+        stored_name = f"{uuid.uuid4().hex}_{filename}"
+        file_storage.save(os.path.join(self.upload_folder, stored_name))
+        return f"uploads/permits/{stored_name}"
+
+    def _delete_pdf_file(self, relative_path: Optional[str]) -> None:
+        if not relative_path:
+            return
+        full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+    # ---- validation --------------------------------------------------
+    def _build(self, current_user: User, fields: dict) -> Permit:
+        permission_number = (fields.get("permission_number") or "").strip()
+        if not permission_number:
+            raise ValidationError("Permission number is compulsory.")
+
+        supplier_id = int(fields["supplier_id"]) if fields.get("supplier_id") else None
+        if supplier_id is None:
+            raise ValidationError("Supplier is compulsory.")
+        supplier = self.supplier_repo.get_by_id(supplier_id)
+        if not supplier or supplier.company_id != current_user.company_id:
+            raise ValidationError("Please choose a valid supplier.")
+
+        validity_type = (fields.get("validity_type") or "expiry").strip()
+        if validity_type not in self.VALIDITY_TYPES:
+            validity_type = "expiry"
+        date_of_expiry = (fields.get("date_of_expiry") or "").strip() or None
+        if validity_type == "one_time":
+            date_of_expiry = None
+        elif not date_of_expiry:
+            raise ValidationError("Date of expiry is compulsory unless the permit is one-time.")
+
+        return Permit(
+            id=None, company_id=current_user.company_id, supplier_id=supplier_id,
+            permission_number=permission_number, created_by=current_user.id,
+            date_of_issue=(fields.get("date_of_issue") or "").strip() or None,
+            issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
+            issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
+            place_of_stuffing=(fields.get("place_of_stuffing") or "").strip() or None,
+            validity_type=validity_type, date_of_expiry=date_of_expiry,
+        )
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, pdf_file=None) -> Permit:
+        permit = self._build(current_user, fields)
+        permit.pdf_path = self._save_pdf(pdf_file)
+        return self.permit_repo.create(permit)
+
+    def update(self, current_user: User, permit_id: int, fields: dict,
+               pdf_file=None, remove_pdf: bool = False) -> Permit:
+        existing = self.get(permit_id, current_user.company_id)
+        permit = self._build(current_user, fields)
+        if pdf_file and pdf_file.filename:
+            permit.pdf_path = self._save_pdf(pdf_file)
+            self._delete_pdf_file(existing.pdf_path)
+        elif remove_pdf:
+            self._delete_pdf_file(existing.pdf_path)
+            permit.pdf_path = None
+        else:
+            permit.pdf_path = existing.pdf_path
+        self.permit_repo.update(permit_id, permit)
+        return self.get(permit_id, current_user.company_id)
+
+    def delete(self, current_user: User, permit_id: int) -> None:
+        existing = self.get(permit_id, current_user.company_id)
+        self._delete_pdf_file(existing.pdf_path)
+        self.permit_repo.delete(permit_id)
 
 
 # ============================================================
@@ -1366,6 +1483,52 @@ class ProductService:
             os.remove(full_path)
 
 
+class InventoryService:
+    """Read-only view of the catalog focused on stock on hand. It reuses
+    ProductService for all catalog navigation (categories, products, sub
+    categories, designs) and adds the stock numbers on top: a design's
+    CURRENT STOCK is everything bought in (placed on a purchase order's
+    packing list) minus everything sold. Sales aren't modelled yet, so stock
+    currently equals the purchased totals; the shape below already leaves
+    room to subtract sales once they exist."""
+
+    def __init__(self, product_service: "ProductService", packing_list_repo: PackingListRepository):
+        self.products = product_service
+        self.packing_list_repo = packing_list_repo
+
+    def _stock_from_bought(self, bought: dict) -> dict:
+        """Turn a {boxes, pcs, quantity} purchased total into a stock figure.
+        Sales, once modelled, get subtracted here."""
+        return {
+            "boxes": bought.get("boxes", 0) or 0,
+            "pcs": bought.get("pcs", 0) or 0,
+            "quantity": bought.get("quantity", 0) or 0,
+            "unit": bought.get("unit") or None,  # the quantity's unit (SQM/PCS/...)
+        }
+
+    def stock_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} on hand, for the whole
+        company in one query. Designs never bought are simply absent."""
+        totals = self.packing_list_repo.bought_totals_by_design(company_id)
+        return {design_id: self._stock_from_bought(bought) for design_id, bought in totals.items()}
+
+    def stock_for_design(self, company_id: int, design_id: int) -> dict:
+        """Current stock for a single design (zeros when never bought)."""
+        return self.stock_by_design(company_id).get(
+            design_id, {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None}
+        )
+
+    def purchase_sale_history(self, company_id: int, design_id: int) -> List[dict]:
+        """The design's Purchase/Sale history, newest first. Every row is a
+        purchase for now (goods placed on a purchase order's packing list);
+        each is tagged so sales can join the same timeline later."""
+        history = []
+        for row in self.packing_list_repo.bought_history_for_design(company_id, design_id):
+            row["kind"] = "purchase"
+            history.append(row)
+        return history
+
+
 # ============================================================
 # DOCUMENT VERSION SERVICE (shared version-history mechanism for
 # quotations/proforma invoices/packing lists - see DocumentVersionRepository
@@ -1379,6 +1542,8 @@ _VERSIONED_TYPES = {
     "quotation": (Quotation, QuotationItem, "quotation_number"),
     "proforma_invoice": (ProformaInvoice, ProformaInvoiceItem, "invoice_number"),
     "purchase_order": (PurchaseOrder, PurchaseOrderItem, "po_number"),
+    "purchase_invoice": (PurchaseInvoice, PurchaseInvoiceItem, "purchase_invoice_number"),
+    "export_invoice": (ExportInvoice, ExportInvoiceItem, "export_invoice_number"),
     "packing_list": (PackingList, PackingListItem, "packing_list_number"),
 }
 
@@ -1482,8 +1647,9 @@ class QuotationService:
                 quantity_value = float(raw.get("quantity_value") or 0)
                 price_usd = float(raw.get("price_usd") or 0)
                 quantity_boxes = float(raw["quantity_boxes"]) if raw.get("quantity_boxes") else None
+                pallets = float(raw["pallets"]) if raw.get("pallets") else None
             except ValueError:
-                raise ValidationError(f"Row {i}: quantity and price must be numbers.")
+                raise ValidationError(f"Row {i}: quantity, pallets and price must be numbers.")
             product_id = int(raw["product_id"]) if raw.get("product_id") else None
 
             # Only trust a product from this same company - otherwise a
@@ -1508,7 +1674,7 @@ class QuotationService:
             items.append(QuotationItem(
                 id=None, quotation_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
-                quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                quantity_boxes=quantity_boxes, pallets=pallets, quantity_value=quantity_value,
                 unit=(raw.get("unit") or "SQM").strip() or "SQM",
                 price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
             ))
@@ -1664,12 +1830,40 @@ class ProformaInvoiceService:
         list page to switch "Generate PI" to "View PI" without an N+1 query."""
         return self.invoice_repo.map_by_quotation(company_id)
 
+    def list_by_status(self, company_id: int, status: str) -> List[ProformaInvoice]:
+        return self.invoice_repo.list_by_status(company_id, status)
+
     # ---- permission --------------------------------------------------
     def _assert_can_modify(self, invoice: ProformaInvoice, current_user: User):
-        if current_user.is_admin:
-            return
-        if invoice.created_by != current_user.id:
+        """Ownership first, then the confirmation lock: a confirmed invoice is
+        the version the buyer has agreed to and the version the purchase
+        orders are being placed against, so it is frozen for everyone until
+        an admin deliberately moves it back to draft (set_status below)."""
+        if not current_user.is_admin and invoice.created_by != current_user.id:
             raise PermissionDeniedError("You can only manage proforma invoices you created yourself.")
+        if invoice.is_confirmed:
+            raise ValidationError(
+                f"Proforma invoice {invoice.invoice_number} is confirmed and locked. "
+                "An admin has to move it back to draft before it can be edited or deleted."
+            )
+
+    # ---- status --------------------------------------------------
+    def set_status(self, current_user: User, invoice_id: int, status: str) -> ProformaInvoice:
+        """Confirm an invoice (anyone who could edit it) or send it back to
+        draft (admins only - reopening a confirmed document is the override,
+        not the everyday action). Deliberately does not go through
+        _assert_can_modify, which is what enforces the lock this method
+        releases."""
+        invoice = self.get(invoice_id, current_user.company_id)
+        if status not in dict(PROFORMA_STATUSES):
+            raise ValidationError("Invalid proforma invoice status.")
+        if not current_user.is_admin and invoice.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage proforma invoices you created yourself.")
+        if status == PROFORMA_STATUS_DRAFT and not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can move a confirmed proforma invoice back to draft.")
+        if status != invoice.status:
+            self.invoice_repo.update_status(invoice_id, status)
+        return self.get(invoice_id, current_user.company_id)
 
     # ---- number generation --------------------------------------------------
     def _generate_number(self, company_id: int, invoice_date: str) -> str:
@@ -1713,7 +1907,7 @@ class ProformaInvoiceService:
             {
                 "product_id": item.product_id, "product_name": item.product_name,
                 "hsn_code": item.hsn_code, "quantity_boxes": item.quantity_boxes,
-                "quantity_value": item.quantity_value, "unit": item.unit,
+                "pallets": item.pallets, "quantity_value": item.quantity_value, "unit": item.unit,
                 "price_usd": item.price_usd,
             }
             for item in quotation.items
@@ -1756,7 +1950,6 @@ class ProformaInvoiceService:
             items.append(ProformaInvoiceItem(
                 id=None, proforma_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
-                surface=(raw.get("surface") or "").strip() or None,
                 pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
                 unit=(raw.get("unit") or "SQM").strip() or "SQM",
                 price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
@@ -1864,6 +2057,17 @@ class ProformaInvoiceService:
 # ============================================================
 # PURCHASE ORDER SERVICE
 # ============================================================
+def is_intra_state(gstin_a: Optional[str], gstin_b: Optional[str]) -> bool:
+    """True when both GSTINs belong to the same state - the first two digits
+    of a GSTIN are its state code. A purchase inside one state is taxed
+    CGST + SGST; across states it's IGST instead. Unknown either way (a
+    missing or malformed GSTIN) counts as inter-state, which is the norm for
+    an exporter buying from out-of-state suppliers."""
+    a = (gstin_a or "").strip()[:2]
+    b = (gstin_b or "").strip()[:2]
+    return len(a) == 2 and a.isdigit() and a == b
+
+
 class PurchaseOrderService:
     """Mirrors ProformaInvoiceService layer-for-layer. A purchase order is
     the next document after the Proforma Invoice in the client pipeline, but
@@ -1875,7 +2079,9 @@ class PurchaseOrderService:
     def __init__(self, purchase_order_repo: PurchaseOrderRepository, product_repo: ProductRepository,
                  lead_repo: LeadRepositoryBase, proforma_invoice_repo: ProformaInvoiceRepository,
                  version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
-                 supplier_repo: Optional[SupplierRepositoryBase] = None):
+                 supplier_repo: Optional[SupplierRepositoryBase] = None,
+                 company_repo: Optional[CompanyRepository] = None,
+                 fulfilment_service: Optional["ProformaFulfilmentService"] = None):
         self.purchase_order_repo = purchase_order_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -1883,6 +2089,10 @@ class PurchaseOrderService:
         self.version_service = version_service
         self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ..., 'Exporter': ...} for advance_client_status
         self.supplier_repo = supplier_repo  # for validating seller_supplier_id belongs to this company
+        self.company_repo = company_repo  # our own GSTIN, for the intra/inter-state tax split
+        # Optional: when present, a new PO's product lines are cut down to
+        # what the invoice still needs ordered (see build_prefill_from_proforma).
+        self.fulfilment_service = fulfilment_service
 
     # ---- reads --------------------------------------------------
     def get(self, purchase_order_id: int, company_id: int) -> PurchaseOrder:
@@ -1902,19 +2112,20 @@ class PurchaseOrderService:
             return []
         return self.purchase_order_repo.list_for_lead(lead_id)
 
-    def get_for_proforma(self, proforma_invoice_id: Optional[int]) -> Optional[PurchaseOrder]:
-        """The most recently created purchase order already generated from
-        this proforma invoice, or None if none exists yet."""
+    def list_for_proforma(self, proforma_invoice_id: Optional[int], company_id: int) -> List[PurchaseOrder]:
+        """Every purchase order generated from this proforma invoice, newest
+        first. One PI is normally ordered from several suppliers, so its page
+        lists all of them; company_id is re-checked here because the caller
+        passes an id straight off the invoice."""
         if not proforma_invoice_id:
-            return None
-        purchase_orders = self.purchase_order_repo.list_for_proforma(proforma_invoice_id)
-        return purchase_orders[0] if purchase_orders else None
+            return []
+        return [po for po in self.purchase_order_repo.list_for_proforma(proforma_invoice_id)
+                if po.company_id == company_id]
 
-    def map_by_proforma(self, company_id: int) -> dict:
-        """proforma_invoice_id -> most recent purchase_order id, for the
-        proforma list page to switch "Generate PO" to "View PO" without an
-        N+1 query."""
-        return self.purchase_order_repo.map_by_proforma(company_id)
+    def count_map_by_proforma(self, company_id: int) -> dict:
+        """proforma_invoice_id -> number of purchase orders placed against it,
+        for the proforma list page's PO column."""
+        return self.purchase_order_repo.count_map_by_proforma(company_id)
 
     # ---- permission --------------------------------------------------
     def _assert_can_modify(self, purchase_order: PurchaseOrder, current_user: User):
@@ -1941,7 +2152,16 @@ class PurchaseOrderService:
         different figure from the proforma's USD selling price, so it is
         left for the user to type in. Seller details also stay blank - the
         proforma's consignee is the foreign buyer, not the supplier this PO
-        is being placed with."""
+        is being placed with.
+
+        One invoice is normally split across several suppliers, so the
+        product lines are cut down to what's still outstanding - a line
+        already placed in full on another purchase order linked to this
+        same invoice is dropped, and a partly-placed one comes through at
+        its remaining boxes/quantity only (see _remaining_products). The
+        second and third PO built from the same invoice therefore don't
+        start out re-ordering the first one's goods, same as the packing-
+        list side already does (PackingListService._remaining_designs)."""
         fields = {
             "proforma_invoice_id": invoice.id,
             "lead_id": invoice.lead_id,
@@ -1949,16 +2169,59 @@ class PurchaseOrderService:
             "port_of_discharge": invoice.port_of_discharge,
             "container_details": invoice.container_details,
         }
-        items = [
-            {
-                "product_id": item.product_id, "product_name": item.product_name,
-                "hsn_code": item.hsn_code, "quantity_boxes": item.quantity_boxes,
-                "quantity_value": item.quantity_value, "unit": item.unit,
-                "price_inr": "", "price_per": "BOX",
-            }
-            for item in invoice.items
-        ]
-        return {"fields": fields, "items": items}
+        return {"fields": fields, "items": self._remaining_products(invoice)}
+
+    @staticmethod
+    def _raw_item(item: ProformaInvoiceItem) -> dict:
+        return {
+            "product_id": item.product_id, "product_name": item.product_name,
+            "hsn_code": item.hsn_code, "quantity_boxes": item.quantity_boxes,
+            "quantity_value": item.quantity_value, "unit": item.unit,
+            "price_inr": "", "price_per": "BOX",
+        }
+
+    def _remaining_products(self, invoice: ProformaInvoice) -> list:
+        """Every one of the invoice's product lines, cut down to what's
+        still outstanding and scaled to that outstanding share - the
+        product-level counterpart of PackingListService._remaining_designs.
+
+        No-op (every line unchanged) when there's no fulfilment service
+        wired in, so the plain "copy the invoice's product lines over"
+        behaviour still holds wherever this isn't available."""
+        if not self.fulfilment_service:
+            return [self._raw_item(item) for item in invoice.items]
+        status = self.fulfilment_service.product_status(invoice.company_id, invoice)
+        pending = {_product_key({"product_id": p["product_id"], "product_name": p["product_name"]}): p
+                   for p in status["pending"]}
+
+        remaining = []
+        for item in invoice.items:
+            key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+            product = pending.get(key)
+            if not product:
+                continue  # already placed in full on another linked purchase order
+            remaining.append(self._scaled_item(item, product))
+        return remaining
+
+    @classmethod
+    def _scaled_item(cls, item: ProformaInvoiceItem, product: dict) -> dict:
+        """One invoice product line rescaled to its outstanding share - same
+        ratio approach as PackingListService._scaled_row. A ratio of 1 -
+        nothing placed yet, the usual case for the first PO - leaves the
+        row unchanged."""
+        row = cls._raw_item(item)
+        if product["required_boxes"] > 0:
+            ratio = product["pending_boxes"] / product["required_boxes"]
+        elif product["required_quantity"] > 0:
+            ratio = product["pending_quantity"] / product["required_quantity"]
+        else:
+            ratio = 1
+        if ratio >= 1:
+            return row
+        for key in ("quantity_boxes", "quantity_value"):
+            if row.get(key) not in (None, ""):
+                row[key] = round(float(row[key]) * ratio, 2) or ""
+        return row
 
     # ---- validation --------------------------------------------------
     def _build_items(self, company_id: int, raw_items: list) -> List[PurchaseOrderItem]:
@@ -2015,21 +2278,55 @@ class PurchaseOrderService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
+    # ---- tax derivation --------------------------------------------------
+    def base_igst_percent(self, company_id: int, purchase_type: str, items: List[PurchaseOrderItem]) -> float:
+        """The full order's tax rate before it is split into IGST or
+        CGST+SGST. Under Exemption it's the flat concessional rate; under a
+        Full Tax Purchase it comes from the catalog products on the lines
+        (their own stored IGST %). Lines can in principle carry different
+        rates while the order stores one - the highest wins, so the order is
+        never under-taxed. Typed-in lines with no catalog product behind them
+        contribute nothing."""
+        if purchase_type == "exemption":
+            return EXEMPTION_IGST_PERCENT
+        rate = 0.0
+        for item in items:
+            if not item.product_id:
+                continue
+            product = self.product_repo.get_by_id(item.product_id)
+            if product and product.company_id == company_id and product.igst_percent:
+                rate = max(rate, float(product.igst_percent))
+        return rate
+
+    def _tax_percentages(self, company_id: int, purchase_type: str, seller_gstin: Optional[str],
+                         items: List[PurchaseOrderItem]) -> tuple:
+        """(igst, cgst, sgst) for the order. The rate itself comes from
+        `purchase_type` (see base_igst_percent); where it lands depends on
+        the state codes of our GSTIN and the seller's - same state means
+        CGST + SGST at half each, different states means IGST alone."""
+        rate = self.base_igst_percent(company_id, purchase_type, items)
+        our_company = self.company_repo.get(company_id) if self.company_repo else None
+        if is_intra_state(our_company.gstin if our_company else None, seller_gstin):
+            half = round(rate / 2, 4)
+            return 0.0, half, half
+        return rate, 0.0, 0.0
+
     def _build_header(self, current_user: User, fields: dict, items: List[PurchaseOrderItem]) -> PurchaseOrder:
         seller_name = (fields.get("seller_name") or "").strip()
         if not seller_name:
             raise ValidationError("Seller name is compulsory.")
         po_date = (fields.get("po_date") or "").strip() or date.today().isoformat()
 
-        def _percent(key):
-            raw = fields.get(key)
-            try:
-                value = float(raw) if raw not in (None, "") else 0
-            except ValueError:
-                raise ValidationError(f"'{key}' must be a number (percentage).")
-            if value < 0 or value > 100:
-                raise ValidationError(f"'{key}' must be between 0 and 100 (it's a percentage).")
-            return value
+        purchase_type = (fields.get("purchase_type") or "").strip() or DEFAULT_PURCHASE_TYPE
+        if purchase_type not in PURCHASE_TYPES:
+            raise ValidationError("'Purchase under' must be either a full tax purchase or an exemption.")
+        seller_gstin = (fields.get("seller_gstin") or "").strip() or None
+        # Percentages are never taken from the form - the form only displays
+        # them, so a posted value would be a stale (or crafted) copy of what
+        # is derived here.
+        igst_percent, cgst_percent, sgst_percent = self._tax_percentages(
+            current_user.company_id, purchase_type, seller_gstin, items
+        )
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -2059,7 +2356,7 @@ class PurchaseOrderService:
             proforma_invoice_id=proforma_invoice_id, seller_supplier_id=seller_supplier_id,
             seller_address=(fields.get("seller_address") or "").strip() or None,
             seller_pan=(fields.get("seller_pan") or "").strip() or None,
-            seller_gstin=(fields.get("seller_gstin") or "").strip() or None,
+            seller_gstin=seller_gstin,
             seller_ref_no=(fields.get("seller_ref_no") or "").strip() or None,
             port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
             port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
@@ -2068,9 +2365,10 @@ class PurchaseOrderService:
             advance_percent=(fields.get("advance_percent") or "").strip() or None,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
-            igst_percent=_percent("igst_percent"),
-            cgst_percent=_percent("cgst_percent"),
-            sgst_percent=_percent("sgst_percent"),
+            igst_percent=igst_percent,
+            cgst_percent=cgst_percent,
+            sgst_percent=sgst_percent,
+            purchase_type=purchase_type,
             items=items,
         )
 
@@ -2101,6 +2399,777 @@ class PurchaseOrderService:
         existing = self.get(purchase_order_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
         self.purchase_order_repo.delete(purchase_order_id)
+
+
+# ============================================================
+# PURCHASE INVOICE SERVICE
+# ============================================================
+class PurchaseInvoiceService:
+    """The last document in the pipeline: raised once a supplier's goods
+    against one of our purchase orders actually arrive. Mirrors
+    PurchaseOrderService's shape (header + line items, day-scoped number
+    sequence, creator-or-admin edit lock), but with two differences that
+    follow from what this document actually is:
+
+    - There is nothing to print/generate here - the supplier already sent
+      their own invoice as a PDF, so this service also stores an uploaded
+      file (see _save_pdf/_delete_pdf_file, same pattern as
+      ProductService._save_image) alongside the typed-in figures.
+    - Its product lines are copied over from the linked purchase order in
+      FULL (see build_prefill_from_purchase_order) rather than cut down to
+      an outstanding remainder - unlike a PI's purchase orders, a purchase
+      invoice isn't splitting anything further, it's recording what one
+      specific supplier shipment actually contained."""
+
+    def __init__(self, purchase_invoice_repo: PurchaseInvoiceRepository, product_repo: ProductRepository,
+                 lead_repo: LeadRepositoryBase, purchase_order_repo: PurchaseOrderRepository,
+                 version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
+                 supplier_repo: Optional[SupplierRepositoryBase] = None,
+                 upload_folder: str = "", allowed_extensions: set = frozenset()):
+        self.purchase_invoice_repo = purchase_invoice_repo
+        self.product_repo = product_repo
+        self.lead_repo = lead_repo
+        self.purchase_order_repo = purchase_order_repo
+        self.version_service = version_service
+        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ..., 'Exporter': ...} for advance_client_status
+        self.supplier_repo = supplier_repo  # for validating seller_supplier_id belongs to this company
+        self.upload_folder = upload_folder
+        self.allowed_extensions = allowed_extensions
+
+    # ---- reads --------------------------------------------------
+    def get(self, purchase_invoice_id: int, company_id: int) -> PurchaseInvoice:
+        purchase_invoice = self.purchase_invoice_repo.get_by_id(purchase_invoice_id)
+        if not purchase_invoice or purchase_invoice.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's purchase invoice exists.
+            raise NotFoundError(f"Purchase invoice #{purchase_invoice_id} not found.")
+        return purchase_invoice
+
+    def list_all(self, company_id: int) -> List[PurchaseInvoice]:
+        return self.purchase_invoice_repo.list_all(company_id)
+
+    def list_for_purchase_order(self, purchase_order_id: Optional[int], company_id: int) -> List[PurchaseInvoice]:
+        if not purchase_order_id:
+            return []
+        return [pinv for pinv in self.purchase_invoice_repo.list_for_purchase_order(purchase_order_id)
+                if pinv.company_id == company_id]
+
+    def count_map_by_purchase_order(self, company_id: int) -> dict:
+        return self.purchase_invoice_repo.count_map_by_purchase_order(company_id)
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, purchase_invoice: PurchaseInvoice, current_user: User):
+        if current_user.is_admin:
+            return
+        if purchase_invoice.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage purchase invoices you created yourself.")
+
+    # ---- number generation --------------------------------------------------
+    def _generate_number(self, company_id: int, invoice_date: str) -> str:
+        """PINV{YYYYMMDD}{seq} where seq is that day's purchase invoice count
+        + 1 for this company - our own internal identifier, distinct from
+        the supplier's own invoice_number typed in on the form."""
+        date_part = invoice_date.replace("-", "")
+        prefix = f"PINV{date_part}"
+        seq = self.purchase_invoice_repo.count_for_date_prefix(company_id, prefix) + 1
+        return f"{prefix}{seq:03d}"
+
+    # ---- prefill from an existing purchase order --------------------------------------------------
+    def build_prefill_from_purchase_order(self, purchase_order: PurchaseOrder) -> dict:
+        """Caller must have already loaded `purchase_order` via
+        PurchaseOrderService.get(purchase_order_id, current_user.company_id)
+        so cross-company ownership is already verified. Seller details and
+        product lines carry over in full - each supplier's Purchase Invoice
+        covers exactly the one PO it's raised against, so there's no
+        "outstanding remainder" to cut down to (unlike a PO built from a
+        proforma invoice, which can be one of several splitting the same
+        order). The PO's own computed tax amounts (igst_amount/cgst_amount/
+        sgst_amount - derived from its stored percentages, see
+        PurchaseOrder.igst_amount etc.) are copied in as a starting point
+        too, since the supplier's actual invoice should normally charge the
+        same tax the PO was placed under - the user can still adjust them
+        here to match what the supplier's invoice actually says."""
+        fields = {
+            "purchase_order_id": purchase_order.id,
+            "lead_id": purchase_order.lead_id,
+            "seller_supplier_id": purchase_order.seller_supplier_id,
+            "seller_name": purchase_order.seller_name,
+            "seller_address": purchase_order.seller_address,
+            "seller_pan": purchase_order.seller_pan,
+            "seller_gstin": purchase_order.seller_gstin,
+            "seller_ref_no": purchase_order.seller_ref_no,
+            "port_of_loading": purchase_order.port_of_loading,
+            "port_of_discharge": purchase_order.port_of_discharge,
+            "container_details": purchase_order.container_details,
+            "igst_amount": purchase_order.igst_amount,
+            "cgst_amount": purchase_order.cgst_amount,
+            "sgst_amount": purchase_order.sgst_amount,
+        }
+        items = [self._raw_item(item) for item in purchase_order.items]
+        return {"fields": fields, "items": items}
+
+    @staticmethod
+    def _raw_item(item: PurchaseOrderItem) -> dict:
+        return {
+            "product_id": item.product_id, "product_name": item.product_name,
+            "hsn_code": item.hsn_code, "quantity_boxes": item.quantity_boxes,
+            "quantity_value": item.quantity_value, "unit": item.unit,
+            "price_inr": item.price_inr, "price_per": item.price_per,
+        }
+
+    # ---- validation --------------------------------------------------
+    def _build_items(self, company_id: int, raw_items: list) -> List[PurchaseInvoiceItem]:
+        items = []
+        for i, raw in enumerate(raw_items, start=1):
+            product_name = (raw.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            try:
+                quantity_value = float(raw.get("quantity_value") or 0)
+                price_inr = float(raw.get("price_inr") or 0)
+                quantity_boxes = float(raw["quantity_boxes"]) if raw.get("quantity_boxes") else None
+            except ValueError:
+                raise ValidationError(f"Row {i}: quantity and price must be numbers.")
+            product_id = int(raw["product_id"]) if raw.get("product_id") else None
+
+            if product_id:
+                product = self.product_repo.get_by_id(product_id)
+                if not product or product.company_id != company_id:
+                    product_id = None
+
+            if quantity_value <= 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
+            if price_inr < 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): price can't be negative.")
+
+            unit = (raw.get("unit") or "SQM").strip() or "SQM"
+            price_per = "BOX" if (raw.get("price_per") or "BOX").strip().upper() == "BOX" else unit
+            if price_per == "BOX":
+                if not quantity_boxes:
+                    raise ValidationError(f"Row {i} ('{product_name}'): boxes is compulsory when the price is per box.")
+                total_inr = round(quantity_boxes * price_inr, 2)
+            else:
+                total_inr = round(quantity_value * price_inr, 2)
+
+            items.append(PurchaseInvoiceItem(
+                id=None, purchase_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
+                hsn_code=(raw.get("hsn_code") or "").strip() or None,
+                quantity_boxes=quantity_boxes, quantity_value=quantity_value, unit=unit,
+                price_inr=price_inr, price_per=price_per, total_inr=total_inr,
+            ))
+        if not items:
+            raise ValidationError("At least one product line is compulsory.")
+        return items
+
+    @staticmethod
+    def _parse_amount(fields: dict, key: str, label: str) -> float:
+        raw = fields.get(key)
+        if raw in (None, ""):
+            return 0.0
+        try:
+            return float(raw)
+        except ValueError:
+            raise ValidationError(f"{label} must be a number.")
+
+    @staticmethod
+    def _clean_vehicle_numbers(raw_vehicle_numbers: list) -> List[str]:
+        return [v.strip() for v in (raw_vehicle_numbers or []) if v and v.strip()]
+
+    def _build_header(self, current_user: User, fields: dict, items: List[PurchaseInvoiceItem]) -> PurchaseInvoice:
+        seller_name = (fields.get("seller_name") or "").strip()
+        if not seller_name:
+            raise ValidationError("Seller name is compulsory.")
+        invoice_number = (fields.get("invoice_number") or "").strip()
+        if not invoice_number:
+            raise ValidationError("Invoice number is compulsory.")
+        invoice_date = (fields.get("invoice_date") or "").strip()
+        if not invoice_date:
+            raise ValidationError("Invoice date is compulsory.")
+        epcg_number = (fields.get("epcg_number") or "").strip() or None
+        epcg_date = (fields.get("epcg_date") or "").strip() or None
+
+        purchase_order_id = int(fields["purchase_order_id"]) if fields.get("purchase_order_id") else None
+        if purchase_order_id is not None:
+            # Only trust a purchase order from this same company - a crafted
+            # id could otherwise attach this invoice to another company's PO.
+            purchase_order = self.purchase_order_repo.get_by_id(purchase_order_id)
+            if not purchase_order or purchase_order.company_id != current_user.company_id:
+                purchase_order_id = None
+
+        lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
+        if lead_id is not None:
+            lead = self.lead_repo.get_by_id(lead_id)
+            if not lead or lead.company_id != current_user.company_id:
+                lead_id = None
+
+        seller_supplier_id = int(fields["seller_supplier_id"]) if fields.get("seller_supplier_id") else None
+        if seller_supplier_id is not None and self.supplier_repo is not None:
+            supplier = self.supplier_repo.get_by_id(seller_supplier_id)
+            if not supplier or supplier.company_id != current_user.company_id:
+                seller_supplier_id = None
+
+        return PurchaseInvoice(
+            id=None, company_id=current_user.company_id, purchase_invoice_number="",
+            invoice_number=invoice_number, invoice_date=invoice_date,
+            seller_name=seller_name, created_by=current_user.id,
+            purchase_order_id=purchase_order_id, lead_id=lead_id, seller_supplier_id=seller_supplier_id,
+            seller_address=(fields.get("seller_address") or "").strip() or None,
+            seller_pan=(fields.get("seller_pan") or "").strip() or None,
+            seller_gstin=(fields.get("seller_gstin") or "").strip() or None,
+            seller_ref_no=(fields.get("seller_ref_no") or "").strip() or None,
+            port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
+            port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
+            container_details=(fields.get("container_details") or "").strip() or None,
+            transporter_name=(fields.get("transporter_name") or "").strip() or None,
+            epcg_number=epcg_number, epcg_date=epcg_date,
+            discount_amount=self._parse_amount(fields, "discount_amount", "Discount"),
+            insurance_other=self._parse_amount(fields, "insurance_other", "Insurance and other"),
+            freight=self._parse_amount(fields, "freight", "Freight"),
+            igst_amount=self._parse_amount(fields, "igst_amount", "IGST"),
+            cgst_amount=self._parse_amount(fields, "cgst_amount", "CGST"),
+            sgst_amount=self._parse_amount(fields, "sgst_amount", "SGST"),
+            round_off=self._parse_amount(fields, "round_off", "Round off"),
+            remarks=(fields.get("remarks") or "").strip() or None,
+            items=items,
+        )
+
+    # ---- supplier PDF storage --------------------------------------------------
+    def _save_pdf(self, file_storage) -> Optional[str]:
+        """Saves the supplier's own Purchase Invoice PDF under the purchase
+        invoice upload folder with a collision-proof name and returns the
+        path relative to static/ (same pattern as ProductService._save_image,
+        restricted to PDFs since that's the only thing a supplier sends)."""
+        if not file_storage or not file_storage.filename:
+            return None
+        filename = secure_filename(file_storage.filename)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in self.allowed_extensions:
+            raise ValidationError(f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(self.allowed_extensions))}.")
+        os.makedirs(self.upload_folder, exist_ok=True)
+        stored_name = f"{uuid.uuid4().hex}_{filename}"
+        file_storage.save(os.path.join(self.upload_folder, stored_name))
+        return f"uploads/purchase_invoices/{stored_name}"
+
+    def _delete_pdf_file(self, relative_path: Optional[str]) -> None:
+        if not relative_path:
+            return
+        full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, raw_items: list, raw_vehicle_numbers: list,
+               pdf_file=None) -> PurchaseInvoice:
+        items = self._build_items(current_user.company_id, raw_items)
+        purchase_invoice = self._build_header(current_user, fields, items)
+        purchase_invoice.vehicle_numbers = self._clean_vehicle_numbers(raw_vehicle_numbers)
+        purchase_invoice.supplier_pdf_path = self._save_pdf(pdf_file)
+        purchase_invoice.purchase_invoice_number = self._generate_number(current_user.company_id, purchase_invoice.invoice_date)
+        created = self.purchase_invoice_repo.create(purchase_invoice)
+        self.version_service.record("purchase_invoice", created, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, created.lead_id, "purchase_invoice")
+        return created
+
+    def update(self, current_user: User, purchase_invoice_id: int, fields: dict, raw_items: list,
+               raw_vehicle_numbers: list, pdf_file=None, remove_pdf: bool = False) -> PurchaseInvoice:
+        existing = self.get(purchase_invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        items = self._build_items(current_user.company_id, raw_items)
+        purchase_invoice = self._build_header(current_user, fields, items)
+        purchase_invoice.vehicle_numbers = self._clean_vehicle_numbers(raw_vehicle_numbers)
+        if pdf_file and pdf_file.filename:
+            purchase_invoice.supplier_pdf_path = self._save_pdf(pdf_file)
+            self._delete_pdf_file(existing.supplier_pdf_path)
+        elif remove_pdf:
+            self._delete_pdf_file(existing.supplier_pdf_path)
+            purchase_invoice.supplier_pdf_path = None
+        else:
+            purchase_invoice.supplier_pdf_path = existing.supplier_pdf_path
+        self.purchase_invoice_repo.update(purchase_invoice_id, purchase_invoice)
+        updated = self.get(purchase_invoice_id, current_user.company_id)
+        self.version_service.record("purchase_invoice", updated, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, updated.lead_id, "purchase_invoice")
+        return updated
+
+    def delete(self, current_user: User, purchase_invoice_id: int) -> None:
+        existing = self.get(purchase_invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self._delete_pdf_file(existing.supplier_pdf_path)
+        self.purchase_invoice_repo.delete(purchase_invoice_id)
+
+
+# ============================================================
+# EXPORT INVOICE SERVICE
+# ============================================================
+class ExportInvoiceService:
+    """The customer/customs-facing Export Invoice at the buyer end of the
+    pipeline. Mirrors ProformaInvoiceService, with the additions that make
+    this document what it is:
+
+    - It references MANY proforma invoices (many-to-many). Goods are
+      prefilled from those PIs (build_prefill_from_proformas) then edited.
+    - Tax is computed per-product: each line snapshots its product's IGST %,
+      the amounts are summed and shown as IGST or CGST/SGST per tax_mode
+      (see ExportInvoice.tax_total_inr / igst_amount_inr / ...).
+    - The exchange rate is typed in manually; once a value is set only an
+      admin may change it (enforced in update()).
+    - EPCG number/date, the "export under" text and the supplier
+      GSTIN/invoice-no purchase-detail rows are imported (when present) by
+      walking each linked PI -> its purchase orders -> their purchase
+      invoices; the exemption rows come from POs whose purchase_type is
+      'exemption'.
+    - An optional Shipping Bill PDF is stored the same way a Purchase
+      Invoice stores the supplier's PDF (_save_pdf/_delete_pdf_file).
+    - No draft/confirmed lock (always editable), but admin version history is
+      kept via DocumentVersionService."""
+
+    def __init__(self, export_invoice_repo: ExportInvoiceRepository, product_repo: ProductRepository,
+                 lead_repo: LeadRepositoryBase, proforma_invoice_repo: ProformaInvoiceRepository,
+                 purchase_order_repo: PurchaseOrderRepository, purchase_invoice_repo: PurchaseInvoiceRepository,
+                 company_repo: CompanyRepository, version_service: "DocumentVersionService",
+                 party_repos: Optional[dict] = None, upload_folder: str = "",
+                 allowed_extensions: set = frozenset()):
+        self.export_invoice_repo = export_invoice_repo
+        self.product_repo = product_repo
+        self.lead_repo = lead_repo
+        self.proforma_invoice_repo = proforma_invoice_repo
+        self.purchase_order_repo = purchase_order_repo
+        self.purchase_invoice_repo = purchase_invoice_repo
+        self.company_repo = company_repo
+        self.version_service = version_service
+        self.party_repos = party_repos
+        self.upload_folder = upload_folder
+        self.allowed_extensions = allowed_extensions
+
+    # ---- reads --------------------------------------------------
+    def get(self, invoice_id: int, company_id: int) -> ExportInvoice:
+        invoice = self.export_invoice_repo.get_by_id(invoice_id)
+        if not invoice or invoice.company_id != company_id:
+            raise NotFoundError(f"Export invoice #{invoice_id} not found.")
+        return invoice
+
+    def list_all(self, company_id: int) -> List[ExportInvoice]:
+        return self.export_invoice_repo.list_all(company_id)
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, invoice: ExportInvoice, current_user: User):
+        if current_user.is_admin:
+            return
+        if invoice.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage export invoices you created yourself.")
+
+    # ---- number generation --------------------------------------------------
+    def _generate_number(self, company_id: int, invoice_date: str) -> str:
+        """EXPINV{YYYYMMDD}{seq} - that day's export invoice count + 1 for
+        this company, zero-padded to 3 digits."""
+        date_part = invoice_date.replace("-", "")
+        prefix = f"EXPINV{date_part}"
+        seq = self.export_invoice_repo.count_for_date_prefix(company_id, prefix) + 1
+        return f"{prefix}{seq:03d}"
+
+    # ---- prefill from selected proforma invoices --------------------------------------------------
+    def _load_proformas(self, proforma_ids: list, company_id: int) -> List[ProformaInvoice]:
+        """Load only the proforma invoices that belong to this company - a
+        crafted id in the request can never pull another company's PI in."""
+        result = []
+        for pid in dict.fromkeys(proforma_ids or []):
+            try:
+                pi = self.proforma_invoice_repo.get_by_id(int(pid))
+            except (TypeError, ValueError):
+                continue
+            if pi and pi.company_id == company_id:
+                result.append(pi)
+        return result
+
+    def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
+        """Merge the selected PIs' goods lines and import EPCG / export-under
+        / supplier-exemption rows by walking each PI -> its purchase orders ->
+        their purchase invoices. Returns a dict the form/route consumes."""
+        proformas = self._load_proformas(proforma_ids, company_id)
+        first = proformas[0] if proformas else None
+
+        # Goods: every line from every selected PI, in selection order.
+        items = []
+        for pi in proformas:
+            for it in pi.items:
+                items.append({
+                    "product_id": it.product_id, "product_name": it.product_name,
+                    "hsn_code": it.hsn_code, "surface": it.surface, "pallets": it.pallets,
+                    "quantity_boxes": it.quantity_boxes, "quantity_value": it.quantity_value,
+                    "unit": it.unit, "price_usd": it.price_usd,
+                    "igst_percent": self._product_igst_percent(it.product_id, company_id),
+                })
+
+        # Buyer orders: the PIs under one export invoice normally share the
+        # SAME buyer order number, so collapse identical order numbers into a
+        # single row (keyed case-insensitively) rather than repeating it once
+        # per PI - each distinct order keeps its first PI as the link.
+        buyer_orders = []
+        seen_orders = set()
+        for pi in proformas:
+            if not pi.buyer_order_no:
+                continue
+            key = pi.buyer_order_no.strip().lower()
+            if key in seen_orders:
+                continue
+            seen_orders.add(key)
+            buyer_orders.append({"order_no": pi.buyer_order_no, "order_date": pi.invoice_date,
+                                 "proforma_invoice_id": pi.id})
+
+        # Walk the chain for EPCG / export-under / exemption purchase details.
+        epcg_number = epcg_date = None
+        purchase_details = []
+        seen_pd = set()
+        for pi in proformas:
+            for po in self.purchase_order_repo.list_for_proforma(pi.id):
+                if po.company_id != company_id:
+                    continue
+                pinvs = [p for p in self.purchase_invoice_repo.list_for_purchase_order(po.id)
+                         if p.company_id == company_id]
+                for pinv in pinvs:
+                    if not epcg_number and pinv.epcg_number:
+                        epcg_number, epcg_date = pinv.epcg_number, pinv.epcg_date
+                # Exemption purchases contribute a supplier GSTIN + invoice-no row.
+                if getattr(po, "purchase_type", "") == "exemption":
+                    if pinvs:
+                        for pinv in pinvs:
+                            key = ((pinv.seller_gstin or po.seller_gstin or ""), (pinv.invoice_number or ""))
+                            if key not in seen_pd:
+                                seen_pd.add(key)
+                                purchase_details.append({
+                                    "supplier_gstin": pinv.seller_gstin or po.seller_gstin,
+                                    "supplier_invoice_no": pinv.invoice_number,
+                                })
+                    elif po.seller_gstin:
+                        key = (po.seller_gstin, "")
+                        if key not in seen_pd:
+                            seen_pd.add(key)
+                            purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None})
+
+        # "Export under" default text: the company's primary LUT line, which
+        # the sample prints as "SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF
+        # IGST (LUT NO : ...)". Editable afterwards.
+        export_under = None
+        company = self.company_repo.get(company_id)
+        if company and company.lut_details:
+            primary_lut = next((l for l in company.lut_details if l.get("is_primary")), company.lut_details[0])
+            lut_no = primary_lut.get("lut_number")
+            if lut_no:
+                export_under = f"SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST (LUT NO : {lut_no})"
+
+        fields = {
+            "proforma_invoice_ids": [pi.id for pi in proformas],
+            "lead_id": first.lead_id if first else None,
+            "consignee_name": first.consignee_name if first else None,
+            "consignee_address": first.consignee_address if first else None,
+            "notify_name": first.notify_name if first else None,
+            "notify_address": first.notify_address if first else None,
+            "country_of_origin": first.country_of_origin if first else "INDIA",
+            "country_of_destination": first.country_of_destination if first else None,
+            "port_of_loading": first.port_of_loading if first else None,
+            "port_of_discharge": first.port_of_discharge if first else None,
+            "final_destination": first.final_destination if first else None,
+            "payment_terms": first.payment_terms if first else None,
+            "bank_name": first.bank_name if first else None,
+            "bank_account_number": first.bank_account_number if first else None,
+            "bank_ifsc_code": first.bank_ifsc_code if first else None,
+            "bank_swift_code": first.bank_swift_code if first else None,
+            "bank_branch": first.bank_branch if first else None,
+            "bank_address": first.bank_address if first else None,
+            "export_under": export_under,
+            "epcg_number": epcg_number,
+            "epcg_date": epcg_date,
+            "self_sealing_declaration": company.self_sealing_declaration if company else None,
+        }
+        return {"fields": fields, "items": items, "buyer_orders": buyer_orders,
+                "purchase_details": purchase_details}
+
+    def _product_igst_percent(self, product_id, company_id: int) -> float:
+        if not product_id:
+            return 0.0
+        product = self.product_repo.get_by_id(int(product_id))
+        if not product or product.company_id != company_id:
+            return 0.0
+        return product.igst_percent or 0.0
+
+    # ---- validation --------------------------------------------------
+    def _build_items(self, company_id: int, raw_items: list) -> List[ExportInvoiceItem]:
+        items = []
+        for i, raw in enumerate(raw_items, start=1):
+            product_name = (raw.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            try:
+                quantity_value = float(raw.get("quantity_value") or 0)
+                price_usd = float(raw.get("price_usd") or 0)
+                quantity_boxes = float(raw["quantity_boxes"]) if raw.get("quantity_boxes") else None
+                pallets = float(raw["pallets"]) if raw.get("pallets") else None
+            except ValueError:
+                raise ValidationError(f"Row {i}: quantity, pallets and price must be numbers.")
+            product_id = int(raw["product_id"]) if raw.get("product_id") else None
+
+            # Snapshot the product's IGST % (and re-derive qty from boxes)
+            # only for a product that belongs to this same company.
+            igst_percent = 0.0
+            if product_id:
+                product = self.product_repo.get_by_id(product_id)
+                if not product or product.company_id != company_id:
+                    product_id = None
+                else:
+                    igst_percent = product.igst_percent or 0.0
+                    if quantity_boxes and product.alternate_quantity:
+                        try:
+                            quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                        except ValueError:
+                            pass
+
+            if quantity_value <= 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
+            if price_usd < 0:
+                raise ValidationError(f"Row {i} ('{product_name}'): price can't be negative.")
+            items.append(ExportInvoiceItem(
+                id=None, export_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
+                hsn_code=(raw.get("hsn_code") or "").strip() or None,
+                surface=(raw.get("surface") or "").strip() or None,
+                pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                unit=(raw.get("unit") or "SQM").strip() or "SQM",
+                price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
+                igst_percent=igst_percent,
+            ))
+        if not items:
+            raise ValidationError("At least one product line is compulsory.")
+        return items
+
+    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem]) -> ExportInvoice:
+        consignee_name = (fields.get("consignee_name") or "").strip()
+        if not consignee_name:
+            raise ValidationError("Consignee name is compulsory.")
+        invoice_date = (fields.get("invoice_date") or "").strip() or date.today().isoformat()
+
+        def _float(key, default=0):
+            raw = fields.get(key)
+            try:
+                return float(raw) if raw not in (None, "") else default
+            except ValueError:
+                raise ValidationError(f"'{key}' must be a number.")
+
+        lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
+        if lead_id is not None:
+            lead = self.lead_repo.get_by_id(lead_id)
+            if not lead or lead.company_id != current_user.company_id:
+                lead_id = None
+
+        tax_mode = fields.get("tax_mode") if fields.get("tax_mode") in dict(EXPORT_TAX_MODES) else EXPORT_TAX_MODE_IGST
+        loading_type = fields.get("loading_type") if fields.get("loading_type") in dict(EXPORT_LOADING_TYPES) else EXPORT_LOADING_SELF_SEALING
+
+        # Authorised Signatory: the form is just a dropdown of the company's
+        # contact-person NAMES; the designation printed beneath it is looked
+        # up here so it always matches the current Our-Company profile.
+        authorised_name = (fields.get("authorised_person_name") or "").strip() or None
+        authorised_desig = (fields.get("authorised_person_designation") or "").strip() or None
+        if authorised_name and not authorised_desig:
+            company = self.company_repo.get(current_user.company_id)
+            if company:
+                match = next((p for p in company.contact_persons
+                              if (p.get("name") or "").strip() == authorised_name), None)
+                if match:
+                    authorised_desig = (match.get("designation") or "").strip() or None
+
+        invoice = ExportInvoice(
+            id=None, company_id=current_user.company_id, export_invoice_number="", invoice_date=invoice_date,
+            consignee_name=consignee_name, created_by=current_user.id, lead_id=lead_id,
+            consignee_address=(fields.get("consignee_address") or "").strip() or None,
+            notify_name=(fields.get("notify_name") or "").strip() or None,
+            notify_address=(fields.get("notify_address") or "").strip() or None,
+            country_of_origin=(fields.get("country_of_origin") or "").strip() or "INDIA",
+            country_of_destination=(fields.get("country_of_destination") or "").strip() or None,
+            place_of_receipt=(fields.get("place_of_receipt") or "").strip() or None,
+            pre_carriage_by=(fields.get("pre_carriage_by") or "").strip() or None,
+            port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
+            port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
+            final_destination=(fields.get("final_destination") or "").strip() or None,
+            nature_of_contract=(fields.get("nature_of_contract") or "").strip() or None,
+            payment_terms=(fields.get("payment_terms") or "").strip() or None,
+            export_under=(fields.get("export_under") or "").strip() or None,
+            epcg_number=(fields.get("epcg_number") or "").strip() or None,
+            epcg_date=(fields.get("epcg_date") or "").strip() or None,
+            loading_type=loading_type, tax_mode=tax_mode,
+            exchange_rate=_float("exchange_rate", 0),
+            sea_freight=_float("sea_freight", 0),
+            insurance=_float("insurance", 0),
+            certification=_float("certification", 0),
+            other_charges=_float("other_charges", 0),
+            discount_amount=_float("discount_amount", 0),
+            fob_value=_float("fob_value", 0),
+            cnf_value=_float("cnf_value", 0),
+            bank_name=(fields.get("bank_name") or "").strip() or None,
+            bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
+            bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
+            bank_swift_code=(fields.get("bank_swift_code") or "").strip() or None,
+            bank_branch=(fields.get("bank_branch") or "").strip() or None,
+            bank_address=(fields.get("bank_address") or "").strip() or None,
+            authorised_person_name=authorised_name,
+            authorised_person_designation=authorised_desig,
+            self_sealing_declaration=(fields.get("self_sealing_declaration") or "").strip() or None,
+            examination_date=(fields.get("examination_date") or "").strip() or None,
+            location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
+            issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
+            issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
+            permission_no=(fields.get("permission_no") or "").strip() or None,
+            permission_date=(fields.get("permission_date") or "").strip() or None,
+            permission_expiry=(fields.get("permission_expiry") or "").strip() or None,
+            manufacturer_name=(fields.get("manufacturer_name") or "").strip() or None,
+            manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+            items=items,
+        )
+        invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
+        invoice.buyer_orders = self._clean_buyer_orders(fields.get("buyer_orders"), invoice.proforma_invoice_ids)
+        invoice.containers = self._clean_containers(fields.get("containers"))
+        invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
+        invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
+        return invoice
+
+    def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
+        result = []
+        for pid in dict.fromkeys(raw_ids or []):
+            try:
+                pi = self.proforma_invoice_repo.get_by_id(int(pid))
+            except (TypeError, ValueError):
+                continue
+            if pi and pi.company_id == company_id:
+                result.append(pi.id)
+        return result
+
+    @staticmethod
+    def _clean_buyer_orders(raw, valid_pi_ids: List[int]) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            order_no = (r.get("order_no") or "").strip()
+            order_date = (r.get("order_date") or "").strip()
+            if not order_no and not order_date:
+                continue
+            pi_id = r.get("proforma_invoice_id")
+            try:
+                pi_id = int(pi_id) if pi_id else None
+            except (TypeError, ValueError):
+                pi_id = None
+            if pi_id not in valid_pi_ids:
+                pi_id = None  # only link to a PI this export invoice actually references
+            rows.append({"order_no": order_no or None, "order_date": order_date or None,
+                         "proforma_invoice_id": pi_id})
+        return rows
+
+    @staticmethod
+    def _clean_containers(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            ctype = (r.get("container_type") or "").strip()
+            try:
+                count = int(r.get("container_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not ctype and count <= 0:
+                continue
+            rows.append({"container_type": ctype, "container_count": max(count, 0)})
+        return rows
+
+    @staticmethod
+    def _clean_container_details(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            values = {k: (r.get(k) or "").strip() or None
+                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
+            if any(values.values()):
+                rows.append(values)
+        return rows
+
+    @staticmethod
+    def _clean_purchase_details(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            gstin = (r.get("supplier_gstin") or "").strip()
+            inv_no = (r.get("supplier_invoice_no") or "").strip()
+            if not gstin and not inv_no:
+                continue
+            rows.append({"supplier_gstin": gstin or None, "supplier_invoice_no": inv_no or None})
+        return rows
+
+    # ---- shipping bill PDF storage --------------------------------------------------
+    def _save_pdf(self, file_storage) -> Optional[str]:
+        if not file_storage or not file_storage.filename:
+            return None
+        filename = secure_filename(file_storage.filename)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in self.allowed_extensions:
+            raise ValidationError(f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(self.allowed_extensions))}.")
+        os.makedirs(self.upload_folder, exist_ok=True)
+        stored_name = f"{uuid.uuid4().hex}_{filename}"
+        file_storage.save(os.path.join(self.upload_folder, stored_name))
+        return f"uploads/export_invoices/{stored_name}"
+
+    def _delete_pdf_file(self, relative_path: Optional[str]) -> None:
+        if not relative_path:
+            return
+        full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, raw_items: list, pdf_file=None) -> ExportInvoice:
+        items = self._build_items(current_user.company_id, raw_items)
+        invoice = self._build_header(current_user, fields, items)
+        # Examination date defaults to the creation date, not a later edit.
+        if not invoice.examination_date:
+            invoice.examination_date = invoice.invoice_date
+        invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
+        invoice.export_invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
+        created = self.export_invoice_repo.create(invoice)
+        self.version_service.record("export_invoice", created, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, created.lead_id, "export_invoice")
+        return created
+
+    def update(self, current_user: User, invoice_id: int, fields: dict, raw_items: list,
+               pdf_file=None, remove_pdf: bool = False) -> ExportInvoice:
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        items = self._build_items(current_user.company_id, raw_items)
+        invoice = self._build_header(current_user, fields, items)
+
+        # Exchange rate is set once by anyone; changing it later is admin-only.
+        # (The form disables the field for non-admins, so a normal edit
+        # doesn't even submit it - default back to the stored value then.)
+        if existing.exchange_rate and not current_user.is_admin:
+            if invoice.exchange_rate not in (0, existing.exchange_rate):
+                raise PermissionDeniedError("Only an admin can change the exchange rate once it has been set.")
+            invoice.exchange_rate = existing.exchange_rate
+
+        # Examination date is fixed at creation - keep the stored value.
+        invoice.examination_date = invoice.examination_date or existing.examination_date
+
+        if pdf_file and pdf_file.filename:
+            invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
+            self._delete_pdf_file(existing.shipping_bill_pdf_path)
+        elif remove_pdf:
+            self._delete_pdf_file(existing.shipping_bill_pdf_path)
+            invoice.shipping_bill_pdf_path = None
+        else:
+            invoice.shipping_bill_pdf_path = existing.shipping_bill_pdf_path
+
+        self.export_invoice_repo.update(invoice_id, invoice)
+        updated = self.get(invoice_id, current_user.company_id)
+        self.version_service.record("export_invoice", updated, current_user.id)
+        if self.party_repos:
+            advance_client_status(self.party_repos, self.lead_repo, updated.lead_id, "export_invoice")
+        return updated
+
+    def delete(self, current_user: User, invoice_id: int) -> None:
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self._delete_pdf_file(existing.shipping_bill_pdf_path)
+        self.export_invoice_repo.delete(invoice_id)
 
 
 # ============================================================
@@ -2142,7 +3211,9 @@ class PackingListService:
                  design_repo: DesignRepository, lead_repo: LeadRepositoryBase,
                  proforma_invoice_repo: ProformaInvoiceRepository, version_service: "DocumentVersionService",
                  quotation_repo: Optional[QuotationRepository] = None,
-                 purchase_order_repo: Optional[PurchaseOrderRepository] = None):
+                 purchase_order_repo: Optional[PurchaseOrderRepository] = None,
+                 fulfilment_service: Optional["ProformaFulfilmentService"] = None,
+                 purchase_invoice_repo: Optional[PurchaseInvoiceRepository] = None):
         self.packing_list_repo = packing_list_repo
         self.product_repo = product_repo
         self.design_repo = design_repo
@@ -2151,6 +3222,12 @@ class PackingListService:
         self.version_service = version_service
         self.quotation_repo = quotation_repo
         self.purchase_order_repo = purchase_order_repo
+        # Optional: when present, a PO's packing list is prefilled with only
+        # the designs its proforma invoice still needs ordered.
+        self.fulfilment_service = fulfilment_service
+        # Optional: lets a Purchase Invoice's own packing list validate its
+        # purchase_invoice_id and import its linked PO's PL wholesale.
+        self.purchase_invoice_repo = purchase_invoice_repo
 
     # ---- reads --------------------------------------------------
     def get(self, packing_list_id: int, company_id: int) -> PackingList:
@@ -2195,6 +3272,12 @@ class PackingListService:
         return [pl for pl in self.packing_list_repo.list_for_purchase_order(purchase_order_id)
                 if pl.company_id == company_id]
 
+    def list_for_purchase_invoice(self, purchase_invoice_id: int, company_id: int) -> List[PackingList]:
+        """Every packing list generated from one Purchase Invoice (that
+        invoice's own PL), company-scoped - same as list_for_purchase_order."""
+        return [pl for pl in self.packing_list_repo.list_for_purchase_invoice(purchase_invoice_id)
+                if pl.company_id == company_id]
+
     # ---- permission --------------------------------------------------
     def _assert_can_modify(self, packing_list: PackingList, current_user: User):
         if current_user.is_admin:
@@ -2211,15 +3294,81 @@ class PackingListService:
         seq = self.packing_list_repo.count_for_date_prefix(company_id, prefix) + 1
         return f"{prefix}{seq:03d}"
 
+    # ---- importing an ancestor document's packing list --------------------------------------------------
+    def _newest_packing_list(self, packing_lists: list, company_id: int) -> Optional[PackingList]:
+        """Newest company-scoped packing list from a repo list (which orders
+        by id), or None."""
+        scoped = [pl for pl in packing_lists if pl.company_id == company_id]
+        return scoped[-1] if scoped else None
+
+    def _ancestor_packing_list(self, company_id: int, *, proforma_invoice_id: Optional[int] = None,
+                               quotation_id: Optional[int] = None) -> Optional[PackingList]:
+        """Newest packing list found on an ancestor document, walking up the
+        link chain Purchase Order -> Proforma Invoice -> Quotation. A nearer
+        ancestor wins: a PL already generated from the proforma invoice is
+        preferred over one from the quotation the invoice itself came from.
+        Returns the PackingList (items loaded) or None so the goods on the
+        latest document's PL start from whatever was last shipped/packed
+        upstream instead of an empty sheet."""
+        if proforma_invoice_id:
+            found = self._newest_packing_list(
+                self.packing_list_repo.list_for_proforma(proforma_invoice_id), company_id)
+            if found:
+                return found
+            # No PL on the proforma invoice itself - fall through to the
+            # quotation it was generated from, if any.
+            invoice = self.proforma_invoice_repo.get_by_id(proforma_invoice_id)
+            if invoice and invoice.company_id == company_id and invoice.quotation_id:
+                quotation_id = invoice.quotation_id
+        if quotation_id and self.quotation_repo is not None:
+            return self._newest_packing_list(
+                self.packing_list_repo.list_for_quotation(quotation_id), company_id)
+        return None
+
+    def _items_from_packing_list(self, source_pl: PackingList) -> list:
+        """Full design-level rows copied from an existing packing list, so the
+        new PL starts pre-filled with the same designs, boxes, pallets, pcs,
+        quantities and weights."""
+        return [
+            {
+                "product_id": item.product_id, "product_name": item.product_name,
+                "design_id": item.design_id, "design_name": item.design_name or "",
+                "hsn_code": item.hsn_code, "box_per_pallet": item.box_per_pallet or "",
+                "pallets": item.pallets or "",
+                "quantity_boxes": item.quantity_boxes or "", "pcs": item.pcs or "",
+                "quantity_value": item.quantity_value or "", "unit": item.unit,
+                "net_weight_kg": item.net_weight_kg or "", "gross_weight_kg": item.gross_weight_kg or "",
+            }
+            for item in source_pl.items
+        ]
+
+    def _placeholder_items(self, source_items: list) -> list:
+        """One empty product block per source line (header only, marked
+        is_placeholder so the form doesn't render a blank design row) - used
+        when no upstream packing list exists to import, so the user picks
+        designs and per-design box counts themselves."""
+        return [
+            {
+                "product_id": item.product_id, "product_name": item.product_name,
+                "design_id": None, "design_name": "",
+                "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
+                "quantity_boxes": "", "pcs": "",
+                "quantity_value": "", "unit": item.unit,
+                "net_weight_kg": "", "gross_weight_kg": "",
+                "is_placeholder": True,
+            }
+            for item in source_items
+        ]
+
     # ---- prefill from an existing proforma invoice --------------------------------------------------
     def build_prefill_from_proforma(self, invoice: ProformaInvoice) -> dict:
         """Caller must have already loaded `invoice` via
         ProformaInvoiceService.get(invoice_id, current_user.company_id) so
-        cross-company ownership is already verified. Each proforma product
-        line becomes one empty product block (header only, marked
-        is_placeholder so the form doesn't render a blank design row) - the
-        user picks designs and fills in per-design box counts themselves,
-        with as many design rows per product as they need."""
+        cross-company ownership is already verified. When the invoice was
+        generated from a quotation that already has a packing list, that PL's
+        full design-level rows are imported as the starting point; otherwise
+        each proforma product line becomes one empty product block (marked
+        is_placeholder) and the user fills in designs and box counts."""
         fields = {
             "proforma_invoice_id": invoice.id,
             "lead_id": invoice.lead_id,
@@ -2228,18 +3377,12 @@ class PackingListService:
             "other_reference": invoice.other_reference,
             "remarks": "MADE IN INDIA",
         }
-        items = [
-            {
-                "product_id": item.product_id, "product_name": item.product_name,
-                "design_id": None, "design_name": "",
-                "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
-                "quantity_boxes": "", "pcs": "",
-                "quantity_value": "", "unit": item.unit,
-                "net_weight_kg": "", "gross_weight_kg": "",
-                "is_placeholder": True,
-            }
-            for item in invoice.items
-        ]
+        source_pl = self._ancestor_packing_list(invoice.company_id, quotation_id=invoice.quotation_id)
+        if source_pl:
+            items = self._items_from_packing_list(source_pl)
+            fields["remarks"] = source_pl.remarks or fields["remarks"]
+        else:
+            items = self._placeholder_items(invoice.items)
         return {"fields": fields, "items": items}
 
     # ---- prefill from an existing quotation (skips the PI step) --------------------------------------------------
@@ -2248,76 +3391,142 @@ class PackingListService:
         from a Quotation - lets a packing list be generated without an
         intermediate proforma invoice. Caller must have already loaded
         `quotation` via QuotationService.get(quotation_id, current_user.company_id)
-        so cross-company ownership is already verified."""
+        so cross-company ownership is already verified. A quotation is the top
+        of the document chain, so there is no upstream PL to import - each
+        product line becomes one empty product block."""
         fields = {
             "quotation_id": quotation.id,
             "lead_id": quotation.lead_id,
             "buyer_order_no": quotation.buyer_reference_no,
             "remarks": "MADE IN INDIA",
         }
-        items = [
-            {
-                "product_id": item.product_id, "product_name": item.product_name,
-                "design_id": None, "design_name": "",
-                "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
-                "quantity_boxes": "", "pcs": "",
-                "quantity_value": "", "unit": item.unit,
-                "net_weight_kg": "", "gross_weight_kg": "",
-                "is_placeholder": True,
-            }
-            for item in quotation.items
-        ]
+        items = self._placeholder_items(quotation.items)
         return {"fields": fields, "items": items}
 
     # ---- prefill from an existing purchase order --------------------------------------------------
     def build_prefill_from_purchase_order(self, purchase_order: PurchaseOrder) -> dict:
         """The PO's own packing list. Caller must have already loaded
         `purchase_order` via PurchaseOrderService.get(...) so cross-company
-        ownership is already verified. When the PO was generated from a
-        proforma invoice that already has a packing list, that PL's full
-        design-level rows are imported as the starting point (the goods
-        being ordered are the goods being shipped); otherwise each PO
-        product line becomes one empty product block, same as
-        build_prefill_from_proforma."""
+        ownership is already verified. When an ancestor document already has a
+        packing list - the proforma invoice the PO came from, or failing that
+        the quotation that invoice came from - that PL's full design-level
+        rows are imported as the starting point (the goods being ordered are
+        the goods being shipped); otherwise each PO product line becomes one
+        empty product block, same as build_prefill_from_proforma.
+
+        When the PO came from a proforma invoice that has a packing list of
+        its own, the imported rows are cut down to what that invoice still
+        needs ordered (_remaining_designs below) - a design already covered
+        in full by an earlier PO for the same invoice is dropped, so the
+        second and third PO don't start out re-ordering the first one's
+        goods."""
         fields = {
             "purchase_order_id": purchase_order.id,
             "lead_id": purchase_order.lead_id,
             "buyer_order_no": purchase_order.seller_ref_no,
             "remarks": "MADE IN INDIA",
         }
-        source_pl = None
-        if purchase_order.proforma_invoice_id:
-            existing = self.packing_list_repo.list_for_proforma(purchase_order.proforma_invoice_id)
-            existing = [pl for pl in existing if pl.company_id == purchase_order.company_id]
-            source_pl = existing[-1] if existing else None  # newest (list_for_proforma orders by id)
+        source_pl = self._ancestor_packing_list(
+            purchase_order.company_id, proforma_invoice_id=purchase_order.proforma_invoice_id)
         if source_pl:
-            items = [
-                {
-                    "product_id": item.product_id, "product_name": item.product_name,
-                    "design_id": item.design_id, "design_name": item.design_name or "",
-                    "hsn_code": item.hsn_code, "box_per_pallet": item.box_per_pallet or "",
-                    "pallets": item.pallets or "",
-                    "quantity_boxes": item.quantity_boxes or "", "pcs": item.pcs or "",
-                    "quantity_value": item.quantity_value or "", "unit": item.unit,
-                    "net_weight_kg": item.net_weight_kg or "", "gross_weight_kg": item.gross_weight_kg or "",
-                }
-                for item in source_pl.items
-            ]
+            items = self._items_from_packing_list(source_pl)
+            items = self._remaining_designs(
+                purchase_order.company_id, purchase_order.proforma_invoice_id, items)
             fields["remarks"] = source_pl.remarks or fields["remarks"]
         else:
-            items = [
-                {
-                    "product_id": item.product_id, "product_name": item.product_name,
-                    "design_id": None, "design_name": "",
-                    "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
-                    "quantity_boxes": "", "pcs": "",
-                    "quantity_value": "", "unit": item.unit,
-                    "net_weight_kg": "", "gross_weight_kg": "",
-                    "is_placeholder": True,
-                }
-                for item in purchase_order.items
-            ]
+            items = self._placeholder_items(purchase_order.items)
         return {"fields": fields, "items": items}
+
+    # ---- prefill from an existing purchase invoice --------------------------------------------------
+    def build_prefill_from_purchase_invoice(self, purchase_invoice: PurchaseInvoice) -> dict:
+        """The Purchase Invoice's own packing list. Caller must have already
+        loaded `purchase_invoice` via PurchaseInvoiceService.get(...) so
+        cross-company ownership is already verified. Imports its linked
+        purchase order's own packing list WHOLESALE - unlike
+        build_prefill_from_purchase_order, there is no _remaining_designs
+        cut-down here, since a Purchase Invoice already corresponds to
+        exactly one PO's shipment, not a split still being placed across
+        several. Falls back to one empty product block per invoice line
+        (same as build_prefill_from_proforma) when the linked PO has no
+        packing list of its own yet."""
+        fields = {
+            "purchase_invoice_id": purchase_invoice.id,
+            "lead_id": purchase_invoice.lead_id,
+            "buyer_order_no": purchase_invoice.seller_ref_no,
+            "remarks": "MADE IN INDIA",
+        }
+        source_pl = None
+        if purchase_invoice.purchase_order_id:
+            source_pl = self._newest_packing_list(
+                self.packing_list_repo.list_for_purchase_order(purchase_invoice.purchase_order_id),
+                purchase_invoice.company_id,
+            )
+        if source_pl:
+            items = self._items_from_packing_list(source_pl)
+            fields["remarks"] = source_pl.remarks or fields["remarks"]
+        else:
+            items = self._placeholder_items(purchase_invoice.items)
+        return {"fields": fields, "items": items}
+
+    def _remaining_designs(self, company_id: int, proforma_invoice_id: Optional[int], items: list) -> list:
+        """Filters imported packing-list rows down to the designs the invoice
+        still needs placed, scaling each surviving row to its outstanding
+        share. A design that is half ordered comes through at half its
+        boxes/pallets/pcs/quantity/weights; one that is fully ordered is
+        dropped entirely.
+
+        No-ops (returns `items` untouched) when there is nothing to compare
+        against - no fulfilment service wired in, no invoice, or an invoice
+        whose own packing list doesn't exist yet - so importing from a
+        quotation's packing list still behaves exactly as before."""
+        if not self.fulfilment_service or not proforma_invoice_id:
+            return items
+        status = self.fulfilment_service.design_status(company_id, proforma_invoice_id)
+        if not status["designs"]:
+            return items
+        pending = {_design_key(design): design for design in status["pending"]}
+
+        remaining = []
+        for item in items:
+            if item.get("is_placeholder"):
+                remaining.append(item)
+                continue
+            design = pending.get(_design_key(item))
+            if not design:
+                continue  # already ordered in full on another purchase order
+            remaining.append(self._scaled_row(item, design))
+        return remaining
+
+    @staticmethod
+    def _scaled_row(item: dict, design: dict) -> dict:
+        """One imported row rescaled to the outstanding part of its design.
+        Every per-row figure moves together (they all describe the same
+        goods), so one ratio drives them all; a ratio of 1 - nothing ordered
+        yet, the usual case for the first PO - copies the row unchanged.
+        box_per_pallet is a packing spec, not a quantity, so it never
+        scales."""
+        if design["required_boxes"] > 0:
+            ratio = design["pending_boxes"] / design["required_boxes"]
+        elif design["required_quantity"] > 0:
+            ratio = design["pending_quantity"] / design["required_quantity"]
+        else:
+            ratio = 1
+        if ratio >= 1:
+            return item
+
+        def scale(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return value
+            return round(number * ratio, 2) or ""
+
+        scaled = dict(item)
+        for key in ("pallets", "quantity_boxes", "pcs", "quantity_value",
+                    "net_weight_kg", "gross_weight_kg"):
+            if scaled.get(key) not in (None, ""):
+                scaled[key] = scale(scaled[key])
+        return scaled
 
     # ---- validation --------------------------------------------------
     def _build_items(self, company_id: int, raw_items: list) -> List[PackingListItem]:
@@ -2372,15 +3581,12 @@ class PackingListService:
                 else:
                     raise ValidationError(f"Row {i} ('{product_name}'): boxes is compulsory.")
 
-            # Pallets only auto-derives from Boxes when it divides evenly -
-            # a partial last pallet (Boxes not a perfect multiple of
-            # Box-per-pallet) can't be expressed as a clean quotient, so in
-            # that case Pallets is left as whatever the user typed by hand.
+            # Pallets always auto-derives from Boxes / Box-per-pallet, kept
+            # to 2 decimals so a partial last pallet (e.g. 3.5) is expressed
+            # exactly rather than rounded to a whole pallet.
             # No pallet type selected ('loose') means zero pallets, full stop.
             if box_per_pallet:
-                exact_pallets = quantity_boxes / box_per_pallet
-                if abs(exact_pallets - round(exact_pallets)) < 1e-9:
-                    pallets = round(exact_pallets, 2)
+                pallets = round(quantity_boxes / box_per_pallet, 2)
             else:
                 pallets = None
 
@@ -2458,11 +3664,19 @@ class PackingListService:
             if not purchase_order or purchase_order.company_id != current_user.company_id:
                 purchase_order_id = None
 
+        purchase_invoice_id = int(fields["purchase_invoice_id"]) if fields.get("purchase_invoice_id") else None
+        if purchase_invoice_id is not None and self.purchase_invoice_repo is not None:
+            # Only trust a purchase invoice from this same company - same reasoning as lead_id above.
+            purchase_invoice = self.purchase_invoice_repo.get_by_id(purchase_invoice_id)
+            if not purchase_invoice or purchase_invoice.company_id != current_user.company_id:
+                purchase_invoice_id = None
+
         return PackingList(
             id=None, company_id=current_user.company_id, packing_list_number="",
             packing_list_date=packing_list_date, consignee_name="",
             created_by=current_user.id, lead_id=lead_id, proforma_invoice_id=proforma_invoice_id,
             quotation_id=quotation_id, purchase_order_id=purchase_order_id,
+            purchase_invoice_id=purchase_invoice_id,
             export_ref_no=(fields.get("export_ref_no") or "").strip() or None,
             buyer_order_no=(fields.get("buyer_order_no") or "").strip() or None,
             other_reference=(fields.get("other_reference") or "").strip() or None,
@@ -2498,6 +3712,291 @@ class PackingListService:
 
 
 # ============================================================
+# PROFORMA FULFILMENT SERVICE
+# ============================================================
+# A proforma invoice says WHAT is being sold; its packing list breaks that
+# down into the individual DESIGNS that actually have to be manufactured.
+# Those designs are then ordered from suppliers through purchase orders, and
+# each purchase order carries its own packing list saying which designs (and
+# how many boxes) that supplier is making. One invoice is normally split
+# across several suppliers, so "have we ordered everything yet?" means
+# comparing the invoice's packing list against the packing lists of every PO
+# linked to it. That comparison lives here.
+#
+# Rounding tolerance: box counts are stored as REALs, so a design that is
+# covered to within a thousandth of a box counts as fully placed rather than
+# leaving a 0.0000001 sliver pending forever.
+_DESIGN_QTY_TOLERANCE = 0.001
+
+
+def _normalize_name(value: Optional[str]) -> str:
+    """Case/whitespace-insensitive comparison key for a hand-typed name, so
+    'Ocean Blue' and 'OCEAN BLUE ' are treated as the same thing."""
+    return " ".join((value or "").split()).upper()
+
+
+def _design_key(row: dict) -> tuple:
+    """How a packing-list line on the invoice side is matched to a line on
+    the purchase-order side. Catalog ids win when both sides have them;
+    hand-typed rows fall back to their stored names."""
+    return (
+        row.get("product_id") or _normalize_name(row.get("product_name")),
+        row.get("design_id") or _normalize_name(row.get("design_name")),
+    )
+
+
+def _product_key(row: dict):
+    """Product-level analogue of _design_key, for the PO-creation-time
+    comparison - a purchase order's product lines have no design dimension,
+    so this is just the product half of _design_key's tuple."""
+    return row.get("product_id") or _normalize_name(row.get("product_name"))
+
+
+class ProformaFulfilmentService:
+    """Answers one question per proforma invoice: which designs from its
+    packing list have NOT yet been placed on a purchase order?
+
+    Reads only - it owns no writes and no state. Everything is derived live
+    from the packing lists on both sides, so placing a design on a PO (or
+    editing/deleting that PO) updates the answer immediately with nothing to
+    keep in sync."""
+
+    def __init__(self, proforma_invoice_repo: ProformaInvoiceRepository,
+                 packing_list_repo: PackingListRepository,
+                 purchase_order_repo: PurchaseOrderRepository):
+        self.proforma_invoice_repo = proforma_invoice_repo
+        self.packing_list_repo = packing_list_repo
+        self.purchase_order_repo = purchase_order_repo
+
+    # ---- the core comparison --------------------------------------------------
+    def design_status_map(self, company_id: int, proforma_invoice_ids: List[int]) -> dict:
+        """{proforma_invoice_id: {"designs": [...], "pending": [...],
+        "placed_count": int, "is_fully_placed": bool}} for many invoices in
+        two queries, so the reminder feed never goes N+1.
+
+        Each design row carries required/placed/pending in BOTH boxes and
+        alternate quantity. Boxes are the yardstick whenever the invoice side
+        states them (that is what a PO is placed in); rows packed without a
+        box count fall back to the quantity column.
+        """
+        ids = [int(i) for i in proforma_invoice_ids if i]
+        if not ids:
+            return {}
+        required_rows = self.packing_list_repo.design_totals_for_proforma(company_id, ids)
+        required_rows += self._quotation_ancestor_fallback_rows(company_id, ids, required_rows)
+        placed_rows = self.packing_list_repo.design_totals_for_linked_purchase_orders(company_id, ids)
+
+        placed_index = {}
+        for row in placed_rows:
+            placed_index[(row["pi_id"], _design_key(row))] = row
+
+        result = {pi_id: {"designs": [], "pending": [], "over_ordered": [],
+                          "placed_count": 0, "is_fully_placed": True}
+                  for pi_id in ids}
+        for row in required_rows:
+            pi_id = row["pi_id"]
+            placed = placed_index.get((pi_id, _design_key(row)))
+            required_boxes = row["boxes"] or 0
+            required_quantity = row["quantity"] or 0
+            placed_boxes = (placed["boxes"] if placed else 0) or 0
+            placed_quantity = (placed["quantity"] if placed else 0) or 0
+
+            # Which column decides "done" - boxes when the invoice's packing
+            # list stated them, otherwise the alternate quantity.
+            if required_boxes > 0:
+                outstanding = required_boxes - placed_boxes
+            else:
+                outstanding = required_quantity - placed_quantity
+            is_placed = outstanding <= _DESIGN_QTY_TOLERANCE
+            # A design isn't only ever "not enough yet" - since it can be
+            # bought piecemeal across several purchase orders, nothing stops
+            # the same design being placed on more than one and adding up to
+            # MORE than the invoice's packing list called for. Over-ordered
+            # is its own state, not just "is_placed" - both get reported so
+            # a caller can flag it without treating it as still-pending.
+            is_over_ordered = outstanding < -_DESIGN_QTY_TOLERANCE
+
+            design = {
+                "product_id": row["product_id"],
+                "product_name": row["product_name"],
+                "design_id": row["design_id"],
+                "design_name": row["design_name"],
+                "unit": row["unit"] or "SQM",
+                "required_boxes": required_boxes,
+                "required_quantity": required_quantity,
+                "placed_boxes": placed_boxes,
+                "placed_quantity": placed_quantity,
+                "pending_boxes": max(required_boxes - placed_boxes, 0),
+                "pending_quantity": max(required_quantity - placed_quantity, 0),
+                "excess_boxes": max(placed_boxes - required_boxes, 0),
+                "excess_quantity": max(placed_quantity - required_quantity, 0),
+                "is_placed": is_placed,
+                "is_over_ordered": is_over_ordered,
+            }
+            status = result[pi_id]
+            status["designs"].append(design)
+            if is_over_ordered:
+                status["over_ordered"].append(design)
+            if is_placed:
+                status["placed_count"] += 1
+            else:
+                status["pending"].append(design)
+                status["is_fully_placed"] = False
+        return result
+
+    def _quotation_ancestor_fallback_rows(self, company_id: int, ids: List[int],
+                                           required_rows: List[dict]) -> List[dict]:
+        """For every invoice that got NO rows from design_totals_for_proforma
+        (no packing list directly against it), fall back to the packing
+        list of the quotation it was generated from - the same ancestor
+        PackingListService._ancestor_packing_list already walks to when
+        deciding what to IMPORT into a new PO's packing list.
+
+        Without this fallback, an invoice generated straight from a
+        quotation that skips the PI step (a supported flow: the quotation
+        already has its own packing list, the invoice never gets one of its
+        own) always reports zero required designs - which design_status_map
+        treats as "nothing to compare against" and stops filtering
+        entirely, so every purchase order after the first re-imports the
+        quotation's FULL packing list forever, oblivious to what earlier
+        purchase orders already placed. That was a real bug, not a
+        hypothetical one.
+
+        Two PIs can share the same quotation (each independently missing
+        its own PL), so this fans a quotation's totals out to every invoice
+        that resolves to it rather than picking just one."""
+        covered_ids = {row["pi_id"] for row in required_rows}
+        uncovered_ids = [pi_id for pi_id in ids if pi_id not in covered_ids]
+        if not uncovered_ids:
+            return []
+        quotation_by_pi = self.proforma_invoice_repo.quotation_id_map(uncovered_ids)
+        if not quotation_by_pi:
+            return []
+        pi_ids_by_quotation: dict = {}
+        for pi_id, quotation_id in quotation_by_pi.items():
+            pi_ids_by_quotation.setdefault(quotation_id, []).append(pi_id)
+        quotation_rows = self.packing_list_repo.design_totals_for_quotation(
+            company_id, list(pi_ids_by_quotation.keys()))
+        fallback_rows = []
+        for row in quotation_rows:
+            for pi_id in pi_ids_by_quotation[row["q_id"]]:
+                fallback_rows.append({**row, "pi_id": pi_id})
+        return fallback_rows
+
+    def design_status(self, company_id: int, proforma_invoice_id: int) -> dict:
+        """design_status_map for a single invoice. An invoice with no
+        packing list to track - neither its own nor (via the quotation
+        fallback above) its ancestor quotation's - has nothing to compare
+        against, so it reports zero designs and is_fully_placed=False -
+        there is still work to do, it just isn't broken down into designs
+        yet."""
+        status = self.design_status_map(company_id, [proforma_invoice_id]).get(proforma_invoice_id)
+        if not status:
+            status = {"designs": [], "pending": [], "over_ordered": [],
+                      "placed_count": 0, "is_fully_placed": True}
+        if not status["designs"]:
+            status["is_fully_placed"] = False
+        return status
+
+    def pending_designs(self, company_id: int, proforma_invoice_id: int) -> List[dict]:
+        """Just the designs still to be ordered - what the invoice page shows
+        and what a new PO's packing list is prefilled with."""
+        return self.design_status(company_id, proforma_invoice_id)["pending"]
+
+    def over_ordered_designs(self, company_id: int, proforma_invoice_id: int) -> List[dict]:
+        """Designs bought (summed across every purchase order linked to this
+        invoice) in excess of what the invoice's own packing list called
+        for - a design need not come from a single PO, so this only shows up
+        once the total across all of them overshoots. What the "bought more
+        than necessary" notification is built from."""
+        return self.design_status(company_id, proforma_invoice_id)["over_ordered"]
+
+    # ---- the same comparison one level up: PO product lines, not packing-list designs ----
+    def product_status(self, company_id: int, invoice: ProformaInvoice) -> dict:
+        """Which of the invoice's OWN product lines still have quantity not
+        yet placed on any purchase order already linked to it - the PO-
+        creation-time analogue of design_status, one level coarser
+        (product/quantity, not product+design). Takes the already-loaded
+        invoice itself rather than a bare id: its `items` ARE the 'required'
+        side, so unlike design_status (which has to go looking for the PI's
+        packing list) there is no extra read for that half."""
+        placed_rows = self.purchase_order_repo.product_totals_for_proforma(company_id, invoice.id)
+        placed_index = {_product_key(row): row for row in placed_rows}
+
+        products, pending = [], []
+        for item in invoice.items:
+            placed = placed_index.get(_product_key(
+                {"product_id": item.product_id, "product_name": item.product_name}))
+            required_boxes = item.quantity_boxes or 0
+            required_quantity = item.quantity_value or 0
+            placed_boxes = (placed["boxes"] if placed else 0) or 0
+            placed_quantity = (placed["quantity"] if placed else 0) or 0
+
+            # Same yardstick as design_status: boxes decide "done" whenever
+            # the invoice line states them, otherwise the quantity column.
+            if required_boxes > 0:
+                outstanding = required_boxes - placed_boxes
+            else:
+                outstanding = required_quantity - placed_quantity
+            is_placed = outstanding <= _DESIGN_QTY_TOLERANCE
+            is_over_ordered = outstanding < -_DESIGN_QTY_TOLERANCE
+
+            product = {
+                "product_id": item.product_id, "product_name": item.product_name,
+                "hsn_code": item.hsn_code, "unit": item.unit,
+                "required_boxes": required_boxes, "required_quantity": required_quantity,
+                "placed_boxes": placed_boxes, "placed_quantity": placed_quantity,
+                "pending_boxes": max(required_boxes - placed_boxes, 0),
+                "pending_quantity": max(required_quantity - placed_quantity, 0),
+                "excess_boxes": max(placed_boxes - required_boxes, 0),
+                "excess_quantity": max(placed_quantity - required_quantity, 0),
+                "is_placed": is_placed,
+                "is_over_ordered": is_over_ordered,
+            }
+            products.append(product)
+            if not is_placed:
+                pending.append(product)
+        over_ordered = [p for p in products if p["is_over_ordered"]]
+        return {"products": products, "pending": pending, "over_ordered": over_ordered,
+                "placed_count": len(products) - len(pending), "is_fully_placed": not pending}
+
+    # ---- the reminder feed --------------------------------------------------
+    def pending_purchase_order_reminders(self, company_id: int,
+                                          created_by: Optional[int] = None) -> List[dict]:
+        """Every CONFIRMED proforma invoice that still has designs nobody has
+        placed a purchase order for, newest invoice first. Derived live on
+        each page load rather than stored, so a reminder appears the moment
+        an invoice is confirmed and disappears the moment the last design is
+        placed - there is no reminder row that can go stale.
+
+        `created_by` narrows the feed to one employee's own invoices (the
+        employee dashboard); admins pass None and see the whole company."""
+        invoices = self.proforma_invoice_repo.list_by_status(company_id, PROFORMA_STATUS_CONFIRMED)
+        if created_by is not None:
+            invoices = [i for i in invoices if i.created_by == created_by]
+        if not invoices:
+            return []
+        status_map = self.design_status_map(company_id, [i.id for i in invoices])
+        po_counts = self.purchase_order_repo.count_map_by_proforma(company_id)
+        reminders = []
+        for invoice in invoices:
+            status = status_map.get(invoice.id) or {}
+            pending = status.get("pending", [])
+            has_packing_list = bool(status.get("designs"))
+            if not pending and has_packing_list:
+                continue  # fully ordered - nothing left to chase
+            reminders.append({
+                "invoice": invoice,
+                "pending": pending,
+                "pending_count": len(pending),
+                "placed_count": status.get("placed_count", 0),
+                "purchase_order_count": po_counts.get(invoice.id, 0),
+                "has_packing_list": has_packing_list,
+            })
+        return reminders
+
+
+# ============================================================
 # BACKUP SERVICE
 # ============================================================
 
@@ -2507,14 +4006,14 @@ BACKUP_SIGNATURE = "crm-app-backup"
 BACKUP_FORMAT_VERSION = 1          # bump if the ZIP layout itself changes
 _MANIFEST_NAME = "manifest.json"
 _DB_ARCNAME = "database/crm.db"    # where the DB lives inside the ZIP
-_UPLOADS_ARCPREFIX = "uploads/products"
 _SQLITE_MAGIC = b"SQLite format 3\x00"   # first 16 bytes of any SQLite file
 _CORE_TABLES = ("tenants", "users")      # tables a real app DB must have
 
 
 class BackupService:
-    """Download and restore the ENTIRE dataset - the SQLite database plus the
-    product images that live on disk (not in the DB) - as a single ZIP.
+    """Download and restore the ENTIRE dataset - the SQLite database plus
+    every folder of uploaded files that live on disk (not in the DB) - as a
+    single ZIP.
 
     Admin-only (enforced by the route layer). The ZIP carries a manifest with
     a signature + schema version so a restore can (a) confirm the upload is
@@ -2523,10 +4022,15 @@ class BackupService:
     it (see SCHEMA_VERSION in app/database.py).
     """
 
-    def __init__(self, db: Database, db_path: str, uploads_folder: str, schema_path: str):
+    def __init__(self, db: Database, db_path: str, uploads_folders: dict, schema_path: str):
+        """`uploads_folders` maps an arcname prefix (e.g. "uploads/products")
+        to the on-disk folder it corresponds to - one entry per kind of
+        upload the app has (product photos, suppliers' Purchase Invoice
+        PDFs, ...). Adding a new upload folder later only means adding one
+        more entry here, no other changes to the backup/restore logic."""
         self.db = db
         self.db_path = db_path
-        self.uploads_folder = uploads_folder
+        self.uploads_folders = uploads_folders
         self.schema_path = schema_path
 
     # ---- download --------------------------------------------------
@@ -2557,12 +4061,14 @@ class BackupService:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(_MANIFEST_NAME, json.dumps(manifest, indent=2))
                 zf.write(tmp_db_path, _DB_ARCNAME)
-                if os.path.isdir(self.uploads_folder):
-                    for root, _dirs, files in os.walk(self.uploads_folder):
+                for arcprefix, folder in self.uploads_folders.items():
+                    if not os.path.isdir(folder):
+                        continue
+                    for root, _dirs, files in os.walk(folder):
                         for name in files:
                             abs_path = os.path.join(root, name)
-                            rel = os.path.relpath(abs_path, self.uploads_folder)
-                            arcname = f"{_UPLOADS_ARCPREFIX}/{rel.replace(os.sep, '/')}"
+                            rel = os.path.relpath(abs_path, folder)
+                            arcname = f"{arcprefix}/{rel.replace(os.sep, '/')}"
                             zf.write(abs_path, arcname)
             return zip_path, f"crm-backup-{stamp}.zip"
         finally:
@@ -2632,7 +4138,10 @@ class BackupService:
 
             # --- everything checks out: snapshot current data, then swap ---
             self._snapshot_current("pre_restore")
-            extracted_uploads = os.path.join(work_dir, "uploads", "products")
+            extracted_uploads = {
+                arcprefix: os.path.join(work_dir, *arcprefix.split("/"))
+                for arcprefix in self.uploads_folders
+            }
             self._swap_in(extracted_db, extracted_uploads)
 
             # Bring the restored (possibly older) DB up to the current shape.
@@ -2686,22 +4195,27 @@ class BackupService:
         return os.path.join(os.path.dirname(self.db_path), "backups")
 
     def _snapshot_current(self, tag: str) -> None:
-        """Copy the CURRENT db + uploads into instance/backups/ so a restore is
-        reversible. Uses the same crm_<tag>_<stamp>.db naming the migration
-        backups use, so it shows up in list_auto_backups()."""
+        """Copy the CURRENT db + every upload folder into instance/backups/
+        so a restore is reversible. Uses the same crm_<tag>_<stamp>.db
+        naming the migration backups use, so it shows up in
+        list_auto_backups()."""
         backup_dir = self._backups_dir()
         os.makedirs(backup_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = os.path.splitext(os.path.basename(self.db_path))[0]
         if os.path.exists(self.db_path):
             self.db.create_backup_copy(os.path.join(backup_dir, f"{stem}_{tag}_{stamp}.db"))
-        if os.path.isdir(self.uploads_folder):
-            shutil.copytree(self.uploads_folder, os.path.join(backup_dir, f"uploads_{tag}_{stamp}"))
+        for arcprefix, folder in self.uploads_folders.items():
+            if os.path.isdir(folder):
+                safe_name = arcprefix.replace("/", "_")
+                shutil.copytree(folder, os.path.join(backup_dir, f"{safe_name}_{tag}_{stamp}"))
 
-    def _swap_in(self, new_db_path: str, new_uploads_dir: str) -> None:
-        """Replace the live DB file and product-images folder with the
+    def _swap_in(self, new_db_path: str, new_uploads_dirs: dict) -> None:
+        """Replace the live DB file and every upload folder with the
         restored ones. DB swap is atomic (os.replace on the same filesystem);
-        the uploads folder is moved aside first and rolled back on failure."""
+        each uploads folder is moved aside first and rolled back on failure.
+        `new_uploads_dirs` maps the same arcprefix keys as self.uploads_folders
+        to the corresponding extracted folder from the backup ZIP."""
         # DB: stage next to the target (same filesystem) then atomic replace.
         staging = self.db_path + ".restore_tmp"
         shutil.copy2(new_db_path, staging)
@@ -2711,24 +4225,26 @@ class BackupService:
             if os.path.exists(sidecar):
                 os.remove(sidecar)
 
-        # Uploads: move current aside, then put the restored folder in place.
-        os.makedirs(os.path.dirname(self.uploads_folder), exist_ok=True)
-        aside = None
-        if os.path.isdir(self.uploads_folder):
-            aside = f"{self.uploads_folder}_old_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            os.rename(self.uploads_folder, aside)
-        try:
-            if new_uploads_dir and os.path.isdir(new_uploads_dir):
-                shutil.copytree(new_uploads_dir, self.uploads_folder)
-            else:
-                os.makedirs(self.uploads_folder, exist_ok=True)
-        except Exception:
-            shutil.rmtree(self.uploads_folder, ignore_errors=True)
+        for arcprefix, folder in self.uploads_folders.items():
+            new_dir = new_uploads_dirs.get(arcprefix)
+            # Uploads: move current aside, then put the restored folder in place.
+            os.makedirs(os.path.dirname(folder), exist_ok=True)
+            aside = None
+            if os.path.isdir(folder):
+                aside = f"{folder}_old_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                os.rename(folder, aside)
+            try:
+                if new_dir and os.path.isdir(new_dir):
+                    shutil.copytree(new_dir, folder)
+                else:
+                    os.makedirs(folder, exist_ok=True)
+            except Exception:
+                shutil.rmtree(folder, ignore_errors=True)
+                if aside:
+                    os.rename(aside, folder)
+                raise
             if aside:
-                os.rename(aside, self.uploads_folder)
-            raise
-        if aside:
-            shutil.rmtree(aside, ignore_errors=True)
+                shutil.rmtree(aside, ignore_errors=True)
 
     @staticmethod
     def _assert_no_zip_slip(names: list, dest_dir: str) -> None:

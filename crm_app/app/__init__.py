@@ -20,14 +20,15 @@ from app.repositories import (
     SqlitePartyRepository, SqliteSupplierRepository,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
-    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PackingListRepository,
-    DocumentVersionRepository,
+    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
+    ExportInvoiceRepository, PackingListRepository, DocumentVersionRepository, PermitRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, CurrencyService,
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
-    QuotationService, ProformaInvoiceService, PurchaseOrderService, PackingListService, BackupService,
-    DocumentVersionService,
+    QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
+    ExportInvoiceService, PackingListService, BackupService, DocumentVersionService, ProformaFulfilmentService,
+    InventoryService, PermitService,
 )
 from app.utils import register_template_helpers
 
@@ -60,8 +61,11 @@ class ServiceContainer:
         self.quotation_repo = QuotationRepository(db)
         self.proforma_invoice_repo = ProformaInvoiceRepository(db)
         self.purchase_order_repo = PurchaseOrderRepository(db)
+        self.purchase_invoice_repo = PurchaseInvoiceRepository(db)
+        self.export_invoice_repo = ExportInvoiceRepository(db)
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
+        self.permit_repo = PermitRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -101,6 +105,11 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
+        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo)
+        self.permit_service = PermitService(
+            self.permit_repo, self.supplier_repo,
+            Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
+        )
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
@@ -109,17 +118,45 @@ class ServiceContainer:
             self.proforma_invoice_repo, self.product_repo, self.lead_repo, self.quotation_repo,
             self.document_version_service, self.party_repos,
         )
+        # Read-only, repo-only service: which of a proforma invoice's product
+        # lines (and, one level finer, which of its packing-list designs)
+        # are still not placed on any of its purchase orders. Wired before
+        # PurchaseOrderService/PackingListService, which use it to prefill a
+        # new PO/its packing list with just the outstanding amounts.
+        self.proforma_fulfilment_service = ProformaFulfilmentService(
+            self.proforma_invoice_repo, self.packing_list_repo, self.purchase_order_repo,
+        )
         self.purchase_order_service = PurchaseOrderService(
             self.purchase_order_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
-            self.document_version_service, self.party_repos, self.supplier_repo,
+            self.document_version_service, self.party_repos, self.supplier_repo, self.company_repo,
+            self.proforma_fulfilment_service,
         )
         self.packing_list_service = PackingListService(
             self.packing_list_repo, self.product_repo, self.design_repo,
             self.lead_repo, self.proforma_invoice_repo, self.document_version_service,
-            self.quotation_repo, self.purchase_order_repo,
+            self.quotation_repo, self.purchase_order_repo, self.proforma_fulfilment_service,
+            self.purchase_invoice_repo,
+        )
+        self.purchase_invoice_service = PurchaseInvoiceService(
+            self.purchase_invoice_repo, self.product_repo, self.lead_repo, self.purchase_order_repo,
+            self.document_version_service, self.party_repos, self.supplier_repo,
+            Config.PURCHASE_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
+        )
+        self.export_invoice_service = ExportInvoiceService(
+            self.export_invoice_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
+            self.purchase_order_repo, self.purchase_invoice_repo, self.company_repo,
+            self.document_version_service, self.party_repos,
+            Config.EXPORT_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
         self.backup_service = BackupService(
-            db, Config.DATABASE_PATH, Config.PRODUCT_UPLOAD_FOLDER, Config.SCHEMA_PATH,
+            db, Config.DATABASE_PATH,
+            {
+                "uploads/products": Config.PRODUCT_UPLOAD_FOLDER,
+                "uploads/purchase_invoices": Config.PURCHASE_INVOICE_UPLOAD_FOLDER,
+                "uploads/export_invoices": Config.EXPORT_INVOICE_UPLOAD_FOLDER,
+                "uploads/permits": Config.PERMIT_UPLOAD_FOLDER,
+            },
+            Config.SCHEMA_PATH,
         )
 
 
@@ -148,7 +185,9 @@ def create_app(config_class=Config) -> Flask:
     # --- make the current user + status constants available in every template --------------------------------------------------
     @app.context_processor
     def inject_globals():
-        from app.models import LEAD_STATUSES, CLIENT_STATUSES, CLIENT_TYPES, COMMUNICATION_MODES, PRODUCT_UNITS
+        from app.models import (LEAD_STATUSES, CLIENT_STATUSES, CLIENT_TYPES, COMMUNICATION_MODES,
+                                PRODUCT_UNITS, PURCHASE_TYPES, EXEMPTION_IGST_PERCENT,
+                                PROFORMA_STATUSES)
         # The logged-in tenant's own company profile (for the sidebar logo) -
         # one small query per request, only when someone is signed in.
         user = g.get("user")
@@ -161,6 +200,9 @@ def create_app(config_class=Config) -> Flask:
             CLIENT_TYPES=CLIENT_TYPES,
             COMMUNICATION_MODES=COMMUNICATION_MODES,
             PRODUCT_UNITS=PRODUCT_UNITS,
+            PURCHASE_TYPES=PURCHASE_TYPES,
+            EXEMPTION_IGST_PERCENT=EXEMPTION_IGST_PERCENT,
+            PROFORMA_STATUSES=PROFORMA_STATUSES,
         )
 
     register_template_helpers(app)
@@ -173,11 +215,15 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.suppliers import suppliers_bp
     from app.routes.admin import admin_bp
     from app.routes.company import company_bp
+    from app.routes.permits import permits_bp
     from app.routes.reports import reports_bp
     from app.routes.products import products_bp
+    from app.routes.inventory import inventory_bp
     from app.routes.quotations import quotations_bp
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
+    from app.routes.purchase_invoices import purchase_invoices_bp
+    from app.routes.export_invoices import export_invoices_bp
     from app.routes.packing_lists import packing_lists_bp
     from app.routes.profile import profile_bp
     from app.routes.backup import backup_bp
@@ -193,11 +239,15 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(exporters_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(company_bp)
+    app.register_blueprint(permits_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(products_bp)
+    app.register_blueprint(inventory_bp)
     app.register_blueprint(quotations_bp)
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)
+    app.register_blueprint(purchase_invoices_bp)
+    app.register_blueprint(export_invoices_bp)
     app.register_blueprint(packing_lists_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(backup_bp)

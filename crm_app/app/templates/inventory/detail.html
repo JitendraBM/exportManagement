@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ product.product_name }} · Inventory{% endblock %}
+
+{% macro num(value) -%}
+  {{ value | int if value == (value | int) else '%.2f' | format(value) }}
+{%- endmacro %}
+
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Inventory · Product</div>
+    <h1>{{ current_folder.name if current_folder else product.product_name }}</h1>
+  </div>
+</div>
+
+<div class="breadcrumb-trail">
+  <a href="{{ url_for('inventory.list_inventory') }}">Inventory</a>
+  {% if category %}
+    <span class="crumb-sep">/</span>
+    <a href="{{ url_for('inventory.list_inventory', category_id=category.id) }}">{{ category.name }}</a>
+  {% endif %}
+  <span class="crumb-sep">/</span>
+  <a href="{{ url_for('inventory.view_product', product_id=product.id) }}">{{ product.product_name }}</a>
+  {% for f in breadcrumb %}
+    <span class="crumb-sep">/</span>
+    <a href="{{ url_for('inventory.view_product', product_id=product.id, folder_id=f.id) }}">{{ f.name }}</a>
+  {% endfor %}
+</div>
+
+{% if not subfolders and not designs %}
+  <div class="empty-state">
+    {{ 'This sub category is empty.' if current_folder else 'No sub categories or designs in this product yet.' }}
+  </div>
+{% endif %}
+
+{% if subfolders %}
+<div class="card">
+  <div class="card-header"><h3>Sub categories</h3></div>
+  <div class="folder-grid">
+    {% for folder in subfolders %}
+    <div class="folder-tile">
+      <a class="folder-tile-link" href="{{ url_for('inventory.view_product', product_id=product.id, folder_id=folder.id) }}">
+        <span class="folder-icon">📁</span>
+        <span class="folder-name">{{ folder.name }}</span>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if designs %}
+<div class="card">
+  <div class="card-header"><h3>Designs</h3></div>
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Photo</th>
+          <th>Design name</th>
+          <th>Current stock (boxes)</th>
+          <th>Current stock (quantity)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for design in designs %}
+        {% set stock = stock_by_design.get(design.id) %}
+        <tr>
+          <td>
+            {% if design.photo_path %}
+              <img class="thumb" src="{{ url_for('static', filename=design.photo_path) }}" alt="{{ design.alt_text or design.design_name }}">
+            {% else %}
+              <span class="text-soft text-sm">—</span>
+            {% endif %}
+          </td>
+          <td><strong>{{ design.design_name }}</strong></td>
+          <td class="text-sm">{{ num(stock.boxes) if stock else '0' }}</td>
+          <td class="text-sm">{% if stock %}{{ num(stock.quantity) }}{% if stock.unit %} {{ stock.unit }}{% endif %}{% else %}0{% endif %}</td>
+          <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

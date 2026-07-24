@@ -26,11 +26,16 @@ def _extract_contact_details(form) -> list:
 
 def _extract_contact_persons(form) -> list:
     names = form.getlist("person_name[]")
+    designations = form.getlist("person_designation[]")
     primaries = set(form.getlist("person_primary[]"))
     persons = []
     for i, name in enumerate(names):
         if name.strip():
-            persons.append({"name": name.strip(), "is_primary": str(i) in primaries})
+            persons.append({
+                "name": name.strip(),
+                "designation": (designations[i].strip() if i < len(designations) else ""),
+                "is_primary": str(i) in primaries,
+            })
     return persons
 
 
@@ -123,6 +128,7 @@ def settings():
                 rcmc_details=_extract_rcmc_details(request.form),
                 logo_file=request.files.get("logo_file"),
                 remove_logo=bool(request.form.get("remove_logo")),
+                self_sealing_declaration=request.form.get("self_sealing_declaration", ""),
             )
             flash("Our Company profile saved.", "success")
             return redirect(url_for("company.settings"))

@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
     company_name        TEXT NOT NULL,
     address             TEXT,
     gstin               TEXT,
+    cin_llp_no          TEXT,       -- optional: CIN (company) or LLPIN (LLP) registration number
     pan_no              TEXT,
     iec                 TEXT,
     status              TEXT NOT NULL DEFAULT 'proforma_invoice_submission_pending'
@@ -275,6 +276,7 @@ CREATE TABLE IF NOT EXISTS our_company (
     iec             TEXT,
     bin             TEXT,
     logo_path       TEXT,       -- company logo, relative to static/ (shown in the app sidebar and on generated documents)
+    self_sealing_declaration TEXT,  -- standard self-sealing declaration text, printed on the Export Invoice
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -311,6 +313,7 @@ CREATE TABLE IF NOT EXISTS our_company_contact_persons (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     our_company_id  INTEGER NOT NULL REFERENCES our_company(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
+    designation     TEXT,       -- e.g. "Partner Of Aayu Exim"; printed under the Authorised Signatory
     is_primary      INTEGER NOT NULL DEFAULT 0
 );
 
@@ -325,6 +328,31 @@ CREATE TABLE IF NOT EXISTS our_company_bank_details (
     bank_address    TEXT,
     is_primary      INTEGER NOT NULL DEFAULT 0
 );
+
+-- ============================================================
+-- PERMITS  (the "permissions" a company holds, managed under the "Our
+-- Company" area. Each permit is tied to one supplier, records the issuing
+-- authority + place of stuffing, is either valid until an expiry date OR a
+-- one-time permit, and can carry an uploaded PDF. supplier_id stays nullable
+-- so deleting a supplier never orphan-crashes an existing permit.)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS permits (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id                INTEGER NOT NULL REFERENCES tenants(id),
+    supplier_id               INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    permission_number         TEXT NOT NULL,
+    date_of_issue             TEXT,
+    issuing_authority         TEXT,
+    issuing_authority_address TEXT,
+    place_of_stuffing         TEXT,
+    validity_type             TEXT NOT NULL DEFAULT 'expiry' CHECK (validity_type IN ('expiry', 'one_time')),
+    date_of_expiry            TEXT,       -- set only when validity_type = 'expiry'
+    pdf_path                  TEXT,       -- uploaded permit PDF, relative to static/
+    created_by                INTEGER NOT NULL REFERENCES users(id),
+    created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_permits_company ON permits(company_id);
 
 -- ============================================================
 -- PRODUCT CATALOG  (category / product / sub category / design:
@@ -456,6 +484,7 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     dimension_mm        TEXT,
     hsn_code            TEXT,
     quantity_boxes      REAL,
+    pallets             REAL,      -- "Plts" column - same derived-from-boxes pattern as proforma_invoice_items.pallets
     quantity_value       REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
     price_usd           REAL NOT NULL DEFAULT 0,
@@ -509,6 +538,7 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     bank_branch               TEXT,
     bank_address               TEXT,
     display_mode              TEXT NOT NULL DEFAULT 'index',  -- goods layout: 'index' (numbered) | 'surface' (grouped by category + surface)
+    status                    TEXT NOT NULL DEFAULT 'draft',  -- 'draft' | 'confirmed'; a confirmed PI is locked for editing and reminds until every design on its packing list is placed on a linked PO
     created_by                 INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -539,7 +569,10 @@ CREATE TABLE IF NOT EXISTS proforma_invoice_items (
 -- supplier is the SELLER, prices are in INR (typically ex-factory per box).
 -- Can be started from an existing proforma invoice - proforma_invoice_id is
 -- a "generated from" reference only, same pattern as
--- proforma_invoices.quotation_id. Tax percentages are stored; the amounts,
+-- proforma_invoices.quotation_id. ONE PI CAN HAVE MANY POs: a single order is
+-- normally split across several suppliers, so the PI page lists every PO
+-- pointing at it and tracks which of its packing-list designs are still
+-- unplaced. Tax percentages are stored; the amounts,
 -- round-off and final order value are always derived from the items.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS purchase_orders (
@@ -565,6 +598,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     igst_percent            REAL NOT NULL DEFAULT 0,
     cgst_percent            REAL NOT NULL DEFAULT 0,
     sgst_percent            REAL NOT NULL DEFAULT 0,
+    purchase_type           TEXT NOT NULL DEFAULT 'full_tax',   -- 'full_tax' | 'exemption'; drives the three percentages above
     created_by              INTEGER NOT NULL REFERENCES users(id),
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
@@ -587,13 +621,241 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
 );
 
 -- ============================================================
+-- PURCHASE INVOICES  (header + line items + vehicle numbers, number
+-- generated as PINV{YYYYMMDD}{seq-of-that-day} per company. The last
+-- document in the pipeline: raised once a supplier's goods (against one of
+-- our purchase orders) actually arrive, carrying the supplier's own
+-- invoice/transport details. purchase_order_id is a "generated from"
+-- reference only, same pattern as purchase_orders.proforma_invoice_id -
+-- one supplier, one PO, one purchase invoice. Unlike every other document
+-- type there is nothing to print here: the supplier already sent their own
+-- invoice as a PDF (supplier_pdf_path), we just record its numbers
+-- alongside it. invoice_number/invoice_date are the SUPPLIER's own values
+-- as printed on that PDF - purchase_invoice_number is our own internal,
+-- auto-generated identifier (kept for consistency with every other
+-- document type's numbering/version-history machinery). Discount/
+-- insurance/freight/tax/round-off are typed in directly from the supplier's
+-- invoice rather than derived, since they must match what the supplier
+-- actually charged, not what our own tax rules would compute.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS purchase_invoices (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id              INTEGER NOT NULL REFERENCES tenants(id),
+    purchase_invoice_number TEXT NOT NULL,
+    invoice_number          TEXT NOT NULL,   -- the supplier's own invoice number, printed on their PDF
+    invoice_date            TEXT NOT NULL,
+    purchase_order_id       INTEGER REFERENCES purchase_orders(id),   -- optional, "generated from" reference only
+    lead_id                 INTEGER REFERENCES leads(id),             -- optional, prefill/reference only
+    seller_supplier_id      INTEGER REFERENCES suppliers(id),
+    seller_name             TEXT NOT NULL,
+    seller_address          TEXT,
+    seller_pan              TEXT,
+    seller_gstin            TEXT,
+    seller_ref_no           TEXT,
+    port_of_loading         TEXT,
+    port_of_discharge       TEXT,
+    container_details       TEXT,
+    transporter_name        TEXT,
+    epcg_number             TEXT,
+    epcg_date               TEXT,
+    supplier_pdf_path       TEXT,   -- the supplier's own Purchase Invoice PDF, relative to static/
+    discount_amount         REAL NOT NULL DEFAULT 0,
+    insurance_other         REAL NOT NULL DEFAULT 0,
+    freight                 REAL NOT NULL DEFAULT 0,
+    igst_amount             REAL NOT NULL DEFAULT 0,
+    cgst_amount             REAL NOT NULL DEFAULT 0,
+    sgst_amount             REAL NOT NULL DEFAULT 0,
+    round_off               REAL NOT NULL DEFAULT 0,
+    remarks                 TEXT,
+    created_by              INTEGER NOT NULL REFERENCES users(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, purchase_invoice_number)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_invoice_items (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_invoice_id    INTEGER NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+    sr_no                  INTEGER NOT NULL,
+    product_id             INTEGER REFERENCES products(id) ON DELETE SET NULL,   -- optional, just for prefill/reference
+    product_name           TEXT NOT NULL,
+    hsn_code               TEXT,
+    quantity_boxes         REAL,
+    quantity_value         REAL NOT NULL DEFAULT 0,
+    unit                   TEXT NOT NULL DEFAULT 'SQM',
+    price_inr              REAL NOT NULL DEFAULT 0,
+    price_per              TEXT NOT NULL DEFAULT 'BOX',
+    total_inr              REAL NOT NULL DEFAULT 0
+);
+
+-- Vehicle numbers are a plain repeatable list of values (a supplier's
+-- shipment can arrive split across several trucks) - no other columns, so
+-- no separate model class, just a sr_no-ordered list of strings.
+CREATE TABLE IF NOT EXISTS purchase_invoice_vehicles (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_invoice_id    INTEGER NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+    sr_no                  INTEGER NOT NULL,
+    vehicle_number         TEXT NOT NULL
+);
+
+-- ============================================================
+-- EXPORT INVOICES  (header + line items + several child lists, number
+-- generated as EXPINV{YYYYMMDD}{seq-of-that-day} per company. The
+-- customer/customs-facing document at the buyer end of the pipeline
+-- (Quotation -> Proforma Invoice -> Purchase Order -> Purchase Invoice),
+-- raised against ONE OR MORE Proforma Invoices at once - a single buyer
+-- order is normally fulfilled across several PIs/suppliers, so the link is
+-- many-to-many via export_invoice_proforma_links. Goods lines are prefilled
+-- from the linked PIs then edited freely. Tax is computed per-product (each
+-- HSN taxes differently): every line snapshots its own igst_percent, the
+-- amounts are summed and shown as IGST or CGST/SGST per tax_mode. The
+-- exchange rate is typed in manually and, once set, only an admin can change
+-- it. EPCG number/date and the "export under" text are imported (when
+-- present) by walking each linked PI's purchase orders to their purchase
+-- invoices; supplier GSTIN/invoice-no rows (export_invoice_purchase_details)
+-- come from the same walk for exemption purchases. There is no draft/
+-- confirmed lock (always editable) but admin version history is kept.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS export_invoices (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id                  INTEGER NOT NULL REFERENCES tenants(id),
+    export_invoice_number       TEXT NOT NULL,
+    invoice_date                TEXT NOT NULL,
+    lead_id                     INTEGER REFERENCES leads(id),   -- optional, prefill/reference only
+    consignee_name              TEXT NOT NULL,
+    consignee_address           TEXT,
+    notify_name                 TEXT,          -- "Buyer if other than consignee"
+    notify_address              TEXT,
+    country_of_origin           TEXT DEFAULT 'INDIA',
+    country_of_destination      TEXT,
+    place_of_receipt            TEXT,
+    pre_carriage_by             TEXT,
+    port_of_loading             TEXT,
+    port_of_discharge           TEXT,
+    final_destination           TEXT,
+    nature_of_contract          TEXT,          -- e.g. "CNF- (Beira)"
+    payment_terms               TEXT,
+    export_under                TEXT,          -- imported "SUPPLY MEANT FOR EXPORT..." / LUT text, editable
+    epcg_number                 TEXT,          -- imported from the chain's purchase invoices when present, editable
+    epcg_date                   TEXT,
+    loading_type                TEXT NOT NULL DEFAULT 'self_sealing',  -- 'buffer' | 'self_sealing'
+    tax_mode                    TEXT NOT NULL DEFAULT 'igst',          -- 'igst' | 'cgst_sgst'; where the summed per-product tax lands
+    exchange_rate               REAL NOT NULL DEFAULT 0,               -- USD->INR, manual; only an admin may change once set
+    sea_freight                 REAL NOT NULL DEFAULT 0,
+    insurance                   REAL NOT NULL DEFAULT 0,
+    certification               REAL NOT NULL DEFAULT 0,
+    other_charges               REAL NOT NULL DEFAULT 0,
+    discount_amount             REAL NOT NULL DEFAULT 0,
+    fob_value                   REAL NOT NULL DEFAULT 0,
+    cnf_value                   REAL NOT NULL DEFAULT 0,
+    bank_name                   TEXT,
+    bank_account_number         TEXT,
+    bank_ifsc_code              TEXT,
+    bank_swift_code             TEXT,
+    bank_branch                 TEXT,
+    bank_address                TEXT,
+    authorised_person_name          TEXT,      -- snapshot of the chosen Our-Company contact person
+    authorised_person_designation   TEXT,
+    self_sealing_declaration    TEXT,          -- snapshot of the Our-Company declaration at save time
+    shipping_bill_pdf_path      TEXT,          -- optional uploaded shipping bill, relative to static/
+    -- page-2 Self-Sealing Examination Report annexure fields
+    examination_date            TEXT,          -- defaults to the creation date
+    location_code_08b           TEXT,          -- section 08B, free text
+    issuing_authority           TEXT,
+    issuing_authority_address   TEXT,
+    permission_no               TEXT,
+    permission_date             TEXT,
+    permission_expiry           TEXT,
+    manufacturer_name           TEXT,
+    manufacturer_address        TEXT,
+    remarks                     TEXT,
+    created_by                  INTEGER NOT NULL REFERENCES users(id),
+    created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, export_invoice_number)
+);
+
+CREATE TABLE IF NOT EXISTS export_invoice_items (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    product_id            INTEGER REFERENCES products(id) ON DELETE SET NULL,   -- optional, just for prefill/reference
+    product_name          TEXT NOT NULL,
+    dimension_mm          TEXT,
+    hsn_code              TEXT,
+    surface               TEXT,
+    pallets               REAL,
+    quantity_boxes        REAL,
+    quantity_value        REAL NOT NULL DEFAULT 0,
+    unit                  TEXT NOT NULL DEFAULT 'SQM',
+    price_usd             REAL NOT NULL DEFAULT 0,
+    total_usd             REAL NOT NULL DEFAULT 0,
+    igst_percent          REAL NOT NULL DEFAULT 0   -- snapshot of the product's IGST %, so tax is per-product and stable
+);
+
+-- The many-to-many between an export invoice and the proforma invoices it
+-- references (one buyer order fulfilled across several PIs/suppliers).
+CREATE TABLE IF NOT EXISTS export_invoice_proforma_links (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    proforma_invoice_id   INTEGER NOT NULL REFERENCES proforma_invoices(id) ON DELETE CASCADE,
+    UNIQUE (export_invoice_id, proforma_invoice_id)
+);
+
+-- Buyer Order No & Date rows - a free repeatable list, each row optionally
+-- tied to one of the referenced proforma invoices.
+CREATE TABLE IF NOT EXISTS export_invoice_buyer_orders (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    order_no              TEXT,
+    order_date            TEXT,
+    proforma_invoice_id   INTEGER REFERENCES proforma_invoices(id) ON DELETE SET NULL
+);
+
+-- Front-page Container Details: a list of {type, count} (e.g. 9 x 20FT FCL).
+-- The sum of the counts drives how many section-11B rows are captured.
+CREATE TABLE IF NOT EXISTS export_invoice_containers (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    container_type        TEXT NOT NULL,       -- e.g. '20FT FCL' / '40FT FCL'
+    container_count       INTEGER NOT NULL DEFAULT 0
+);
+
+-- Page-2 section 11B: one row per PHYSICAL container. Tare/Gross weight are
+-- printed columns left blank, so they are not captured here.
+CREATE TABLE IF NOT EXISTS export_invoice_container_details (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    container_type        TEXT,
+    container_no          TEXT,
+    line_seal_no          TEXT,
+    rfid_seal_no          TEXT,
+    vehicle_no            TEXT
+);
+
+-- Purchase Details: supplier GSTIN + invoice-no rows imported from the
+-- exemption purchases in the chain, editable, and spilling past 4 in print.
+CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    supplier_gstin        TEXT,
+    supplier_invoice_no   TEXT
+);
+
+-- ============================================================
 -- PACKING LISTS  (header + line items, number generated as
 -- PL{YYYYMMDD}{seq-of-that-day} per company. Normally started from an
 -- existing proforma invoice, but can also be started directly from a
--- Quotation (skipping the PI step) - proforma_invoice_id/quotation_id are
--- both "generated from" reference only, same pattern as
--- proforma_invoices.quotation_id. Each line breaks a product's quantity down
--- into a specific DESIGN in smaller quantities.)
+-- Quotation (skipping the PI step), from a Purchase Order (the PO's own
+-- PL), or from a Purchase Invoice (that invoice's own PL, importing the
+-- linked PO's PL wholesale) - proforma_invoice_id/quotation_id/
+-- purchase_order_id/purchase_invoice_id are all "generated from" reference
+-- only, same pattern as proforma_invoices.quotation_id. Each line breaks a
+-- product's quantity down into a specific DESIGN in smaller quantities.)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS packing_lists (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -604,6 +866,7 @@ CREATE TABLE IF NOT EXISTS packing_lists (
     proforma_invoice_id     INTEGER REFERENCES proforma_invoices(id),   -- optional, "generated from" reference only
     quotation_id            INTEGER REFERENCES quotations(id),         -- optional, "generated from" reference only (skips the PI step)
     purchase_order_id       INTEGER REFERENCES purchase_orders(id),    -- optional, "generated from" reference only (the PO's own PL)
+    purchase_invoice_id     INTEGER REFERENCES purchase_invoices(id),  -- optional, "generated from" reference only (the Purchase Invoice's own PL)
     export_ref_no           TEXT,
     buyer_order_no          TEXT,
     other_reference         TEXT,
@@ -657,7 +920,7 @@ CREATE TABLE IF NOT EXISTS packing_list_items (
 CREATE TABLE IF NOT EXISTS document_versions (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id          INTEGER NOT NULL REFERENCES tenants(id),
-    document_type       TEXT NOT NULL,   -- 'quotation' | 'proforma_invoice' | 'purchase_order' | 'packing_list'
+    document_type       TEXT NOT NULL,   -- 'quotation' | 'proforma_invoice' | 'purchase_order' | 'packing_list' | 'purchase_invoice'
     document_id         INTEGER NOT NULL,
     version_number      INTEGER NOT NULL,
     document_number     TEXT NOT NULL,   -- snapshot of quotation_number/invoice_number/packing_list_number, for display
@@ -701,6 +964,22 @@ CREATE INDEX IF NOT EXISTS idx_purchase_orders_company ON purchase_orders(compan
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_created_by ON purchase_orders(created_by);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_date ON purchase_orders(po_date);
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoices_company ON purchase_invoices(company_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoices_created_by ON purchase_invoices(created_by);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoices_date ON purchase_invoices(invoice_date);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoices_po ON purchase_invoices(purchase_order_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoice_items_pi ON purchase_invoice_items(purchase_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_invoice_vehicles_pi ON purchase_invoice_vehicles(purchase_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoices_company ON export_invoices(company_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoices_created_by ON export_invoices(created_by);
+CREATE INDEX IF NOT EXISTS idx_export_invoices_date ON export_invoices(invoice_date);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_items_invoice ON export_invoice_items(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_links_invoice ON export_invoice_proforma_links(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_links_proforma ON export_invoice_proforma_links(proforma_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_buyer_orders_invoice ON export_invoice_buyer_orders(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_containers_invoice ON export_invoice_containers(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_container_details_invoice ON export_invoice_container_details(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_purchase_details_invoice ON export_invoice_purchase_details(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_company ON packing_lists(company_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_created_by ON packing_lists(created_by);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_date ON packing_lists(packing_list_date);

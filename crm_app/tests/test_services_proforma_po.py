@@ -67,6 +67,31 @@ class TestProformaPrefill:
         assert items[0]["price_usd"] == 2
         assert items[0]["quantity_value"] == 100
 
+    def test_prefill_carries_pallets_from_the_quotation_line(self, container, seed):
+        q = container.quotation_service.create(
+            seed.admin, {"buyer_name": "Buyer Co", "quotation_date": "2026-01-01"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_usd": "2", "pallets": "4.5"}])
+        items = container.proforma_invoice_service.build_prefill_from_quotation(q)["items"]
+        assert items[0]["pallets"] == 4.5
+
+    def test_prefill_pallets_is_none_when_the_quotation_line_has_none(self, container, seed):
+        q = make_quotation(container, seed)
+        items = container.proforma_invoice_service.build_prefill_from_quotation(q)["items"]
+        assert items[0]["pallets"] is None
+
+    def test_generated_invoice_persists_the_carried_over_pallets(self, container, seed):
+        """End to end: the number surviving the prefill dict also survives
+        being submitted back through create() as a real PI item."""
+        q = container.quotation_service.create(
+            seed.admin, {"buyer_name": "Buyer Co", "quotation_date": "2026-01-01"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_usd": "2", "pallets": "4.5"}])
+        prefill = container.proforma_invoice_service.build_prefill_from_quotation(q)
+        pi = container.proforma_invoice_service.create(
+            seed.admin, {"consignee_name": "Buyer Co", "invoice_date": "2026-02-01",
+                        **prefill["fields"]},
+            prefill["items"])
+        assert pi.items[0].pallets == 4.5
+
 
 class TestProformaCrud:
     def _create(self, container, seed, **over):
@@ -134,24 +159,79 @@ class TestProformaCrud:
 # PurchaseOrderService
 # ==========================================================================
 class TestPurchaseOrder:
-    def _create(self, container, seed, **over):
+    def _create(self, container, seed, item=None, **over):
         fields = {"seller_name": "Supplier Ltd", "po_date": "2026-03-01"}
         fields.update(over)
         return container.purchase_order_service.create(
             seed.admin, fields,
-            [{"product_name": "Tiles", "quantity_boxes": "10", "quantity_value": "100",
-              "price_inr": "500", "price_per": "BOX"}])
+            [item or {"product_name": "Tiles", "quantity_boxes": "10", "quantity_value": "100",
+                      "price_inr": "500", "price_per": "BOX"}])
+
+    def _our_gstin(self, container, seed, gstin):
+        container.company_repo.upsert(seed.company_id, "Test Exports", "Morbi", gstin, "", "", "")
+
+    def _taxed_product(self, container, seed, igst=18):
+        return container.product_service.create_product(
+            current_user=seed.admin, product_name="Tiles", description="", hsn_code="6907",
+            igst_percent=str(igst), quantity="", alternate_quantity="")
+
+    def _line(self, product_id):
+        return {"product_id": str(product_id), "product_name": "Tiles", "quantity_boxes": "10",
+                "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}
 
     def test_create_assigns_number(self, container, seed):
         po = self._create(container, seed)
         assert po.id is not None and "20260301" in po.po_number
 
-    def test_tax_amounts_derive_from_percentages(self, container, seed):
-        po = self._create(container, seed, igst_percent="18")
+    def test_full_tax_purchase_takes_the_rate_from_the_product(self, container, seed):
+        self._our_gstin(container, seed, "24AAAAA0000A1Z5")
+        product = self._taxed_product(container, seed, igst=18)
+        po = self._create(container, seed, item=self._line(product.id),
+                          purchase_type="full_tax", seller_gstin="27BBBBB0000B1Z5")
         reloaded = container.purchase_order_service.get(po.id, seed.company_id)
         assert reloaded.subtotal_inr == 5000.0     # 10 boxes x 500
+        assert reloaded.igst_percent == 18         # another state -> IGST alone
+        assert (reloaded.cgst_percent, reloaded.sgst_percent) == (0, 0)
         assert reloaded.igst_amount == 900.0       # 18% of 5000
         assert reloaded.order_value_inr == 5900.0
+
+    def test_same_state_splits_the_rate_into_cgst_and_sgst(self, container, seed):
+        self._our_gstin(container, seed, "24AAAAA0000A1Z5")
+        product = self._taxed_product(container, seed, igst=18)
+        po = self._create(container, seed, item=self._line(product.id),
+                          purchase_type="full_tax", seller_gstin="24BBBBB0000B1Z5")
+        assert po.igst_percent == 0
+        assert (po.cgst_percent, po.sgst_percent) == (9, 9)
+        assert po.order_value_inr == 5900.0        # same total, split differently
+
+    def test_exemption_uses_the_concessional_rate(self, container, seed):
+        self._our_gstin(container, seed, "24AAAAA0000A1Z5")
+        product = self._taxed_product(container, seed, igst=18)  # ignored under exemption
+        po = self._create(container, seed, item=self._line(product.id),
+                          purchase_type="exemption", seller_gstin="27BBBBB0000B1Z5")
+        assert po.igst_percent == 0.1
+        assert (po.cgst_percent, po.sgst_percent) == (0, 0)
+
+    def test_exemption_within_one_state_halves_into_cgst_and_sgst(self, container, seed):
+        self._our_gstin(container, seed, "24AAAAA0000A1Z5")
+        po = self._create(container, seed, purchase_type="exemption", seller_gstin="24BBBBB0000B1Z5")
+        assert po.igst_percent == 0
+        assert (po.cgst_percent, po.sgst_percent) == (0.05, 0.05)
+
+    def test_missing_gstins_are_treated_as_inter_state(self, container, seed):
+        product = self._taxed_product(container, seed, igst=18)
+        po = self._create(container, seed, item=self._line(product.id), purchase_type="full_tax")
+        assert po.igst_percent == 18
+        assert (po.cgst_percent, po.sgst_percent) == (0, 0)
+
+    def test_typed_percentages_are_ignored(self, container, seed):
+        """The form only displays the rates - a posted one is never trusted."""
+        po = self._create(container, seed, igst_percent="18", cgst_percent="9")
+        assert (po.igst_percent, po.cgst_percent, po.sgst_percent) == (0, 0, 0)
+
+    def test_unknown_purchase_type_is_rejected(self, container, seed):
+        with pytest.raises(ValidationError):
+            self._create(container, seed, purchase_type="no_tax_at_all")
 
     def test_prefill_from_proforma(self, container, seed):
         pi = container.proforma_invoice_service.create(
@@ -163,13 +243,20 @@ class TestPurchaseOrder:
         assert len(prefill["items"]) == 1
         assert prefill["items"][0]["product_name"] == "Tiles"
 
-    def test_get_for_proforma_links_back(self, container, seed):
+    def test_list_for_proforma_links_back(self, container, seed):
+        """One invoice can be ordered from several suppliers, so the link
+        back is a list - newest PO first."""
         pi = container.proforma_invoice_service.create(
             seed.admin, {"consignee_name": "B", "invoice_date": "2026-02-01"},
             [{"product_name": "T", "quantity_value": "1", "price_usd": "1"}])
-        po = self._create(container, seed, proforma_invoice_id=pi.id)
-        found = container.purchase_order_service.get_for_proforma(pi.id)
-        assert found is not None and found.id == po.id
+        first = self._create(container, seed, proforma_invoice_id=pi.id)
+        second = self._create(container, seed, proforma_invoice_id=pi.id)
+        found = container.purchase_order_service.list_for_proforma(pi.id, seed.company_id)
+        assert [po.id for po in found] == [second.id, first.id]
+        assert container.purchase_order_service.count_map_by_proforma(seed.company_id)[pi.id] == 2
+
+    def test_list_for_proforma_is_company_scoped(self, container, seed):
+        assert container.purchase_order_service.list_for_proforma(None, seed.company_id) == []
 
     def test_create_records_a_version(self, container, seed):
         po = self._create(container, seed)

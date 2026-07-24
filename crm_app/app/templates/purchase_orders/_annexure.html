@@ -1,0 +1,94 @@
+{# The ANNEXURE sheet: overflow goods lines that didn't fit on the purchase
+   order page, with their own TOTAL row and signatory block - the same shape as
+   proforma_invoices/_annexure.html. Renders nothing at all when every item
+   fits on the order page. Must be included AFTER purchase_orders/_sheet.html
+   (it reuses the .po-* styles that partial brings along). Keep PO_ANNEX_START
+   in sync with _sheet.html. #}
+{% set PO_ANNEX_START = 10 %}
+{% set annex_items = purchase_order.items[PO_ANNEX_START:] %}
+{% if annex_items %}
+
+{% macro ax_inr(v) -%}
+  {%- if v %}&#8377;&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}&#8377;&nbsp;-{% endif -%}
+{%- endmacro %}
+{% macro ax_num(v) -%}
+  {%- if v is not none and v != '' and v != 0 %}{{ '{:g}'.format(v | round(2)) }}{% endif -%}
+{%- endmacro %}
+
+<style>
+  .po-annex-page { break-before: page; page-break-before: always; }
+  .po-annex-page .po-items tbody tr { break-inside: avoid; page-break-inside: avoid; }
+</style>
+
+{% set axns = namespace(boxes=0, qty=0, amount=0) %}
+{% for item in annex_items %}
+  {% set axns.boxes = axns.boxes + (item.quantity_boxes or 0) %}
+  {% set axns.qty = axns.qty + (item.quantity_value or 0) %}
+  {% set axns.amount = axns.amount + (item.total_inr or 0) %}
+{% endfor %}
+
+<div class="po-annex-page">
+  <div class="po-sheet js-page-sheet">
+    <div class="po-title">ANNEXURE</div>
+
+    <table class="po-items">
+      <colgroup>
+        <col style="width:5%"><col style="width:41%"><col style="width:9%"><col style="width:10%">
+        <col style="width:11%"><col style="width:7%"><col style="width:17%">
+      </colgroup>
+      <thead>
+        <tr>
+          <td rowspan="2">SR<br>NO</td>
+          <td rowspan="2">DESCRIPTION OF GOODS</td>
+          <td colspan="2">QUANTITY</td>
+          <td colspan="2">EX-FACTORY PRICE</td>
+          <td rowspan="2">TOTAL (INR)</td>
+        </tr>
+        <tr>
+          <td>BOXES</td>
+          <td>QTY</td>
+          <td>RATE</td>
+          <td>PER</td>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in annex_items %}
+        <tr class="po-goods">
+          <td class="po-center">{{ item.sr_no }}</td>
+          <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
+          <td class="po-center">{{ ax_num(item.quantity_boxes) }}</td>
+          <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
+          <td class="po-right">{{ ax_inr(item.price_inr) }}</td>
+          <td class="po-center">{{ item.price_per }}</td>
+          <td class="po-right">{{ ax_inr(item.total_inr) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="po-filler js-page-filler">
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td class="po-val po-center">TOTAL QUANTITY</td>
+          <td class="po-val po-center">{{ ax_num(axns.boxes) }}</td>
+          <td class="po-val po-right">{{ '{:,.2f}'.format(axns.qty) }}</td>
+          <td class="po-val po-center" colspan="2">TOTAL AMOUNT</td>
+          <td class="po-val po-right">{{ ax_inr(axns.amount) }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <colgroup><col style="width:45%"><col></colgroup>
+      <tr>
+        <td class="po-sign-cell"></td>
+        <td class="po-sign-cell">
+          <div class="po-sign-flex po-stamp">
+            <div class="po-val">FOR&nbsp; {{ company.company_name|upper if company else '' }}</div>
+            <div class="po-val">AUTHORISED SIGNATORY</div>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+</div>
+{% endif %}

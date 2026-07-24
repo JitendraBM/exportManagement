@@ -39,7 +39,7 @@
     <tr class="pi-goods">
       <td class="pi-val pi-center">{% if mode == 'index' %}{{ gs.sr }}{% endif %}</td>
       <td class="pi-val">{{ rest|upper|e|replace('\n', '<br>')|safe }}</td>
-      <td class="pi-val pi-center">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
+      <td class="pi-val pi-center">{{ '{:,.2f}'.format(item.pallets) if item.pallets else '' }}</td>
       <td class="pi-val pi-center">{{ '{:,.0f}'.format(item.quantity_boxes) if item.quantity_boxes else '' }}</td>
       <td class="pi-val pi-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }}</td>
       <td class="pi-val pi-right">${{ '{:,.2f}'.format(item.price_usd or 0) }}</td>
@@ -48,14 +48,3 @@
     </tr>
   {% endfor %}
 {% endmacro %}
-
-{# how many extra rows (headings + gaps) grouping adds - the invoice page's
-   filler height calculation needs it to keep the sheet on one page #}
-{% macro extra_row_count(items, mode) -%}
-  {%- set gs = namespace(count=0, key=none) -%}
-  {%- for item in items -%}
-    {%- set key = group_key(item, mode) -%}
-    {%- if key != gs.key %}{% set gs.count = gs.count + 1 %}{% set gs.key = key %}{% endif -%}
-  {%- endfor -%}
-  {{- gs.count * 2 - 1 if gs.count else 0 -}}
-{%- endmacro %}

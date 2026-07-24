@@ -18,9 +18,11 @@ from typing import Optional, List
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
+    PurchaseInvoice, PurchaseInvoiceItem,
+    ExportInvoice, ExportInvoiceItem,
     PackingList, PackingListItem, DocumentVersion,
 )
 
@@ -500,10 +502,10 @@ class SqliteSupplierRepository(SupplierRepositoryBase):
         convert_from_lead needs. GSTIN/PAN/IEC and contacts/bank details are
         set separately via update_profile/replace_* right after."""
         new_id = self.db.execute(
-            """INSERT INTO suppliers (company_id, lead_id, company_name, address, gstin, pan_no, iec, status, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO suppliers (company_id, lead_id, company_name, address, gstin, cin_llp_no, pan_no, iec, status, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (supplier.company_id, supplier.lead_id, supplier.company_name, supplier.address,
-             supplier.gstin, supplier.pan_no, supplier.iec, supplier.status, supplier.created_by),
+             supplier.gstin, supplier.cin_llp_no, supplier.pan_no, supplier.iec, supplier.status, supplier.created_by),
         )
         supplier.id = new_id
         return supplier
@@ -516,9 +518,9 @@ class SqliteSupplierRepository(SupplierRepositoryBase):
 
     def update_profile(self, supplier_id: int, fields: dict) -> None:
         self.db.execute(
-            """UPDATE suppliers SET company_name = ?, address = ?, gstin = ?, pan_no = ?, iec = ?,
+            """UPDATE suppliers SET company_name = ?, address = ?, gstin = ?, cin_llp_no = ?, pan_no = ?, iec = ?,
                                      updated_at = datetime('now') WHERE id = ?""",
-            (fields["company_name"], fields.get("address"), fields.get("gstin"),
+            (fields["company_name"], fields.get("address"), fields.get("gstin"), fields.get("cin_llp_no"),
              fields.get("pan_no"), fields.get("iec"), supplier_id),
         )
 
@@ -725,21 +727,22 @@ class CompanyRepository:
         return company
 
     def upsert(self, company_id: int, company_name: str, address: str, gstin: str,
-               pan_no: str, iec: str, bin_no: str) -> int:
+               pan_no: str, iec: str, bin_no: str, self_sealing_declaration: str = None) -> int:
         """Returns the `our_company.id` row (not the tenant's company_id) -
         callers need it to scope the four detail-table replace_* calls."""
         existing = self.db.query_one("SELECT id FROM our_company WHERE company_id = ?", (company_id,))
         if existing:
             self.db.execute(
                 """UPDATE our_company SET company_name = ?, address = ?, gstin = ?, pan_no = ?, iec = ?, bin = ?,
+                                           self_sealing_declaration = ?,
                                            updated_at = datetime('now') WHERE company_id = ?""",
-                (company_name, address, gstin, pan_no, iec, bin_no, company_id),
+                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, company_id),
             )
             return existing["id"]
         return self.db.execute(
-            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (company_id, company_name, address, gstin, pan_no, iec, bin_no),
+            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration),
         )
 
     def set_logo(self, our_company_id: int, logo_path: Optional[str]) -> None:
@@ -788,13 +791,14 @@ class CompanyRepository:
                 )
 
     def replace_contact_persons(self, our_company_id: int, persons: list) -> None:
-        """persons: [{'name': str, 'is_primary': bool}]"""
+        """persons: [{'name': str, 'designation': str, 'is_primary': bool}]"""
         with self.db.get_connection() as conn:
             conn.execute("DELETE FROM our_company_contact_persons WHERE our_company_id = ?", (our_company_id,))
             for p in persons:
                 conn.execute(
-                    "INSERT INTO our_company_contact_persons (our_company_id, name, is_primary) VALUES (?, ?, ?)",
-                    (our_company_id, p["name"], int(p["is_primary"])),
+                    "INSERT INTO our_company_contact_persons (our_company_id, name, designation, is_primary) "
+                    "VALUES (?, ?, ?, ?)",
+                    (our_company_id, p["name"], (p.get("designation") or "").strip() or None, int(p["is_primary"])),
                 )
 
     def replace_bank_details(self, our_company_id: int, bank_details: list) -> None:
@@ -816,6 +820,56 @@ class CompanyRepository:
 # ============================================================
 # PRODUCT CATALOG (products -> folders -> designs)
 # ============================================================
+class PermitRepository:
+    """The permits ("permissions") a company holds, each tied to a supplier
+    and optionally carrying an uploaded PDF. Managed under the Our Company
+    area. The supplier's display name is joined in on every read."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    _SELECT = (
+        "SELECT p.*, s.company_name AS supplier_name "
+        "FROM permits p LEFT JOIN suppliers s ON s.id = p.supplier_id "
+    )
+
+    def get_by_id(self, permit_id: int) -> Optional[Permit]:
+        row = self.db.query_one(self._SELECT + "WHERE p.id = ?", (permit_id,))
+        return Permit.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[Permit]:
+        rows = self.db.query(
+            self._SELECT + "WHERE p.company_id = ? ORDER BY p.date_of_issue DESC, p.id DESC",
+            (company_id,),
+        )
+        return [Permit.from_row(r) for r in rows]
+
+    def create(self, permit: Permit) -> Permit:
+        new_id = self.db.execute(
+            "INSERT INTO permits (company_id, supplier_id, permission_number, date_of_issue, "
+            "issuing_authority, issuing_authority_address, place_of_stuffing, validity_type, "
+            "date_of_expiry, pdf_path, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (permit.company_id, permit.supplier_id, permit.permission_number, permit.date_of_issue,
+             permit.issuing_authority, permit.issuing_authority_address, permit.place_of_stuffing,
+             permit.validity_type, permit.date_of_expiry, permit.pdf_path, permit.created_by),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, permit_id: int, permit: Permit) -> None:
+        self.db.execute(
+            "UPDATE permits SET supplier_id = ?, permission_number = ?, date_of_issue = ?, "
+            "issuing_authority = ?, issuing_authority_address = ?, place_of_stuffing = ?, "
+            "validity_type = ?, date_of_expiry = ?, pdf_path = ?, updated_at = datetime('now') "
+            "WHERE id = ?",
+            (permit.supplier_id, permit.permission_number, permit.date_of_issue,
+             permit.issuing_authority, permit.issuing_authority_address, permit.place_of_stuffing,
+             permit.validity_type, permit.date_of_expiry, permit.pdf_path, permit_id),
+        )
+
+    def delete(self, permit_id: int) -> None:
+        self.db.execute("DELETE FROM permits WHERE id = ?", (permit_id,))
+
+
 class CategoryRepository:
     """Categories are folders at the catalog root that group products, and
     (like sub categories inside a product) nest to any depth via a
@@ -1120,6 +1174,56 @@ class DesignRepository:
 
 
 # ============================================================
+# DOCUMENT CASCADE DELETE HELPERS
+# ------------------------------------------------------------
+# The pipeline is Quotation -> Proforma Invoice -> Purchase Order(s) ->
+# Purchase Invoice -> Packing List. Deleting any document deletes every
+# document generated under it (a real cascade), so these are called from
+# the repository .delete() methods below, deepest table first, all inside
+# the same transaction as the parent's own DELETE.
+# ============================================================
+def _delete_purchase_invoice_pdf_files(paths) -> None:
+    if not paths:
+        return
+    import os
+    from config import Config
+    for path in paths:
+        if not path:
+            continue
+        full_path = os.path.join(Config.PURCHASE_INVOICE_UPLOAD_FOLDER, os.path.basename(path))
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+
+def _cascade_delete_purchase_invoice(conn, purchase_invoice_id: int) -> None:
+    row = conn.execute(
+        "SELECT supplier_pdf_path FROM purchase_invoices WHERE id = ?", (purchase_invoice_id,)
+    ).fetchone()
+    conn.execute("DELETE FROM packing_lists WHERE purchase_invoice_id = ?", (purchase_invoice_id,))
+    conn.execute("DELETE FROM purchase_invoices WHERE id = ?", (purchase_invoice_id,))
+    if row:
+        _delete_purchase_invoice_pdf_files([row["supplier_pdf_path"]])
+
+
+def _cascade_delete_purchase_order(conn, purchase_order_id: int) -> None:
+    for row in conn.execute(
+        "SELECT id FROM purchase_invoices WHERE purchase_order_id = ?", (purchase_order_id,)
+    ).fetchall():
+        _cascade_delete_purchase_invoice(conn, row["id"])
+    conn.execute("DELETE FROM packing_lists WHERE purchase_order_id = ?", (purchase_order_id,))
+    conn.execute("DELETE FROM purchase_orders WHERE id = ?", (purchase_order_id,))
+
+
+def _cascade_delete_proforma_invoice(conn, proforma_invoice_id: int) -> None:
+    for row in conn.execute(
+        "SELECT id FROM purchase_orders WHERE proforma_invoice_id = ?", (proforma_invoice_id,)
+    ).fetchall():
+        _cascade_delete_purchase_order(conn, row["id"])
+    conn.execute("DELETE FROM packing_lists WHERE proforma_invoice_id = ?", (proforma_invoice_id,))
+    conn.execute("DELETE FROM proforma_invoices WHERE id = ?", (proforma_invoice_id,))
+
+
+# ============================================================
 # QUOTATION REPOSITORY (header + line items)
 # ============================================================
 class QuotationRepository:
@@ -1238,15 +1342,26 @@ class QuotationRepository:
                 conn.execute(
                     """INSERT INTO quotation_items
                        (quotation_id, sr_no, product_id, product_name, dimension_mm, hsn_code,
-                        quantity_boxes, quantity_value, unit, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, pallets, quantity_value, unit, price_usd, total_usd)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (quotation_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
-                     item.hsn_code, item.quantity_boxes, item.quantity_value, item.unit,
+                     item.hsn_code, item.quantity_boxes, item.pallets, item.quantity_value, item.unit,
                      item.price_usd, item.total_usd),
                 )
 
     def delete(self, quotation_id: int) -> None:
-        self.db.execute("DELETE FROM quotations WHERE id = ?", (quotation_id,))
+        """Deleting a quotation cascades to every document generated under
+        it: proforma invoices raised from it (which themselves cascade to
+        their purchase orders/invoices/packing lists - see
+        _cascade_delete_proforma_invoice) and any packing list made
+        directly from the quotation."""
+        with self.db.get_connection() as conn:
+            for row in conn.execute(
+                "SELECT id FROM proforma_invoices WHERE quotation_id = ?", (quotation_id,)
+            ).fetchall():
+                _cascade_delete_proforma_invoice(conn, row["id"])
+            conn.execute("DELETE FROM packing_lists WHERE quotation_id = ?", (quotation_id,))
+            conn.execute("DELETE FROM quotations WHERE id = ?", (quotation_id,))
 
 
 class ProformaInvoiceRepository:
@@ -1329,6 +1444,21 @@ class ProformaInvoiceRepository:
             result[row["quotation_id"]] = row["id"]
         return result
 
+    def quotation_id_map(self, proforma_invoice_ids: List[int]) -> dict:
+        """proforma_invoice_id -> quotation_id for every invoice in the list
+        that has one, in a single query - ProformaFulfilmentService's
+        quotation-ancestor fallback batches through this instead of loading
+        each invoice one at a time."""
+        if not proforma_invoice_ids:
+            return {}
+        placeholders = ",".join("?" for _ in proforma_invoice_ids)
+        rows = self.db.query(
+            f"SELECT id, quotation_id FROM proforma_invoices "
+            f"WHERE id IN ({placeholders}) AND quotation_id IS NOT NULL",
+            tuple(proforma_invoice_ids),
+        )
+        return {row["id"]: row["quotation_id"] for row in rows}
+
     def create(self, invoice: ProformaInvoice) -> ProformaInvoice:
         new_id = self.db.execute(
             """INSERT INTO proforma_invoices
@@ -1339,8 +1469,8 @@ class ProformaInvoiceRepository:
                 variation_in_qty, delivery_period, container_details, terms_of_delivery, payment_terms,
                 remarks, sea_freight, insurance, certification, other_charges, discount_amount,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
-                bank_address, display_mode, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                bank_address, display_mode, status, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
@@ -1351,12 +1481,16 @@ class ProformaInvoiceRepository:
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount, invoice.bank_name,
              invoice.bank_account_number, invoice.bank_ifsc_code, invoice.bank_swift_code,
-             invoice.bank_branch, invoice.bank_address, invoice.display_mode, invoice.created_by),
+             invoice.bank_branch, invoice.bank_address, invoice.display_mode, invoice.status,
+             invoice.created_by),
         )
         self._replace_items(new_id, invoice.items)
         return self.get_by_id(new_id)
 
     def update(self, invoice_id: int, invoice: ProformaInvoice) -> None:
+        """Deliberately does NOT write `status` - draft/confirmed is only ever
+        moved by update_status below, so re-saving an invoice can never
+        silently un-confirm it (or confirm it) as a side effect."""
         self.db.execute(
             """UPDATE proforma_invoices SET invoice_date = ?, lead_id = ?, quotation_id = ?,
                                              export_ref_no = ?, buyer_order_no = ?, other_reference = ?,
@@ -1386,6 +1520,26 @@ class ProformaInvoiceRepository:
         )
         self._replace_items(invoice_id, invoice.items)
 
+    def update_status(self, invoice_id: int, status: str) -> None:
+        self.db.execute(
+            "UPDATE proforma_invoices SET status = ?, updated_at = datetime('now') WHERE id = ?",
+            (status, invoice_id),
+        )
+
+    def list_by_status(self, company_id: int, status: str) -> List[ProformaInvoice]:
+        """Every invoice at one status, newest first - powers the "confirmed,
+        purchase orders still pending" reminder feed."""
+        rows = self.db.query(
+            """SELECT pi.*, u.full_name AS created_by_name,
+                      COALESCE((SELECT SUM(total_usd) FROM proforma_invoice_items WHERE proforma_invoice_id = pi.id), 0) AS items_total
+               FROM proforma_invoices pi
+               JOIN users u ON u.id = pi.created_by
+               WHERE pi.company_id = ? AND pi.status = ?
+               ORDER BY pi.invoice_date DESC, pi.id DESC""",
+            (company_id, status),
+        )
+        return [ProformaInvoice.from_row(r) for r in rows]
+
     def _replace_items(self, invoice_id: int, items: List[ProformaInvoiceItem]) -> None:
         with self.db.get_connection() as conn:
             conn.execute("DELETE FROM proforma_invoice_items WHERE proforma_invoice_id = ?", (invoice_id,))
@@ -1401,7 +1555,227 @@ class ProformaInvoiceRepository:
                 )
 
     def delete(self, invoice_id: int) -> None:
-        self.db.execute("DELETE FROM proforma_invoices WHERE id = ?", (invoice_id,))
+        """Deleting a proforma invoice cascades to every purchase order
+        raised against it (which themselves cascade further, see
+        _cascade_delete_purchase_order) and any packing list made directly
+        from this proforma invoice."""
+        with self.db.get_connection() as conn:
+            _cascade_delete_proforma_invoice(conn, invoice_id)
+
+
+class ExportInvoiceRepository:
+    """Persistence for the Export Invoice: the header row plus its items and
+    the four child lists (proforma links, buyer orders, containers, per-
+    container 11B rows, purchase details). It is a leaf of the pipeline -
+    nothing is generated from it - so delete just cascades its own children
+    (all ON DELETE CASCADE). Mirrors ProformaInvoiceRepository."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS cnt FROM export_invoices WHERE company_id = ? AND export_invoice_number LIKE ?",
+            (company_id, f"{number_prefix}%"),
+        )
+        return row["cnt"] if row else 0
+
+    def get_by_id(self, invoice_id: int) -> Optional[ExportInvoice]:
+        row = self.db.query_one(
+            """SELECT ei.*, u.full_name AS created_by_name FROM export_invoices ei
+               JOIN users u ON u.id = ei.created_by WHERE ei.id = ?""",
+            (invoice_id,),
+        )
+        if not row:
+            return None
+        invoice = ExportInvoice.from_row(row)
+        invoice.items = [
+            ExportInvoiceItem.from_row(r) for r in self.db.query(
+                "SELECT * FROM export_invoice_items WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.proforma_invoice_ids = [
+            r["proforma_invoice_id"] for r in self.db.query(
+                "SELECT proforma_invoice_id FROM export_invoice_proforma_links WHERE export_invoice_id = ? ORDER BY id",
+                (invoice_id,),
+            )
+        ]
+        invoice.linked_proformas = [
+            dict(r) for r in self.db.query(
+                """SELECT pi.id, pi.invoice_number, pi.invoice_date
+                   FROM export_invoice_proforma_links l
+                   JOIN proforma_invoices pi ON pi.id = l.proforma_invoice_id
+                   WHERE l.export_invoice_id = ? ORDER BY pi.invoice_date, pi.id""",
+                (invoice_id,),
+            )
+        ]
+        invoice.buyer_orders = [
+            dict(r) for r in self.db.query(
+                "SELECT order_no, order_date, proforma_invoice_id FROM export_invoice_buyer_orders "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.containers = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_count FROM export_invoice_containers "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.container_details = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no "
+                "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.purchase_details = [
+            dict(r) for r in self.db.query(
+                "SELECT supplier_gstin, supplier_invoice_no FROM export_invoice_purchase_details "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        return invoice
+
+    def list_all(self, company_id: int) -> List[ExportInvoice]:
+        rows = self.db.query(
+            """SELECT ei.*, u.full_name AS created_by_name,
+                      COALESCE((SELECT SUM(total_usd) FROM export_invoice_items WHERE export_invoice_id = ei.id), 0) AS items_total,
+                      (SELECT COUNT(*) FROM export_invoice_proforma_links WHERE export_invoice_id = ei.id) AS proforma_link_count
+               FROM export_invoices ei
+               JOIN users u ON u.id = ei.created_by
+               WHERE ei.company_id = ?
+               ORDER BY ei.invoice_date DESC, ei.id DESC""",
+            (company_id,),
+        )
+        invoices = []
+        for r in rows:
+            invoice = ExportInvoice.from_row(r)
+            # list view doesn't load the link rows; carry just the count as a
+            # placeholder list so templates can show "how many PIs".
+            invoice.proforma_invoice_ids = [None] * (r["proforma_link_count"] or 0)
+            invoices.append(invoice)
+        return invoices
+
+    def create(self, invoice: ExportInvoice) -> ExportInvoice:
+        new_id = self.db.execute(
+            """INSERT INTO export_invoices
+               (company_id, export_invoice_number, invoice_date, lead_id, consignee_name, consignee_address,
+                notify_name, notify_address, country_of_origin, country_of_destination, place_of_receipt,
+                pre_carriage_by, port_of_loading, port_of_discharge, final_destination, nature_of_contract,
+                payment_terms, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
+                sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
+                bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
+                authorised_person_name, authorised_person_designation, self_sealing_declaration,
+                shipping_bill_pdf_path, examination_date, location_code_08b, issuing_authority,
+                issuing_authority_address, permission_no, permission_date, permission_expiry,
+                manufacturer_name, manufacturer_address, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
+        )
+        self._replace_children(new_id, invoice)
+        return self.get_by_id(new_id)
+
+    def update(self, invoice_id: int, invoice: ExportInvoice) -> None:
+        self.db.execute(
+            """UPDATE export_invoices SET invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
+                   notify_name = ?, notify_address = ?, country_of_origin = ?, country_of_destination = ?,
+                   place_of_receipt = ?, pre_carriage_by = ?, port_of_loading = ?, port_of_discharge = ?,
+                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, export_under = ?,
+                   epcg_number = ?, epcg_date = ?, loading_type = ?, tax_mode = ?, exchange_rate = ?,
+                   sea_freight = ?, insurance = ?, certification = ?, other_charges = ?, discount_amount = ?,
+                   fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
+                   bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
+                   authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
+                   examination_date = ?, location_code_08b = ?, issuing_authority = ?, issuing_authority_address = ?,
+                   permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
+                   manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            self._header_params(invoice) + (invoice_id,),
+        )
+        self._replace_children(invoice_id, invoice)
+
+    def _header_params(self, invoice: ExportInvoice) -> tuple:
+        """The EDITABLE header column values, in the exact order both INSERT
+        and UPDATE list them (from invoice_date onward). company_id and
+        export_invoice_number are immutable, so create() prepends them and
+        update() never touches them. Kept as one tuple so the two long column
+        lists can never drift apart."""
+        return (
+            invoice.invoice_date, invoice.lead_id,
+            invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
+            invoice.country_of_origin, invoice.country_of_destination, invoice.place_of_receipt,
+            invoice.pre_carriage_by, invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
+            invoice.nature_of_contract, invoice.payment_terms, invoice.export_under, invoice.epcg_number,
+            invoice.epcg_date, invoice.loading_type, invoice.tax_mode, invoice.exchange_rate, invoice.sea_freight,
+            invoice.insurance, invoice.certification, invoice.other_charges, invoice.discount_amount,
+            invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
+            invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
+            invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
+            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b,
+            invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
+            invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
+            invoice.manufacturer_address, invoice.remarks,
+        )
+
+    def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM export_invoice_items WHERE export_invoice_id = ?", (invoice_id,))
+            for item in invoice.items:
+                conn.execute(
+                    """INSERT INTO export_invoice_items
+                       (export_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code, surface,
+                        pallets, quantity_boxes, quantity_value, unit, price_usd, total_usd, igst_percent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm, item.hsn_code,
+                     item.surface, item.pallets, item.quantity_boxes, item.quantity_value, item.unit,
+                     item.price_usd, item.total_usd, item.igst_percent),
+                )
+
+            conn.execute("DELETE FROM export_invoice_proforma_links WHERE export_invoice_id = ?", (invoice_id,))
+            for pid in dict.fromkeys(invoice.proforma_invoice_ids):  # de-dup, keep order
+                conn.execute(
+                    "INSERT INTO export_invoice_proforma_links (export_invoice_id, proforma_invoice_id) VALUES (?, ?)",
+                    (invoice_id, pid),
+                )
+
+            conn.execute("DELETE FROM export_invoice_buyer_orders WHERE export_invoice_id = ?", (invoice_id,))
+            for i, bo in enumerate(invoice.buyer_orders, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_buyer_orders (export_invoice_id, sr_no, order_no, order_date, proforma_invoice_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (invoice_id, i, bo.get("order_no") or None, bo.get("order_date") or None,
+                     bo.get("proforma_invoice_id") or None),
+                )
+
+            conn.execute("DELETE FROM export_invoice_containers WHERE export_invoice_id = ?", (invoice_id,))
+            for i, c in enumerate(invoice.containers, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_containers (export_invoice_id, sr_no, container_type, container_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, c.get("container_type") or "", int(c.get("container_count") or 0)),
+                )
+
+            conn.execute("DELETE FROM export_invoice_container_details WHERE export_invoice_id = ?", (invoice_id,))
+            for i, cd in enumerate(invoice.container_details, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_container_details "
+                    "(export_invoice_id, sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, cd.get("container_type") or None, cd.get("container_no") or None,
+                     cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None),
+                )
+
+            conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))
+            for i, pd in enumerate(invoice.purchase_details, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_purchase_details (export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None),
+                )
+
+    def delete(self, invoice_id: int) -> None:
+        # Leaf document - the child tables all cascade, nothing downstream to null.
+        self.db.execute("DELETE FROM export_invoices WHERE id = ?", (invoice_id,))
 
 
 class PurchaseOrderRepository:
@@ -1473,26 +1847,45 @@ class PurchaseOrderRepository:
 
     def list_for_proforma(self, proforma_invoice_id: int) -> List[PurchaseOrder]:
         """Every purchase order generated from this proforma invoice, newest
-        first - used to link back to an already-generated PO instead of
-        starting a duplicate one."""
+        first. One invoice is normally split across several suppliers, so the
+        invoice page lists all of them rather than linking to a single PO."""
         rows = self.db.query(
-            self._SELECT.format(items_total="") + " WHERE po.proforma_invoice_id = ? ORDER BY po.id DESC",
+            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
+            " WHERE po.proforma_invoice_id = ? ORDER BY po.id DESC",
             (proforma_invoice_id,),
         )
         return [PurchaseOrder.from_row(r) for r in rows]
 
-    def map_by_proforma(self, company_id: int) -> dict:
-        """proforma_invoice_id -> most recently created purchase_order id, for
-        this company. Powers the proforma list page's "View PO" link."""
+    def count_map_by_proforma(self, company_id: int) -> dict:
+        """proforma_invoice_id -> how many purchase orders point at it, so the
+        proforma list can show "3 POs" without an N+1 query."""
         rows = self.db.query(
-            "SELECT proforma_invoice_id, id FROM purchase_orders "
-            "WHERE company_id = ? AND proforma_invoice_id IS NOT NULL ORDER BY id",
+            "SELECT proforma_invoice_id, COUNT(*) AS cnt FROM purchase_orders "
+            "WHERE company_id = ? AND proforma_invoice_id IS NOT NULL GROUP BY proforma_invoice_id",
             (company_id,),
         )
-        result = {}
-        for row in rows:
-            result[row["proforma_invoice_id"]] = row["id"]
-        return result
+        return {row["proforma_invoice_id"]: row["cnt"] for row in rows}
+
+    def product_totals_for_proforma(self, company_id: int, proforma_invoice_id: int) -> List[dict]:
+        """What's already been placed across every purchase order already
+        linked to this proforma invoice, summed per product line - the
+        'placed' side of ProformaFulfilmentService.product_status (the PO-
+        creation-time analogue of design_totals_for_linked_purchase_orders,
+        which does the same job one level down at packing-list granularity).
+        Keyed by product_id when known, else the row groups on product_name
+        too so hand-typed lines aren't collapsed into one NULL bucket."""
+        rows = self.db.query(
+            """SELECT i.product_id, i.product_name,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(i.unit) AS unit
+               FROM purchase_orders po
+               JOIN purchase_order_items i ON i.purchase_order_id = po.id
+               WHERE po.company_id = ? AND po.proforma_invoice_id = ?
+               GROUP BY i.product_id, i.product_name""",
+            (company_id, proforma_invoice_id),
+        )
+        return [dict(r) for r in rows]
 
     def create(self, purchase_order: PurchaseOrder) -> PurchaseOrder:
         new_id = self.db.execute(
@@ -1501,8 +1894,8 @@ class PurchaseOrderRepository:
                 seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, delivery_time,
                 advance_percent, payment_terms, remarks, igst_percent, cgst_percent, sgst_percent,
-                created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                purchase_type, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_order.company_id, purchase_order.po_number, purchase_order.po_date,
              purchase_order.lead_id, purchase_order.proforma_invoice_id, purchase_order.seller_supplier_id,
              purchase_order.seller_name, purchase_order.seller_address, purchase_order.seller_pan,
@@ -1510,7 +1903,7 @@ class PurchaseOrderRepository:
              purchase_order.port_of_discharge, purchase_order.container_details, purchase_order.delivery_time,
              purchase_order.advance_percent, purchase_order.payment_terms, purchase_order.remarks,
              purchase_order.igst_percent, purchase_order.cgst_percent, purchase_order.sgst_percent,
-             purchase_order.created_by),
+             purchase_order.purchase_type, purchase_order.created_by),
         )
         self._replace_items(new_id, purchase_order.items)
         return self.get_by_id(new_id)
@@ -1523,7 +1916,7 @@ class PurchaseOrderRepository:
                                            port_of_loading = ?, port_of_discharge = ?, container_details = ?,
                                            delivery_time = ?, advance_percent = ?, payment_terms = ?,
                                            remarks = ?, igst_percent = ?, cgst_percent = ?, sgst_percent = ?,
-                                           updated_at = datetime('now')
+                                           purchase_type = ?, updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_order.po_date, purchase_order.lead_id, purchase_order.proforma_invoice_id,
              purchase_order.seller_supplier_id, purchase_order.seller_name, purchase_order.seller_address,
@@ -1531,7 +1924,7 @@ class PurchaseOrderRepository:
              purchase_order.port_of_loading, purchase_order.port_of_discharge, purchase_order.container_details,
              purchase_order.delivery_time, purchase_order.advance_percent, purchase_order.payment_terms,
              purchase_order.remarks, purchase_order.igst_percent, purchase_order.cgst_percent,
-             purchase_order.sgst_percent, purchase_order_id),
+             purchase_order.sgst_percent, purchase_order.purchase_type, purchase_order_id),
         )
         self._replace_items(purchase_order_id, purchase_order.items)
 
@@ -1550,7 +1943,176 @@ class PurchaseOrderRepository:
                 )
 
     def delete(self, purchase_order_id: int) -> None:
-        self.db.execute("DELETE FROM purchase_orders WHERE id = ?", (purchase_order_id,))
+        """Deleting a purchase order cascades to its purchase invoice
+        (including the supplier's uploaded PDF, see
+        _cascade_delete_purchase_invoice) and any packing list made
+        directly from this purchase order."""
+        with self.db.get_connection() as conn:
+            _cascade_delete_purchase_order(conn, purchase_order_id)
+
+
+class PurchaseInvoiceRepository:
+    """Mirrors PurchaseOrderRepository layer-for-layer: header + line items,
+    day-scoped number sequence, reference-only purchase_order/lead links -
+    plus a third child collection, vehicle numbers, which are a plain
+    ordered list of strings rather than a full line-item table."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS cnt FROM purchase_invoices WHERE company_id = ? AND purchase_invoice_number LIKE ?",
+            (company_id, f"{number_prefix}%"),
+        )
+        return row["cnt"] if row else 0
+
+    _SELECT = """
+        SELECT pinv.*, u.full_name AS created_by_name, po.po_number AS purchase_order_number{items_total}
+        FROM purchase_invoices pinv
+        JOIN users u ON u.id = pinv.created_by
+        LEFT JOIN purchase_orders po ON po.id = pinv.purchase_order_id
+    """
+    _ITEMS_TOTAL = (", COALESCE((SELECT SUM(total_inr) FROM purchase_invoice_items "
+                    "WHERE purchase_invoice_id = pinv.id), 0) AS items_total")
+
+    def _attach_children(self, purchase_invoice: PurchaseInvoice) -> PurchaseInvoice:
+        item_rows = self.db.query(
+            "SELECT * FROM purchase_invoice_items WHERE purchase_invoice_id = ? ORDER BY sr_no",
+            (purchase_invoice.id,),
+        )
+        purchase_invoice.items = [PurchaseInvoiceItem.from_row(r) for r in item_rows]
+        vehicle_rows = self.db.query(
+            "SELECT vehicle_number FROM purchase_invoice_vehicles WHERE purchase_invoice_id = ? ORDER BY sr_no",
+            (purchase_invoice.id,),
+        )
+        purchase_invoice.vehicle_numbers = [r["vehicle_number"] for r in vehicle_rows]
+        return purchase_invoice
+
+    def get_by_id(self, purchase_invoice_id: int) -> Optional[PurchaseInvoice]:
+        row = self.db.query_one(
+            self._SELECT.format(items_total="") + " WHERE pinv.id = ?", (purchase_invoice_id,)
+        )
+        if not row:
+            return None
+        return self._attach_children(PurchaseInvoice.from_row(row))
+
+    def list_all(self, company_id: int) -> List[PurchaseInvoice]:
+        rows = self.db.query(
+            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
+            " WHERE pinv.company_id = ? ORDER BY pinv.invoice_date DESC, pinv.id DESC",
+            (company_id,),
+        )
+        return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def list_for_purchase_order(self, purchase_order_id: int) -> List[PurchaseInvoice]:
+        """Every purchase invoice generated from this purchase order, newest
+        first. Normally just one, but nothing stops a supplier's shipment
+        against one PO arriving (and being invoiced) in more than one part."""
+        rows = self.db.query(
+            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
+            " WHERE pinv.purchase_order_id = ? ORDER BY pinv.id DESC",
+            (purchase_order_id,),
+        )
+        return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def list_for_lead(self, lead_id: int) -> List[PurchaseInvoice]:
+        rows = self.db.query(
+            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
+            " WHERE pinv.lead_id = ? ORDER BY pinv.invoice_date DESC, pinv.id DESC",
+            (lead_id,),
+        )
+        return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def count_map_by_purchase_order(self, company_id: int) -> dict:
+        """purchase_order_id -> how many purchase invoices point at it, so
+        the PO list can show a count without an N+1 query."""
+        rows = self.db.query(
+            "SELECT purchase_order_id, COUNT(*) AS cnt FROM purchase_invoices "
+            "WHERE company_id = ? AND purchase_order_id IS NOT NULL GROUP BY purchase_order_id",
+            (company_id,),
+        )
+        return {row["purchase_order_id"]: row["cnt"] for row in rows}
+
+    def create(self, purchase_invoice: PurchaseInvoice) -> PurchaseInvoice:
+        new_id = self.db.execute(
+            """INSERT INTO purchase_invoices
+               (company_id, purchase_invoice_number, invoice_number, invoice_date, purchase_order_id, lead_id,
+                seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
+                port_of_loading, port_of_discharge, container_details, transporter_name, epcg_number, epcg_date,
+                supplier_pdf_path, discount_amount, insurance_other, freight, igst_amount, cgst_amount,
+                sgst_amount, round_off, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (purchase_invoice.company_id, purchase_invoice.purchase_invoice_number, purchase_invoice.invoice_number,
+             purchase_invoice.invoice_date, purchase_invoice.purchase_order_id, purchase_invoice.lead_id,
+             purchase_invoice.seller_supplier_id, purchase_invoice.seller_name, purchase_invoice.seller_address,
+             purchase_invoice.seller_pan, purchase_invoice.seller_gstin, purchase_invoice.seller_ref_no,
+             purchase_invoice.port_of_loading, purchase_invoice.port_of_discharge, purchase_invoice.container_details,
+             purchase_invoice.transporter_name, purchase_invoice.epcg_number, purchase_invoice.epcg_date,
+             purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount, purchase_invoice.insurance_other,
+             purchase_invoice.freight, purchase_invoice.igst_amount, purchase_invoice.cgst_amount,
+             purchase_invoice.sgst_amount, purchase_invoice.round_off, purchase_invoice.remarks,
+             purchase_invoice.created_by),
+        )
+        self._replace_items(new_id, purchase_invoice.items)
+        self._replace_vehicles(new_id, purchase_invoice.vehicle_numbers)
+        return self.get_by_id(new_id)
+
+    def update(self, purchase_invoice_id: int, purchase_invoice: PurchaseInvoice) -> None:
+        self.db.execute(
+            """UPDATE purchase_invoices SET invoice_number = ?, invoice_date = ?, purchase_order_id = ?,
+                                             lead_id = ?, seller_supplier_id = ?, seller_name = ?,
+                                             seller_address = ?, seller_pan = ?, seller_gstin = ?, seller_ref_no = ?,
+                                             port_of_loading = ?, port_of_discharge = ?, container_details = ?,
+                                             transporter_name = ?, epcg_number = ?, epcg_date = ?,
+                                             supplier_pdf_path = ?, discount_amount = ?, insurance_other = ?,
+                                             freight = ?, igst_amount = ?, cgst_amount = ?, sgst_amount = ?,
+                                             round_off = ?, remarks = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (purchase_invoice.invoice_number, purchase_invoice.invoice_date, purchase_invoice.purchase_order_id,
+             purchase_invoice.lead_id, purchase_invoice.seller_supplier_id, purchase_invoice.seller_name,
+             purchase_invoice.seller_address, purchase_invoice.seller_pan, purchase_invoice.seller_gstin,
+             purchase_invoice.seller_ref_no, purchase_invoice.port_of_loading, purchase_invoice.port_of_discharge,
+             purchase_invoice.container_details, purchase_invoice.transporter_name, purchase_invoice.epcg_number,
+             purchase_invoice.epcg_date, purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount,
+             purchase_invoice.insurance_other, purchase_invoice.freight, purchase_invoice.igst_amount,
+             purchase_invoice.cgst_amount, purchase_invoice.sgst_amount, purchase_invoice.round_off,
+             purchase_invoice.remarks, purchase_invoice_id),
+        )
+        self._replace_items(purchase_invoice_id, purchase_invoice.items)
+        self._replace_vehicles(purchase_invoice_id, purchase_invoice.vehicle_numbers)
+
+    def _replace_items(self, purchase_invoice_id: int, items: List[PurchaseInvoiceItem]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM purchase_invoice_items WHERE purchase_invoice_id = ?", (purchase_invoice_id,))
+            for item in items:
+                conn.execute(
+                    """INSERT INTO purchase_invoice_items
+                       (purchase_invoice_id, sr_no, product_id, product_name, hsn_code,
+                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (purchase_invoice_id, item.sr_no, item.product_id, item.product_name, item.hsn_code,
+                     item.quantity_boxes, item.quantity_value, item.unit, item.price_inr,
+                     item.price_per, item.total_inr),
+                )
+
+    def _replace_vehicles(self, purchase_invoice_id: int, vehicle_numbers: List[str]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM purchase_invoice_vehicles WHERE purchase_invoice_id = ?", (purchase_invoice_id,)
+            )
+            for sr_no, vehicle_number in enumerate(vehicle_numbers, start=1):
+                conn.execute(
+                    "INSERT INTO purchase_invoice_vehicles (purchase_invoice_id, sr_no, vehicle_number) "
+                    "VALUES (?, ?, ?)",
+                    (purchase_invoice_id, sr_no, vehicle_number),
+                )
+
+    def delete(self, purchase_invoice_id: int) -> None:
+        """Deleting a purchase invoice cascades to any packing list made
+        directly from it, and removes its own uploaded supplier PDF."""
+        with self.db.get_connection() as conn:
+            _cascade_delete_purchase_invoice(conn, purchase_invoice_id)
 
 
 class PackingListRepository:
@@ -1569,12 +2131,14 @@ class PackingListRepository:
 
     _SELECT = """
         SELECT pl.*, u.full_name AS created_by_name, pi.invoice_number AS proforma_invoice_number,
-               q.quotation_number AS quotation_number, po.po_number AS purchase_order_number
+               q.quotation_number AS quotation_number, po.po_number AS purchase_order_number,
+               pinv.purchase_invoice_number AS purchase_invoice_number
         FROM packing_lists pl
         JOIN users u ON u.id = pl.created_by
         LEFT JOIN proforma_invoices pi ON pi.id = pl.proforma_invoice_id
         LEFT JOIN quotations q ON q.id = pl.quotation_id
         LEFT JOIN purchase_orders po ON po.id = pl.purchase_order_id
+        LEFT JOIN purchase_invoices pinv ON pinv.id = pl.purchase_invoice_id
     """
 
     def get_by_id(self, packing_list_id: int) -> Optional[PackingList]:
@@ -1609,6 +2173,8 @@ class PackingListRepository:
             query += " AND pl.quotation_id IS NOT NULL"
         elif doc_type == "purchase_order":
             query += " AND pl.purchase_order_id IS NOT NULL"
+        elif doc_type == "purchase_invoice":
+            query += " AND pl.purchase_invoice_id IS NOT NULL"
         if client_name:
             query += " AND pl.consignee_name = ?"
             params.append(client_name)
@@ -1666,19 +2232,152 @@ class PackingListRepository:
         )
         return self._attach_items([PackingList.from_row(r) for r in rows])
 
+    def list_for_purchase_invoice(self, purchase_invoice_id: int) -> List[PackingList]:
+        """Every packing list generated from one Purchase Invoice (that
+        invoice's own PL) - same shape as list_for_purchase_order."""
+        rows = self.db.query(
+            self._SELECT + " WHERE pl.purchase_invoice_id = ? ORDER BY pl.id",
+            (purchase_invoice_id,),
+        )
+        return self._attach_items([PackingList.from_row(r) for r in rows])
+
+    # ---- design coverage (PI packing list vs. its purchase orders' packing lists) ----
+    # Both queries below return the SAME row shape - one row per
+    # (proforma invoice, product, design) with the boxes/quantity summed
+    # across every matching packing list - so the service can subtract one
+    # side from the other without reshaping anything. Grouping on the stored
+    # *names* as well as the ids keeps hand-typed rows (no product_id/
+    # design_id) visible instead of collapsing them all into one NULL group.
+    _DESIGN_TOTALS_COLUMNS = """
+        i.product_id, i.product_name, i.design_id, i.design_name,
+        COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+        COALESCE(SUM(i.quantity_value), 0) AS quantity,
+        MIN(i.unit) AS unit
+    """
+    @staticmethod
+    def _design_totals_group_by(key_alias: str) -> str:
+        return f" GROUP BY {key_alias}, i.product_id, i.product_name, i.design_id, i.design_name"
+
+    def design_totals_for_proforma(self, company_id: int, proforma_invoice_ids: List[int]) -> List[dict]:
+        """What each proforma invoice's OWN packing list(s) say has to be
+        made. A PL carrying a purchase_order_id is that PO's packing list,
+        not the PI's, so it is excluded here even if it also happens to
+        reference the invoice."""
+        if not proforma_invoice_ids:
+            return []
+        placeholders = ",".join("?" for _ in proforma_invoice_ids)
+        rows = self.db.query(
+            f"""SELECT pl.proforma_invoice_id AS pi_id, {self._DESIGN_TOTALS_COLUMNS}
+                FROM packing_lists pl
+                JOIN packing_list_items i ON i.packing_list_id = pl.id
+                WHERE pl.company_id = ? AND pl.purchase_order_id IS NULL
+                  AND pl.proforma_invoice_id IN ({placeholders})
+                {self._design_totals_group_by("pi_id")}""",
+            (company_id, *proforma_invoice_ids),
+        )
+        return [dict(r) for r in rows]
+
+    def design_totals_for_quotation(self, company_id: int, quotation_ids: List[int]) -> List[dict]:
+        """Same shape as design_totals_for_proforma, but grouped by the
+        packing list's quotation_id - the fallback source for a proforma
+        invoice that was itself generated from a quotation which already has
+        its own packing list (skipping the PI step), so the invoice never
+        got a packing list directly against it. Mirrors the ancestor walk
+        PackingListService._ancestor_packing_list already does for imports -
+        see ProformaFulfilmentService.design_status_map for why the
+        fulfilment side has to resolve the same ancestor, not just the
+        direct one."""
+        if not quotation_ids:
+            return []
+        placeholders = ",".join("?" for _ in quotation_ids)
+        rows = self.db.query(
+            f"""SELECT pl.quotation_id AS q_id, {self._DESIGN_TOTALS_COLUMNS}
+                FROM packing_lists pl
+                JOIN packing_list_items i ON i.packing_list_id = pl.id
+                WHERE pl.company_id = ? AND pl.purchase_order_id IS NULL
+                  AND pl.quotation_id IN ({placeholders})
+                {self._design_totals_group_by("q_id")}""",
+            (company_id, *quotation_ids),
+        )
+        return [dict(r) for r in rows]
+
+    def design_totals_for_linked_purchase_orders(self, company_id: int,
+                                                  proforma_invoice_ids: List[int]) -> List[dict]:
+        """What has already been placed: the same totals taken across the
+        packing lists of every purchase order linked to each invoice. Keyed
+        by the PO's proforma_invoice_id, so a PO PL never needs a PI
+        reference of its own."""
+        if not proforma_invoice_ids:
+            return []
+        placeholders = ",".join("?" for _ in proforma_invoice_ids)
+        rows = self.db.query(
+            f"""SELECT po.proforma_invoice_id AS pi_id, {self._DESIGN_TOTALS_COLUMNS}
+                FROM packing_lists pl
+                JOIN purchase_orders po ON po.id = pl.purchase_order_id
+                JOIN packing_list_items i ON i.packing_list_id = pl.id
+                WHERE pl.company_id = ? AND po.proforma_invoice_id IN ({placeholders})
+                {self._design_totals_group_by("pi_id")}""",
+            (company_id, *proforma_invoice_ids),
+        )
+        return [dict(r) for r in rows]
+
+    # ---- inventory (designs bought = placed on a purchase order's packing list) ----
+    # A packing list carrying a purchase_order_id is a PO's packing list: the
+    # goods we've bought in. Summed per design, that's everything purchased;
+    # sales (yet to be modelled) will subtract from the same totals later.
+    def bought_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} bought across every purchase
+        order's packing list. Rows with no design_id (hand-typed lines) are
+        skipped - stock is only tracked for real catalog designs."""
+        rows = self.db.query(
+            """SELECT i.design_id AS design_id,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.pcs), 0) AS pcs,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(i.unit) AS unit
+               FROM packing_lists pl
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+                 AND i.design_id IS NOT NULL
+               GROUP BY i.design_id""",
+            (company_id,),
+        )
+        return {r["design_id"]: {"boxes": r["boxes"], "pcs": r["pcs"],
+                                 "quantity": r["quantity"], "unit": r["unit"]}
+                for r in rows}
+
+    def bought_history_for_design(self, company_id: int, design_id: int) -> List[dict]:
+        """One row per purchase-order packing list this design appears on -
+        the design's purchase history (the buy side of Purchase/Sale
+        history). Newest first."""
+        rows = self.db.query(
+            """SELECT po.po_number AS po_number, po.po_date AS po_date,
+                      po.seller_name AS seller_name, po.id AS purchase_order_id,
+                      pl.packing_list_number AS packing_list_number,
+                      i.quantity_boxes AS boxes, i.pcs AS pcs,
+                      i.quantity_value AS quantity, i.unit AS unit
+               FROM packing_lists pl
+               JOIN purchase_orders po ON po.id = pl.purchase_order_id
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               WHERE pl.company_id = ? AND i.design_id = ?
+               ORDER BY po.po_date DESC, po.id DESC""",
+            (company_id, design_id),
+        )
+        return [dict(r) for r in rows]
+
     def create(self, packing_list: PackingList) -> PackingList:
         new_id = self.db.execute(
             """INSERT INTO packing_lists
                (company_id, packing_list_number, packing_list_date, lead_id, proforma_invoice_id,
-                quotation_id, purchase_order_id, export_ref_no, buyer_order_no, other_reference,
-                consignee_name, consignee_address,
+                quotation_id, purchase_order_id, purchase_invoice_id, export_ref_no, buyer_order_no,
+                other_reference, consignee_name, consignee_address,
                 notify_name, notify_address, country_of_origin, country_of_destination, vessel_flight,
                 port_of_loading, port_of_discharge, final_destination, container_details,
                 terms_of_delivery, remarks, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (packing_list.company_id, packing_list.packing_list_number, packing_list.packing_list_date,
              packing_list.lead_id, packing_list.proforma_invoice_id, packing_list.quotation_id,
-             packing_list.purchase_order_id, packing_list.export_ref_no,
+             packing_list.purchase_order_id, packing_list.purchase_invoice_id, packing_list.export_ref_no,
              packing_list.buyer_order_no, packing_list.other_reference, packing_list.consignee_name,
              packing_list.consignee_address, packing_list.notify_name, packing_list.notify_address,
              packing_list.country_of_origin, packing_list.country_of_destination,
@@ -1692,7 +2391,7 @@ class PackingListRepository:
     def update(self, packing_list_id: int, packing_list: PackingList) -> None:
         self.db.execute(
             """UPDATE packing_lists SET packing_list_date = ?, lead_id = ?, proforma_invoice_id = ?,
-                                         quotation_id = ?, purchase_order_id = ?,
+                                         quotation_id = ?, purchase_order_id = ?, purchase_invoice_id = ?,
                                          export_ref_no = ?, buyer_order_no = ?, other_reference = ?,
                                          consignee_name = ?, consignee_address = ?, notify_name = ?,
                                          notify_address = ?, country_of_origin = ?, country_of_destination = ?,
@@ -1701,7 +2400,7 @@ class PackingListRepository:
                                          remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
             (packing_list.packing_list_date, packing_list.lead_id, packing_list.proforma_invoice_id,
-             packing_list.quotation_id, packing_list.purchase_order_id,
+             packing_list.quotation_id, packing_list.purchase_order_id, packing_list.purchase_invoice_id,
              packing_list.export_ref_no, packing_list.buyer_order_no, packing_list.other_reference,
              packing_list.consignee_name, packing_list.consignee_address, packing_list.notify_name,
              packing_list.notify_address, packing_list.country_of_origin,

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ current_category.name if current_category else 'Inventory' }}{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Inventory{{ ' · Category' if current_category }}</div>
+    <h1>{{ current_category.name if current_category else 'Inventory' }}</h1>
+    <div class="text-sm text-soft">The same catalog as Products, showing stock on hand. Open a product to see each design's current stock; open a design for its purchase &amp; sale history.</div>
+  </div>
+</div>
+
+<div class="breadcrumb-trail">
+  <a href="{{ url_for('inventory.list_inventory') }}">Inventory</a>
+  {% for c in breadcrumb %}
+    <span class="crumb-sep">/</span>
+    <a href="{{ url_for('inventory.list_inventory', category_id=c.id) }}">{{ c.name }}</a>
+  {% endfor %}
+</div>
+
+{% if not categories and not products %}
+  <div class="empty-state">
+    {{ 'This category is empty.' if current_category else 'No categories or products yet.' }}
+  </div>
+{% endif %}
+
+{% if categories %}
+<div class="card">
+  <div class="card-header"><h3>{{ 'Subcategories' if current_category else 'Categories' }}</h3></div>
+  <div class="folder-grid">
+    {% for category in categories %}
+    <div class="folder-tile">
+      <a class="folder-tile-link" href="{{ url_for('inventory.list_inventory', category_id=category.id) }}">
+        <span class="folder-icon">📁</span>
+        <span class="folder-name">{{ category.name }}</span>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if products %}
+<div class="card">
+  <div class="card-header"><h3>Products</h3></div>
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Product name</th>
+          <th>HSN code</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in products %}
+        <tr>
+          <td>
+            <strong>{{ product.product_name }}</strong>
+            {% if product.description %}<div class="text-sm text-soft">{{ product.description | truncate(80) }}</div>{% endif %}
+          </td>
+          <td class="text-sm">{{ product.hsn_code or '—' }}</td>
+          <td><a href="{{ url_for('inventory.view_product', product_id=product.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
