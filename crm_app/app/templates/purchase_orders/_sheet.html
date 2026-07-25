@@ -33,16 +33,16 @@
     padding: 3px 0;
   }
   .po-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
-  .po-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: center; word-wrap: break-word; }
+  .po-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: left; word-wrap: break-word; }
   .po-label { font-size: 9px; }
   .po-val { font-weight: bold; }
-  .po-center { text-align: center; }
+  .po-center { text-align: left; }
   /* Multi-line paragraph cells (addresses, remarks, the compliance note) -
      these span multiple rows or stand alone, so there's no sibling in the
      same row to vertically line up with; keep them reading from the top
      like a letterhead instead of centering a short block in a tall cell. */
   .po-left { text-align: left; vertical-align: top; }
-  .po-right { text-align: right; }
+  .po-right { text-align: left; }
   .po-mid { vertical-align: middle !important; }
   .po-side {
     writing-mode: vertical-rl;
@@ -62,13 +62,13 @@
   .po-buyer-text { padding-right: 115px; }
   .po-buyer-logo { position: absolute; top: 1px; right: 6px; bottom: 1px; display: flex; align-items: center; }
   .po-buyer-logo img { max-height: 100%; width: auto; max-width: 110px; object-fit: contain; }
-  .po-items thead td { text-align: center; vertical-align: middle; font-size: 9px; font-weight: bold; }
+  .po-items thead td { text-align: left; vertical-align: middle; font-size: 9px; font-weight: bold; }
   .po-items tbody tr.po-goods td, .po-items tbody tr.po-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
   {# .po-filler's height is measured in the browser - see templates/_page_filler.html #}
-  .po-charge-label { text-align: center; font-weight: bold; font-size: 9px; vertical-align: middle; }
+  .po-charge-label { text-align: left; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .po-sign-cell { height: 92px; padding: 4px 6px; }
   .po-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
-  .po-stamp { text-align: right; }
+  .po-stamp { text-align: left; }
   @media print {
     .po-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
   }
