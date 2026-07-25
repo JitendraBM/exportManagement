@@ -764,6 +764,7 @@ class PurchaseOrderItem:
     product_id: Optional[int] = None
     hsn_code: Optional[str] = None
     quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
     quantity_value: float = 0
     unit: str = "SQM"
     price_inr: float = 0
@@ -780,6 +781,7 @@ class PurchaseOrderItem:
             product_name=row["product_name"],
             hsn_code=row["hsn_code"],
             quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             quantity_value=row["quantity_value"],
             unit=row["unit"],
             price_inr=row["price_inr"],
@@ -1067,6 +1069,7 @@ class PackingListItem:
     box_per_pallet: Optional[float] = None
     pallets: Optional[float] = None
     quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
     pcs: Optional[float] = None
     quantity_value: float = 0
     unit: str = "SQM"
@@ -1087,6 +1090,7 @@ class PackingListItem:
             box_per_pallet=row["box_per_pallet"],
             pallets=row["pallets"],
             quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             pcs=row["pcs"],
             quantity_value=row["quantity_value"],
             unit=row["unit"],
@@ -1220,6 +1224,7 @@ class ProformaInvoiceItem:
     surface: Optional[str] = None  # optional finish (GLOSSY / MATT / ...), drives the surface-grouped print view
     pallets: Optional[float] = None
     quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
     quantity_value: float = 0
     unit: str = "SQM"
     price_usd: float = 0
@@ -1238,6 +1243,7 @@ class ProformaInvoiceItem:
             surface=row["surface"] if "surface" in row.keys() else None,
             pallets=row["pallets"],
             quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             quantity_value=row["quantity_value"],
             unit=row["unit"],
             price_usd=row["price_usd"],
@@ -1389,6 +1395,7 @@ class ExportInvoiceItem:
     surface: Optional[str] = None
     pallets: Optional[float] = None
     quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
     quantity_value: float = 0
     unit: str = "SQM"
     price_usd: float = 0
@@ -1412,6 +1419,7 @@ class ExportInvoiceItem:
             surface=row["surface"] if "surface" in row.keys() else None,
             pallets=row["pallets"],
             quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             quantity_value=row["quantity_value"],
             unit=row["unit"],
             price_usd=row["price_usd"],
