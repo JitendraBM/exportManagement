@@ -44,6 +44,7 @@
   .po-left { text-align: left; vertical-align: top; }
   .po-right { text-align: left; }
   .po-mid { vertical-align: middle !important; }
+  .po-bottom { vertical-align: bottom !important; }
   .po-side {
     writing-mode: vertical-rl;
     transform: rotate(180deg);
@@ -183,7 +184,7 @@
       {% for item in main_items %}
       <tr class="po-goods">
         <td class="po-center">{{ item.sr_no }}</td>
-        <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
+        <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
         <td class="po-center">{{ num(item.quantity_boxes) }}</td>
         <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
         <td class="po-right">{{ inr(item.price_inr) }}</td>
@@ -278,7 +279,7 @@
       {% set pk.pallets = pk.pallets + (item.pallets or 0) %}
       <tr>
         <td class="po-center">{{ loop.index }}</td>
-        <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
+        <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
         <td class="po-center">{{ (item.design_name or '')|upper }}</td>
         <td class="po-center">{{ num(item.quantity_boxes) }}</td>
         <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }}</td>

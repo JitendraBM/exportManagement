@@ -20,25 +20,46 @@
   {% set gs = namespace(sr=sr_start, key=none, first=true) %}
   {% for item in items %}
     {% set key = group_key(item, mode) %}
-    {% if key != gs.key %}
+    {% set is_new_group = key != gs.key %}
+    {# A group with exactly one item and a single-line name doesn't need its
+       own heading row above a near-empty numbered row - that split only
+       earns its keep when a heading actually has multiple variant lines
+       under it (surface finishes, or a multi-line product name). Detected
+       by peeking at the next item, since group membership can't be known
+       until the group closes. #}
+    {% set next_key = group_key(items[loop.index], mode) if loop.index < items|length else none %}
+    {% set is_solo = is_new_group and next_key != key and '\n' not in (item.product_name or '') %}
+    {% if is_new_group %}
       {% set gs.key = key %}
       {% if not gs.first %}
       <tr class="pi-goods pi-group-gap">
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
+      {% if not is_solo %}
       <tr class="pi-goods">
         <td class="pi-val pi-center">{% if mode == 'surface' %}{{ (item.surface or '')|upper }}{% endif %}</td>
-        <td class="pi-val">{{ (item.product_name or '').split('\n')[0]|upper }}{% if item.hsn_code %} - HSNC {{ item.hsn_code }}{% endif %}</td>
+        <td class="pi-val pi-bottom">{{ (item.product_name or '').split('\n')[0]|upper }}{% if item.hsn_code %} - HSNC {{ item.hsn_code }}{% endif %}</td>
         <td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
+      {% endif %}
     {% endif %}
     {% set gs.first = false %}
     {% set gs.sr = gs.sr + 1 %}
     {% set rest = (item.product_name or '').split('\n')[1:] | join('\n') %}
     <tr class="pi-goods">
-      <td class="pi-val pi-center">{% if mode == 'index' %}{{ gs.sr }}{% endif %}</td>
-      <td class="pi-val">{{ rest|upper|e|replace('\n', '<br>')|safe }}</td>
+      <td class="pi-val pi-center">
+        {%- if mode == 'index' %}{{ gs.sr }}{% elif is_solo %}{{ (item.surface or '')|upper }}{% endif -%}
+      </td>
+      <td class="pi-val pi-bottom">
+        {%- if is_solo -%}
+          {{ (item.product_name or '').split('\n')[0]|upper }}{% if item.hsn_code %} - HSNC {{ item.hsn_code }}{% endif %}
+        {%- else -%}
+          {%- for line in rest.split('\n') -%}
+            {{ line|upper }}{% if not loop.last %}<br>{% endif %}
+          {%- endfor -%}
+        {%- endif -%}
+      </td>
       <td class="pi-val pi-center">{{ '{:,.2f}'.format(item.pallets) if item.pallets else '' }}</td>
       <td class="pi-val pi-center">{{ '{:,.0f}'.format(item.quantity_boxes) if item.quantity_boxes else '' }}</td>
       <td class="pi-val pi-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }}</td>
