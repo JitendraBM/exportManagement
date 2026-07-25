@@ -483,6 +483,7 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     dimension_mm        TEXT,
     hsn_code            TEXT,
     quantity_boxes      REAL,
+    quantity_unit       TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     pallets             REAL,      -- "Plts" column - same derived-from-boxes pattern as proforma_invoice_items.pallets
     quantity_value       REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',

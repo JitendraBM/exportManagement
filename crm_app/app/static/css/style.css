@@ -533,7 +533,7 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
   color: var(--color-ink); margin-bottom: 14px; font-size: .8275rem;
 }
 .quote-meta-table { width: 100%; border-collapse: collapse; border: 1px solid var(--color-ink); margin-bottom: 16px; }
-.quote-meta-table td { border: 1px solid var(--color-line-dark); padding: 6px 9px; vertical-align: middle; text-align: center; }
+.quote-meta-table td { border: 1px solid var(--color-line-dark); padding: 6px 9px; vertical-align: middle; text-align: left; }
 .quote-left { text-align: left; }
 .quote-side-label {
   text-align: center; vertical-align: middle;
@@ -561,16 +561,16 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .quote-items-table { width: 100%; table-layout: fixed; border-collapse: collapse; border: 1px solid var(--color-ink); margin-bottom: 6px; }
 .quote-items-table th {
   border: 1px solid var(--color-line-dark); background: var(--color-paper); padding: 6px 8px;
-  font-size: .5575rem; text-transform: uppercase; letter-spacing: .05em;
+  font-size: .5575rem; text-transform: uppercase; letter-spacing: .05em; text-align: left;
 }
-.quote-items-table td { border: 1px solid var(--color-line-dark); padding: 6px 8px; vertical-align: middle; text-align: center; overflow-wrap: break-word; }
+.quote-items-table td { border: 1px solid var(--color-line-dark); padding: 6px 8px; vertical-align: middle; text-align: left; overflow-wrap: break-word; }
 /* PRICE (USD) / TOTAL (USD) columns are numeric-only - never let them wrap,
    even a 7-figure amount ("$ 1,234,567.89") must sit on one line. */
-.quote-items-table td.num, .quote-items-table th:nth-child(7), .quote-items-table th:nth-child(8) {
+.quote-items-table td.num, .quote-items-table th:nth-child(6), .quote-items-table th:nth-child(8) {
   white-space: nowrap;
 }
-.quote-items-table td.num { text-align: right; }
-.quote-items-table tfoot td { border: 1px solid var(--color-line-dark); padding: 6px 8px; background: var(--color-paper); vertical-align: middle; text-align: center; }
+.quote-items-table tfoot td { border: 1px solid var(--color-line-dark); padding: 6px 8px; background: var(--color-paper); vertical-align: middle; text-align: left; }
+.quote-unit-sm { font-size: .82em; color: var(--color-text-soft); text-transform: uppercase; }
 .quote-charge-row td { padding: 2px 8px; }
 .quote-total-row td { background: var(--color-paper); }
 .quote-amount-words {
@@ -581,7 +581,7 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .quote-footnote { font-size: .6175rem; color: var(--color-text-soft); margin-bottom: 16px; }
 
 .quote-bank-table { width: 100%; table-layout: fixed; border-collapse: collapse; border: 1px solid var(--color-ink); margin-bottom: 30px; }
-.quote-bank-table th { border: 1px solid var(--color-line-dark); background: var(--color-paper); padding: 6px 8px; font-size: .6175rem; }
+.quote-bank-table th { border: 1px solid var(--color-line-dark); background: var(--color-paper); padding: 6px 8px; font-size: .6175rem; text-align: left; }
 .quote-bank-table td { border: 1px solid var(--color-line-dark); padding: 8px 10px; vertical-align: top; text-align: left; overflow-wrap: break-word; }
 
 /* Signature cell sits to the right of the bank name/address cell, sized to
@@ -591,11 +591,11 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .quote-sign-cell { height: 110px; padding: 4px 6px; }
 .quote-sign-flex {
   display: flex; flex-direction: column; justify-content: space-between;
-  height: 100%; text-align: right; font-weight: 600; font-size: .6175rem;
+  height: 100%; text-align: left; font-weight: 600; font-size: .6175rem;
 }
 
 .quote-signature { display: flex; justify-content: space-between; align-items: flex-end; }
-.quote-signature-box { text-align: center; min-width: 220px; border-top: 1px solid var(--color-line-dark); padding-top: 6px; }
+.quote-signature-box { text-align: left; min-width: 220px; border-top: 1px solid var(--color-line-dark); padding-top: 6px; }
 
 @media print {
   .no-print { display: none !important; }

@@ -637,6 +637,7 @@ class QuotationItem:
     dimension_mm: Optional[str] = None
     hsn_code: Optional[str] = None
     quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
     pallets: Optional[float] = None
     quantity_value: float = 0
     unit: str = "SQM"
@@ -654,6 +655,7 @@ class QuotationItem:
             dimension_mm=row["dimension_mm"],
             hsn_code=row["hsn_code"],
             quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             pallets=row["pallets"] if "pallets" in row.keys() else None,
             quantity_value=row["quantity_value"],
             unit=row["unit"],
