@@ -27,6 +27,7 @@
   .pk-item td { height: 88px; }
   .pk-photo img { max-width: 100%; max-height: 84px; object-fit: contain; }
   .pk-desc { white-space: pre-line; vertical-align: bottom; }
+  .pk-unit-sm { font-size: .85em; text-transform: uppercase; }
   .pk-sign-cell { height: 70px; padding: 4px 6px; vertical-align: top; }
   .pk-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; text-align: left; }
   .pk-sign-right { text-align: left; }
@@ -102,9 +103,9 @@
       <td>{{ (design.surface or '')|upper if design else '' }}</td>
       <td>{{ item.design_name or '' }}</td>
       <td>{{ num(item.pallets) }}</td>
-      <td>{{ num(item.quantity_boxes) }}</td>
+      <td>{% if item.quantity_boxes %}{{ num(item.quantity_boxes) }} <span class="pk-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
       <td>{{ num(item.pcs) }}</td>
-      <td>{{ num(item.quantity_value) }}</td>
+      <td>{% if item.quantity_value %}{{ num(item.quantity_value) }} <span class="pk-unit-sm">{{ item.unit }}</span>{% endif %}</td>
       <td>{{ num(item.net_weight_kg) }}</td>
       <td>{{ num(item.gross_weight_kg) }}</td>
     </tr>

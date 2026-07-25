@@ -20,6 +20,7 @@
   .ei-right { text-align: left; }
   .ei-mid { vertical-align: middle !important; }
   .ei-bottom { vertical-align: bottom !important; }
+  .ei-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
   .ei-side { writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-size: 9px; font-weight: bold; letter-spacing: 1px; vertical-align: middle; }
   .ei-items thead td { text-align: left; vertical-align: middle; font-size: 9px; }
   .ei-charge-label { text-align: left; font-weight: bold; font-size: 9px; }
@@ -196,7 +197,7 @@
         <td>{{ loop.index }}</td>
         <td class="ei-left ei-val ei-bottom">{{ item.product_name }}{% if item.hsn_code %} <span class="ei-label">- HSN {{ item.hsn_code }}</span>{% endif %}</td>
         <td>{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
-        <td>{{ '{:,.0f}'.format(item.quantity_boxes) if item.quantity_boxes else '' }}</td>
+        <td>{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ei-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ei-right">{{ '{:,.2f}'.format(item.quantity_value) }}</td>
         <td class="ei-right">{{ usd(item.price_usd) }}</td>
         <td>{{ item.unit }}</td>

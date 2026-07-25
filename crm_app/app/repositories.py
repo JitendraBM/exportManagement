@@ -1547,11 +1547,11 @@ class ProformaInvoiceRepository:
                 conn.execute(
                     """INSERT INTO proforma_invoice_items
                        (proforma_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code,
-                        surface, pallets, quantity_boxes, quantity_value, unit, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        surface, pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd, total_usd)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
-                     item.hsn_code, item.surface, item.pallets, item.quantity_boxes, item.quantity_value,
-                     item.unit, item.price_usd, item.total_usd),
+                     item.hsn_code, item.surface, item.pallets, item.quantity_boxes, item.quantity_unit,
+                     item.quantity_value, item.unit, item.price_usd, item.total_usd),
                 )
 
     def delete(self, invoice_id: int) -> None:
@@ -1724,11 +1724,11 @@ class ExportInvoiceRepository:
                 conn.execute(
                     """INSERT INTO export_invoice_items
                        (export_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code, surface,
-                        pallets, quantity_boxes, quantity_value, unit, price_usd, total_usd, igst_percent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd, total_usd, igst_percent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm, item.hsn_code,
-                     item.surface, item.pallets, item.quantity_boxes, item.quantity_value, item.unit,
-                     item.price_usd, item.total_usd, item.igst_percent),
+                     item.surface, item.pallets, item.quantity_boxes, item.quantity_unit, item.quantity_value,
+                     item.unit, item.price_usd, item.total_usd, item.igst_percent),
                 )
 
             conn.execute("DELETE FROM export_invoice_proforma_links WHERE export_invoice_id = ?", (invoice_id,))
@@ -1935,10 +1935,10 @@ class PurchaseOrderRepository:
                 conn.execute(
                     """INSERT INTO purchase_order_items
                        (purchase_order_id, sr_no, product_id, product_name, hsn_code,
-                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, quantity_unit, quantity_value, unit, price_inr, price_per, total_inr)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (purchase_order_id, item.sr_no, item.product_id, item.product_name, item.hsn_code,
-                     item.quantity_boxes, item.quantity_value, item.unit, item.price_inr,
+                     item.quantity_boxes, item.quantity_unit, item.quantity_value, item.unit, item.price_inr,
                      item.price_per, item.total_inr),
                 )
 
@@ -2418,12 +2418,12 @@ class PackingListRepository:
                 conn.execute(
                     """INSERT INTO packing_list_items
                        (packing_list_id, sr_no, product_id, product_name, design_id, design_name,
-                        hsn_code, box_per_pallet, pallets, quantity_boxes, pcs, quantity_value,
+                        hsn_code, box_per_pallet, pallets, quantity_boxes, quantity_unit, pcs, quantity_value,
                         unit, net_weight_kg, gross_weight_kg)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (packing_list_id, item.sr_no, item.product_id, item.product_name, item.design_id,
                      item.design_name, item.hsn_code, item.box_per_pallet, item.pallets,
-                     item.quantity_boxes, item.pcs, item.quantity_value, item.unit,
+                     item.quantity_boxes, item.quantity_unit, item.pcs, item.quantity_value, item.unit,
                      item.net_weight_kg, item.gross_weight_kg),
                 )
 

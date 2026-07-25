@@ -45,6 +45,7 @@
   .po-right { text-align: left; }
   .po-mid { vertical-align: middle !important; }
   .po-bottom { vertical-align: bottom !important; }
+  .po-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
   .po-side {
     writing-mode: vertical-rl;
     transform: rotate(180deg);
@@ -185,8 +186,8 @@
       <tr class="po-goods">
         <td class="po-center">{{ item.sr_no }}</td>
         <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
-        <td class="po-center">{{ num(item.quantity_boxes) }}</td>
-        <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
+        <td class="po-center">{% if item.quantity_boxes %}{{ num(item.quantity_boxes) }} <span class="po-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+        <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="po-unit-sm">{{ item.unit }}</span></td>
         <td class="po-right">{{ inr(item.price_inr) }}</td>
         <td class="po-center">{{ item.price_per }}</td>
         <td class="po-right">{{ inr(item.total_inr) }}</td>
@@ -281,8 +282,8 @@
         <td class="po-center">{{ loop.index }}</td>
         <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
         <td class="po-center">{{ (item.design_name or '')|upper }}</td>
-        <td class="po-center">{{ num(item.quantity_boxes) }}</td>
-        <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }}</td>
+        <td class="po-center">{% if item.quantity_boxes %}{{ num(item.quantity_boxes) }} <span class="po-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+        <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="po-unit-sm">{{ item.unit }}</span></td>
         <td class="po-center">{{ num(item.pallets) }}</td>
         <td class="po-center">{{ num(item.box_per_pallet) }}</td>
       </tr>

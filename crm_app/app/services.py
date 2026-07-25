@@ -1936,19 +1936,24 @@ class ProformaInvoiceService:
             except ValueError:
                 raise ValidationError(f"Row {i}: quantity, pallets and price must be numbers.")
             product_id = int(raw["product_id"]) if raw.get("product_id") else None
+            quantity_unit = "PCS"
 
             # Same trust boundary as QuotationService._build_items - only
             # keep a product reference from this same company, and the same
-            # Boxes x Alternate Quantity auto-calc when both are known.
+            # Boxes x Alternate Quantity auto-calc when both are known. The
+            # Boxes column's unit (printed as small text after the number)
+            # is likewise always the product's own Quantity unit.
             if product_id:
                 product = self.product_repo.get_by_id(product_id)
                 if not product or product.company_id != company_id:
                     product_id = None
-                elif quantity_boxes and product.alternate_quantity:
-                    try:
-                        quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
-                    except ValueError:
-                        pass
+                else:
+                    quantity_unit = product.quantity_unit or "PCS"
+                    if quantity_boxes and product.alternate_quantity:
+                        try:
+                            quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                        except ValueError:
+                            pass
 
             if quantity_value <= 0:
                 raise ValidationError(f"Row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
@@ -1957,7 +1962,7 @@ class ProformaInvoiceService:
             items.append(ProformaInvoiceItem(
                 id=None, proforma_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
-                pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                pallets=pallets, quantity_boxes=quantity_boxes, quantity_unit=quantity_unit, quantity_value=quantity_value,
                 unit=(raw.get("unit") or "SQM").strip() or "SQM",
                 price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
             ))
@@ -2245,19 +2250,24 @@ class PurchaseOrderService:
             except ValueError:
                 raise ValidationError(f"Row {i}: quantity and price must be numbers.")
             product_id = int(raw["product_id"]) if raw.get("product_id") else None
+            quantity_unit = "PCS"
 
             # Same trust boundary as QuotationService._build_items - only
             # keep a product reference from this same company, and the same
-            # Boxes x Alternate Quantity auto-calc when both are known.
+            # Boxes x Alternate Quantity auto-calc when both are known. The
+            # Boxes column's unit (printed as small text after the number)
+            # is likewise always the product's own Quantity unit.
             if product_id:
                 product = self.product_repo.get_by_id(product_id)
                 if not product or product.company_id != company_id:
                     product_id = None
-                elif quantity_boxes and product.alternate_quantity:
-                    try:
-                        quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
-                    except ValueError:
-                        pass
+                else:
+                    quantity_unit = product.quantity_unit or "PCS"
+                    if quantity_boxes and product.alternate_quantity:
+                        try:
+                            quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                        except ValueError:
+                            pass
 
             if quantity_value <= 0:
                 raise ValidationError(f"Row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
@@ -2279,7 +2289,7 @@ class PurchaseOrderService:
             items.append(PurchaseOrderItem(
                 id=None, purchase_order_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
-                quantity_boxes=quantity_boxes, quantity_value=quantity_value, unit=unit,
+                quantity_boxes=quantity_boxes, quantity_unit=quantity_unit, quantity_value=quantity_value, unit=unit,
                 price_inr=price_inr, price_per=price_per, total_inr=total_inr,
             ))
         if not items:
@@ -2919,14 +2929,18 @@ class ExportInvoiceService:
             product_id = int(raw["product_id"]) if raw.get("product_id") else None
 
             # Snapshot the product's IGST % (and re-derive qty from boxes)
-            # only for a product that belongs to this same company.
+            # only for a product that belongs to this same company. The
+            # Boxes column's unit (printed as small text after the number)
+            # is likewise always the product's own Quantity unit.
             igst_percent = 0.0
+            quantity_unit = "PCS"
             if product_id:
                 product = self.product_repo.get_by_id(product_id)
                 if not product or product.company_id != company_id:
                     product_id = None
                 else:
                     igst_percent = product.igst_percent or 0.0
+                    quantity_unit = product.quantity_unit or "PCS"
                     if quantity_boxes and product.alternate_quantity:
                         try:
                             quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
@@ -2941,7 +2955,7 @@ class ExportInvoiceService:
                 id=None, export_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
                 surface=(raw.get("surface") or "").strip() or None,
-                pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                pallets=pallets, quantity_boxes=quantity_boxes, quantity_unit=quantity_unit, quantity_value=quantity_value,
                 unit=(raw.get("unit") or "SQM").strip() or "SQM",
                 price_usd=price_usd, total_usd=round(quantity_value * price_usd, 2),
                 igst_percent=igst_percent,
@@ -3557,13 +3571,18 @@ class PackingListService:
 
             # Same trust boundary as QuotationService._build_items - only
             # keep product/design references from this same company (and a
-            # design must actually belong to the row's product).
+            # design must actually belong to the row's product). The Boxes
+            # column's unit (printed as small text after the number) is
+            # likewise always the product's own Quantity unit.
             product = None
+            quantity_unit = "PCS"
             if product_id:
                 product = self.product_repo.get_by_id(product_id)
                 if not product or product.company_id != company_id:
                     product_id = None
                     product = None
+                else:
+                    quantity_unit = product.quantity_unit or "PCS"
             if design_id:
                 design = self.design_repo.get_by_id(design_id)
                 if not design or design.company_id != company_id or \
@@ -3626,7 +3645,7 @@ class PackingListService:
                 design_id=design_id, design_name=design_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
                 box_per_pallet=box_per_pallet, pcs=pcs,
-                pallets=pallets, quantity_boxes=quantity_boxes, quantity_value=quantity_value,
+                pallets=pallets, quantity_boxes=quantity_boxes, quantity_unit=quantity_unit, quantity_value=quantity_value,
                 unit=(raw.get("unit") or "SQM").strip() or "SQM",
                 net_weight_kg=net_weight_kg, gross_weight_kg=gross_weight_kg,
             ))

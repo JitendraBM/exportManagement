@@ -56,8 +56,8 @@
         <tr class="po-goods">
           <td class="po-center">{{ item.sr_no }}</td>
           <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
-          <td class="po-center">{{ ax_num(item.quantity_boxes) }}</td>
-          <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
+          <td class="po-center">{% if item.quantity_boxes %}{{ ax_num(item.quantity_boxes) }} <span class="po-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+          <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="po-unit-sm">{{ item.unit }}</span></td>
           <td class="po-right">{{ ax_inr(item.price_inr) }}</td>
           <td class="po-center">{{ item.price_per }}</td>
           <td class="po-right">{{ ax_inr(item.total_inr) }}</td>
