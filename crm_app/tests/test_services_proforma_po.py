@@ -149,9 +149,9 @@ class TestProformaCrud:
 
     def test_generating_proforma_advances_client_status(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         self._create(container, seed, lead_id=lead.id)
-        reloaded = container.client_service.get(client.id, seed.company_id)
+        reloaded = container.buyer_service.get(client.id, seed.company_id)
         assert reloaded.status == "purchase_order_submission_pending"
 
 
@@ -282,29 +282,29 @@ class TestPurchaseOrder:
 class TestDocumentFeed:
     def test_empty_for_a_client_with_no_documents(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
-        assert container.client_service.document_feed(client) == []
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
+        assert container.buyer_service.document_feed(client) == []
 
     def test_includes_manual_document_entries(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
-        container.client_service.add_document(
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
+        container.buyer_service.add_document(
             client.id, seed.admin, "Contract.pdf", "Contract", "2026-01-05", "signed")
-        feed = container.client_service.document_feed(client)
+        feed = container.buyer_service.document_feed(client)
         assert any(r["name"] == "Contract.pdf" and r["type"] == "Contract" for r in feed)
 
     def test_includes_quotations_made_against_the_lead(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         q = make_quotation(container, seed, lead_id=lead.id)
-        feed = container.client_service.document_feed(client)
+        feed = container.buyer_service.document_feed(client)
         row = next(r for r in feed if r["type"] == "Quotation")
         assert row["name"] == q.quotation_number
         assert row["link"][0] == "quotations.view_quotation"
 
     def test_includes_all_four_document_types(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         make_quotation(container, seed, lead_id=lead.id)
         container.proforma_invoice_service.create(
             seed.admin, {"consignee_name": "B", "invoice_date": "2026-02-01",
@@ -318,26 +318,26 @@ class TestDocumentFeed:
             seed.admin, {"packing_list_date": "2026-04-01", "lead_id": lead.id},
             [{"product_name": "T", "quantity_boxes": "1"}])
 
-        types = {r["type"] for r in container.client_service.document_feed(client)}
+        types = {r["type"] for r in container.buyer_service.document_feed(client)}
         assert types == {"Quotation", "Proforma Invoice", "Purchase Order", "Packing List"}
 
     def test_feed_is_sorted_newest_first(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
-        container.client_service.add_document(
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
+        container.buyer_service.add_document(
             client.id, seed.admin, "Old", "Note", "2026-01-01", "")
-        container.client_service.add_document(
+        container.buyer_service.add_document(
             client.id, seed.admin, "New", "Note", "2026-12-31", "")
-        feed = container.client_service.document_feed(client)
+        feed = container.buyer_service.document_feed(client)
         dates = [r["date"] for r in feed]
         assert dates == sorted(dates, reverse=True)
 
     def test_client_without_lead_shows_only_manual_entries(self, container, seed):
         lead = make_lead(container, seed.admin)
-        client = container.client_service.convert_lead(lead.id, seed.admin)
+        client = container.buyer_service.convert_lead(lead.id, seed.admin)
         make_quotation(container, seed, lead_id=lead.id)
         client.lead_id = None  # simulate a client with no originating lead
-        assert container.client_service.document_feed(client) == []
+        assert container.buyer_service.document_feed(client) == []
 
 
 # ==========================================================================
@@ -346,23 +346,23 @@ class TestDocumentFeed:
 class TestAddDocument:
     def _client(self, container, seed):
         lead = make_lead(container, seed.admin)
-        return container.client_service.convert_lead(lead.id, seed.admin)
+        return container.buyer_service.convert_lead(lead.id, seed.admin)
 
     def test_requires_name(self, container, seed):
         client = self._client(container, seed)
         with pytest.raises(ValidationError):
-            container.client_service.add_document(
+            container.buyer_service.add_document(
                 client.id, seed.admin, "  ", "Contract", "2026-01-01", "")
 
     def test_requires_type(self, container, seed):
         client = self._client(container, seed)
         with pytest.raises(ValidationError):
-            container.client_service.add_document(
+            container.buyer_service.add_document(
                 client.id, seed.admin, "Doc", "  ", "2026-01-01", "")
 
     def test_blank_date_defaults_to_today(self, container, seed):
         from datetime import date
         client = self._client(container, seed)
-        doc = container.client_service.add_document(
+        doc = container.buyer_service.add_document(
             client.id, seed.admin, "Doc", "Contract", "", "")
         assert doc.document_date == date.today().isoformat()
