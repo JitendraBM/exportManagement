@@ -571,6 +571,7 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 }
 .quote-items-table tfoot td { border: 1px solid var(--color-line-dark); padding: 6px 8px; background: var(--color-paper); vertical-align: middle; text-align: left; }
 .quote-unit-sm { font-size: .82em; color: var(--color-text-soft); text-transform: uppercase; }
+.quote-product-cell { vertical-align: bottom; }
 .quote-charge-row td { padding: 2px 8px; }
 .quote-total-row td { background: var(--color-paper); }
 .quote-amount-words {

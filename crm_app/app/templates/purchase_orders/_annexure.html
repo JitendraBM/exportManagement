@@ -55,7 +55,7 @@
         {% for item in annex_items %}
         <tr class="po-goods">
           <td class="po-center">{{ item.sr_no }}</td>
-          <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
+          <td class="po-bottom">{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
           <td class="po-center">{{ ax_num(item.quantity_boxes) }}</td>
           <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
           <td class="po-right">{{ ax_inr(item.price_inr) }}</td>
