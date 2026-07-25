@@ -62,7 +62,7 @@
       </td>
       <td class="pi-val pi-center">{{ '{:,.2f}'.format(item.pallets) if item.pallets else '' }}</td>
       <td class="pi-val pi-center">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="pi-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
-      <td class="pi-val pi-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }}</td>
+      <td class="pi-val pi-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }} <span class="pi-unit-sm">{{ item.unit }}</span></td>
       <td class="pi-val pi-right">${{ '{:,.2f}'.format(item.price_usd or 0) }}</td>
       <td class="pi-val pi-center">{{ item.unit }}</td>
       <td class="pi-val pi-right">{% if item.total_usd %}$&nbsp;{{ '{:,.2f}'.format(item.total_usd) }}{% else %}$&nbsp;-{% endif %}</td>

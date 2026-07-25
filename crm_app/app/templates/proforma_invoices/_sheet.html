@@ -224,12 +224,12 @@
   <!-- Goods -->
   <table class="pi-items">
     <colgroup>
-      <col style="width:17%"><col style="width:36%"><col style="width:5.5%"><col style="width:7%">
-      <col style="width:9.5%"><col style="width:7.5%"><col style="width:5.5%"><col style="width:12%">
+      <col style="width:8%"><col style="width:36%"><col style="width:5.5%"><col style="width:7%">
+      <col style="width:14%"><col style="width:7.5%"><col style="width:5.5%"><col style="width:16.5%">
     </colgroup>
     <thead>
       <tr>
-        <td rowspan="2">Marks &amp; Nos / Container No</td>
+        <td rowspan="2">Serial Number</td>
         <td rowspan="2">Description Of Goods</td>
         <td colspan="3">Quantity Details</td>
         <td rowspan="2">Rate<br>In USD</td>
@@ -339,13 +339,8 @@
       <td colspan="2" style="border-bottom:none; height:26px;"></td>
     </tr>
     <tr>
-      <td colspan="2" class="pi-left" style="border-top:none; border-bottom:none;">
-        ALL BANKING CHARGES OUTSIDE INDIA WILL BE IN ACCOUNT OF APPLICANT
-      </td>
-    </tr>
-    <tr>
       <td colspan="2" class="pi-left" style="border-top:none;">
-        ABOVE OFFER IS VALID 10 DAYS OF ISSUE OF THIS PROFORMA INVOICE
+        <span class="pi-val">REMARKS :</span> {{ (invoice.remarks or '')|upper|replace('\n', '<br>')|safe }}
       </td>
     </tr>
     <tr>
