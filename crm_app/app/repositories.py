@@ -1658,7 +1658,7 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no "
+                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1700,11 +1700,11 @@ class ExportInvoiceRepository:
                 sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
-                shipping_bill_pdf_path, examination_date, location_code_08b, issuing_authority,
+                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, remarks, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1721,7 +1721,7 @@ class ExportInvoiceRepository:
                    fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
                    bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
-                   examination_date = ?, location_code_08b = ?, issuing_authority = ?, issuing_authority_address = ?,
+                   examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
@@ -1747,7 +1747,7 @@ class ExportInvoiceRepository:
             invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
             invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
-            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b,
+            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
             invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
             invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.remarks,
@@ -1786,9 +1786,9 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (invoice_id, i, cd.get("container_type") or None, cd.get("container_no") or None,
+                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None),
                 )
 

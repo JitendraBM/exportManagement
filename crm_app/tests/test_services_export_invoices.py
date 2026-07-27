@@ -281,6 +281,11 @@ class TestExportChildLists:
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.purchase_details[0]["supplier_invoice_no"] == "GSTT/4987"
 
+    def test_booking_no_round_trip(self, container, seed):
+        inv = make_export(container, seed, booking_no="BKG/12345")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.booking_no == "BKG/12345"
+
 
 # ==========================================================================
 # Shipping bill PDF + version history

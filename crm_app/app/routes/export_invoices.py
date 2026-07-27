@@ -35,7 +35,7 @@ _HEADER_FIELDS = [
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount", "fob_value", "cnf_value",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
-    "examination_date", "location_code_08b", "issuing_authority", "issuing_authority_address",
+    "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "remarks",
 ]
@@ -92,16 +92,14 @@ def _extract_containers(form) -> list:
 
 
 def _extract_container_details(form) -> list:
-    types = form.getlist("cd_container_type[]")
     nos = form.getlist("cd_container_no[]")
     line_seals = form.getlist("cd_line_seal_no[]")
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
-    n = max(len(types), len(nos), len(line_seals), len(rfids), len(vehicles))
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles))
     rows = []
     for i in range(n):
         rows.append({
-            "container_type": types[i] if i < len(types) else "",
             "container_no": nos[i] if i < len(nos) else "",
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",

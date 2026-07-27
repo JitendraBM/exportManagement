@@ -763,6 +763,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     -- page-2 Self-Sealing Examination Report annexure fields
     examination_date            TEXT,          -- defaults to the creation date
     location_code_08b           TEXT,          -- section 08B, free text
+    booking_no                  TEXT,          -- shipping line booking number, printed above the 11B container table
     issuing_authority           TEXT,
     issuing_authority_address   TEXT,
     permission_no               TEXT,
