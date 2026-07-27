@@ -301,7 +301,9 @@
         <tbody id="items-body">
           {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
           {% for row in rows %}
-          <tr class="item-row" data-alt-qty="" data-pallet-types="[]" data-igst="{{ row.igst_percent | default('', true) }}">
+          <tr class="item-row" data-alt-qty=""
+              data-pallet-types="{{ (pallet_types_map.get(row.product_id | int, []) if row.product_id else []) | tojson | forceescape }}"
+              data-igst="{{ row.igst_percent | default('', true) }}">
             <td class="js-sr">{{ loop.index }}</td>
             <td>
               <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
@@ -463,6 +465,31 @@
     const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
     if (perPallet && boxes) { palletsEl.value = +(boxes / perPallet).toFixed(2); palletsEl.readOnly = true; return; }
     palletsEl.readOnly = false;
+  }
+
+  // A row rendered from a saved invoice or a PI prefill already has Plts
+  // and a product tied to it; work out which pallet-type option that
+  // implies (Loose / a matching type / Manual) instead of always
+  // defaulting to Loose with an empty dropdown.
+  function initRowPalletSelection(tr) {
+    let types = [];
+    try { types = JSON.parse(tr.dataset.palletTypes || '[]'); } catch (e) {}
+    populatePalletOptions(tr, types, false);
+    const sel = tr.querySelector('.js-pallet-type');
+    const palletsEl = tr.querySelector('.js-pallets');
+    const pallets = parseFloat(palletsEl.value) || 0;
+    if (!pallets) {
+      sel.value = '';
+      palletsEl.value = '';
+      palletsEl.readOnly = true;
+      return;
+    }
+    const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
+    const match = boxes
+      ? (types || []).find((t) => Math.abs(boxes / t.boxes_per_pallet - pallets) < 1e-6)
+      : null;
+    sel.value = match ? String(match.boxes_per_pallet) : 'manual';
+    recalcRowPallets(tr);
   }
 
   document.getElementById('add-row-btn').addEventListener('click', () => {
@@ -637,7 +664,7 @@
     overlay.hidden = true;
   }
 
-  itemsBody.querySelectorAll('.item-row').forEach((tr) => { populatePalletOptions(tr, [], false); recalcRowPallets(tr); });
+  itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
   recalcTotals();
 })();
