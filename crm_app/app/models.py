@@ -1361,8 +1361,11 @@ class ProformaInvoice:
 
 
 EXPORT_TAX_MODE_IGST = "igst"
-EXPORT_TAX_MODE_CGST_SGST = "cgst_sgst"
-EXPORT_TAX_MODES = [(EXPORT_TAX_MODE_IGST, "IGST"), (EXPORT_TAX_MODE_CGST_SGST, "CGST / SGST")]
+EXPORT_TAX_MODE_LUT = "lut"
+EXPORT_TAX_MODES = [
+    (EXPORT_TAX_MODE_IGST, "With Payment of IGST"),
+    (EXPORT_TAX_MODE_LUT, "Without Payment of IGST under LUT"),
+]
 EXPORT_LOADING_BUFFER = "buffer"
 EXPORT_LOADING_SELF_SEALING = "self_sealing"
 EXPORT_LOADING_TYPES = [(EXPORT_LOADING_BUFFER, "Buffer loading"), (EXPORT_LOADING_SELF_SEALING, "Self-sealing")]
@@ -1420,7 +1423,8 @@ class ExportInvoice:
     """The customer/customs-facing Export Invoice at the buyer end of the
     pipeline. References one or more Proforma Invoices (many-to-many via
     proforma_invoice_ids). Goods are prefilled from those PIs then edited.
-    Tax is computed per-product and shown as IGST or CGST/SGST per tax_mode;
+    Tax is computed per-product and, per tax_mode ("Supply meant for"), either
+    charged as IGST or zero-rated ("Without Payment of IGST under LUT");
     the exchange rate is manual and admin-locked once set. Buyer Order No &
     Date is a single field shared by every linked PI. The several child
     lists (containers / container_details / purchase_details) back the
@@ -1586,15 +1590,9 @@ class ExportInvoice:
 
     @property
     def igst_amount_inr(self) -> float:
+        """Zero-rated (LUT) supplies carry no IGST - only 'With Payment of
+        IGST' actually charges the summed per-product tax."""
         return self.tax_total_inr if self.tax_mode == EXPORT_TAX_MODE_IGST else 0
-
-    @property
-    def cgst_amount_inr(self) -> float:
-        return self.tax_total_inr / 2.0 if self.tax_mode == EXPORT_TAX_MODE_CGST_SGST else 0
-
-    @property
-    def sgst_amount_inr(self) -> float:
-        return self.tax_total_inr / 2.0 if self.tax_mode == EXPORT_TAX_MODE_CGST_SGST else 0
 
     @property
     def tax_mode_label(self) -> str:
