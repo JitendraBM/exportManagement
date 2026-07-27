@@ -3050,15 +3050,23 @@ class ExportInvoiceService:
         return invoice
 
     def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
-        result = []
+        """One export invoice covers a single buyer, so every selected PI
+        must share the same buyer - its lead_id when linked to one, else its
+        consignee name. The form already restricts the picker to one buyer
+        at a time; this is the server-side backstop."""
+        pis = []
         for pid in dict.fromkeys(raw_ids or []):
             try:
                 pi = self.proforma_invoice_repo.get_by_id(int(pid))
             except (TypeError, ValueError):
                 continue
             if pi and pi.company_id == company_id:
-                result.append(pi.id)
-        return result
+                pis.append(pi)
+        if pis:
+            keys = {pi.lead_id or (pi.consignee_name or "").strip().lower() for pi in pis}
+            if len(keys) > 1:
+                raise ValidationError("All selected proforma invoices must belong to the same buyer.")
+        return [pi.id for pi in pis]
 
     @staticmethod
     def _clean_containers(raw) -> List[dict]:
