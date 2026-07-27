@@ -83,6 +83,42 @@
         {% if not can_edit_rate %}<div class="text-sm text-soft">Set already — only an admin can change it.</div>{% endif %}
       </div>
     </div>
+    <div class="field">
+      <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — prefills the Permit Details section below from Our Company permits)</span></label>
+      <select id="permit_select">
+        <option value="">— Select a permit —</option>
+        {% for p in permits %}
+          <option value="{{ p.id }}" data-permission-number="{{ p.permission_number }}"
+                  data-issuing-authority="{{ p.issuing_authority or '' }}"
+                  data-issuing-authority-address="{{ p.issuing_authority_address or '' }}"
+                  data-date-of-issue="{{ p.date_of_issue or '' }}"
+                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
+            {{ p.permission_number }}{% if p.place_of_stuffing %} — {{ p.place_of_stuffing }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Permit Details</h3></div>
+    <div class="form-row">
+      <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
+      <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
+    </div>
+    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="issuing_authority">Issuing authority</label><input type="text" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}"></div>
+    </div>
+    <div class="field"><label for="issuing_authority_address">Issuing authority address</label><textarea id="issuing_authority_address" name="issuing_authority_address" rows="2">{{ data.issuing_authority_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
+      <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
+      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -222,27 +258,6 @@
       <label for="self_sealing_declaration">Self-sealing declaration</label>
       <textarea id="self_sealing_declaration" name="self_sealing_declaration" rows="4">{{ data.self_sealing_declaration | default((company.self_sealing_declaration if company else ''), true) }}</textarea>
       <div class="text-sm text-soft">Defaults from Our Company → Self-sealing declaration; editable per invoice.</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Self-sealing examination report (page 2)</h3></div>
-    <div class="form-row">
-      <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
-      <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="issuing_authority">Issuing authority</label><input type="text" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="issuing_authority_address">Issuing authority address</label><textarea id="issuing_authority_address" name="issuing_authority_address" rows="2">{{ data.issuing_authority_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
-      <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
-      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
   </div>
 
@@ -550,6 +565,17 @@
     document.getElementById('bank_swift_code').value = opt.dataset.swift || '';
     document.getElementById('bank_branch').value = opt.dataset.branch || '';
     document.getElementById('bank_address').value = opt.dataset.address || '';
+  });
+
+  // ---- permit dropdown prefill --------------------------------------------------
+  document.getElementById('permit_select').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt.value) return;
+    document.getElementById('permission_no').value = opt.dataset.permissionNumber || '';
+    document.getElementById('permission_date').value = (opt.dataset.dateOfIssue || '').slice(0, 10);
+    document.getElementById('permission_expiry').value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
+    document.getElementById('issuing_authority').value = opt.dataset.issuingAuthority || '';
+    document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
   });
 
   // ---- product picker --------------------------------------------------

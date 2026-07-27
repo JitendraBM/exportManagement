@@ -18,16 +18,14 @@
       <legend>Permit details</legend>
 
       <div class="field">
-        <label for="supplier_id">Supplier<span class="required-mark">*</span></label>
-        <select id="supplier_id" name="supplier_id" required>
-          <option value="">— Select a supplier —</option>
-          {% for supplier in suppliers %}
-          <option value="{{ supplier.id }}"
-            {{ 'selected' if data and (data.supplier_id | string) == (supplier.id | string) }}>
-            {{ supplier.company_name }}
-          </option>
-          {% endfor %}
-        </select>
+        <label for="stuffing_place_name">Stuffing place name</label>
+        <input type="text" id="stuffing_place_name" name="stuffing_place_name"
+               value="{{ data.stuffing_place_name | default('', true) }}">
+      </div>
+
+      <div class="field">
+        <label for="place_of_stuffing">Place of stuffing</label>
+        <textarea id="place_of_stuffing" name="place_of_stuffing" rows="3">{{ data.place_of_stuffing | default('', true) }}</textarea>
       </div>
 
       <div class="field">
@@ -51,11 +49,6 @@
       <div class="field">
         <label for="issuing_authority_address">Issuing authority address</label>
         <textarea id="issuing_authority_address" name="issuing_authority_address" rows="3">{{ data.issuing_authority_address | default('', true) }}</textarea>
-      </div>
-
-      <div class="field">
-        <label for="place_of_stuffing">Place of stuffing</label>
-        <textarea id="place_of_stuffing" name="place_of_stuffing" rows="3">{{ data.place_of_stuffing | default('', true) }}</textarea>
       </div>
     </fieldset>
 
