@@ -145,76 +145,6 @@
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Products</h3></div>
-    <div class="table-wrap">
-      <table class="ledger" id="items-table">
-        <thead>
-          <tr>
-            <th>Sr</th>
-            <th style="min-width:220px;">Product</th>
-            <th>HSN code</th>
-            <th>Boxes</th>
-            <th style="min-width:150px;">Pallet type</th>
-            <th>Plts</th>
-            <th>Qty (SQM/LM)</th>
-            <th>Unit</th>
-            <th>Price (USD)</th>
-            <th>IGST %</th>
-            <th class="num">Total (USD)</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="items-body">
-          {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
-          {% for row in rows %}
-          <tr class="item-row" data-alt-qty="" data-pallet-types="[]" data-igst="{{ row.igst_percent | default('', true) }}">
-            <td class="js-sr">{{ loop.index }}</td>
-            <td>
-              <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
-              <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
-              <input type="hidden" name="item_surface[]" class="js-surface" value="{{ row.surface or '' }}">
-              <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
-            </td>
-            <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
-            <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
-            <td><select class="js-pallet-type"><option value="">Loose — no pallets</option></select></td>
-            <td><input type="number" step="0.01" name="item_pallets[]" class="js-pallets" value="{{ row.pallets or '' }}"></td>
-            <td><input type="number" step="0.01" name="item_quantity_value[]" class="js-qty" required value="{{ row.quantity_value or '' }}"></td>
-            <td>
-              <select name="item_unit[]" class="js-unit">
-                {% for u in PRODUCT_UNITS %}<option value="{{ u }}" {{ 'selected' if row.unit == u }}>{{ u }}</option>{% endfor %}
-                {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
-              </select>
-            </td>
-            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
-            <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
-            <td class="num js-total">0.00</td>
-            <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
-    <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
-    <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field" style="max-width:180px;"><label for="fob_value">FOB value (USD)</label><input type="number" step="0.01" id="fob_value" name="fob_value" value="{{ data.fob_value | default(0, true) }}"></div>
-      <div class="field" style="max-width:180px;"><label for="cnf_value">CNF value (USD)</label><input type="number" step="0.01" id="cnf_value" name="cnf_value" value="{{ data.cnf_value | default(0, true) }}"></div>
-    </div>
-    <div class="flex-between" style="margin-top:14px;">
-      <div></div>
-      <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
-    </div>
-  </div>
-
-  <div class="card">
     <div class="card-header"><h3>Export under</h3></div>
     <div class="field"><label for="export_under">Export under (declaration text)</label><textarea id="export_under" name="export_under" rows="2" placeholder="e.g. SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST (LUT NO : ...)">{{ data.export_under | default('', true) }}</textarea></div>
     <div class="form-row">
@@ -324,6 +254,76 @@
     </div>
     {% endif %}
     <div class="field"><label for="shipping_bill_pdf">Upload shipping bill PDF</label><input type="file" id="shipping_bill_pdf" name="shipping_bill_pdf" accept="application/pdf"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Products</h3></div>
+    <div class="table-wrap">
+      <table class="ledger" id="items-table">
+        <thead>
+          <tr>
+            <th>Sr</th>
+            <th style="min-width:220px;">Product</th>
+            <th>HSN code</th>
+            <th>Boxes</th>
+            <th style="min-width:150px;">Pallet type</th>
+            <th>Plts</th>
+            <th>Qty (SQM/LM)</th>
+            <th>Unit</th>
+            <th>Price (USD)</th>
+            <th>IGST %</th>
+            <th class="num">Total (USD)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="items-body">
+          {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
+          {% for row in rows %}
+          <tr class="item-row" data-alt-qty="" data-pallet-types="[]" data-igst="{{ row.igst_percent | default('', true) }}">
+            <td class="js-sr">{{ loop.index }}</td>
+            <td>
+              <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
+              <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
+              <input type="hidden" name="item_surface[]" class="js-surface" value="{{ row.surface or '' }}">
+              <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
+            </td>
+            <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
+            <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
+            <td><select class="js-pallet-type"><option value="">Loose — no pallets</option></select></td>
+            <td><input type="number" step="0.01" name="item_pallets[]" class="js-pallets" value="{{ row.pallets or '' }}"></td>
+            <td><input type="number" step="0.01" name="item_quantity_value[]" class="js-qty" required value="{{ row.quantity_value or '' }}"></td>
+            <td>
+              <select name="item_unit[]" class="js-unit">
+                {% for u in PRODUCT_UNITS %}<option value="{{ u }}" {{ 'selected' if row.unit == u }}>{{ u }}</option>{% endfor %}
+                {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
+              </select>
+            </td>
+            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
+            <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
+            <td class="num js-total">0.00</td>
+            <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
+    <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
+    <div class="form-row" style="margin-top:14px;">
+      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="max-width:180px;"><label for="fob_value">FOB value (USD)</label><input type="number" step="0.01" id="fob_value" name="fob_value" value="{{ data.fob_value | default(0, true) }}"></div>
+      <div class="field" style="max-width:180px;"><label for="cnf_value">CNF value (USD)</label><input type="number" step="0.01" id="cnf_value" name="cnf_value" value="{{ data.cnf_value | default(0, true) }}"></div>
+    </div>
+    <div class="flex-between" style="margin-top:14px;">
+      <div></div>
+      <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
+    </div>
   </div>
 
   <div class="card">
