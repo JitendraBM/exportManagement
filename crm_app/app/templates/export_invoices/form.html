@@ -145,7 +145,7 @@
   <div class="card">
     <div class="card-header"><h3>Buyer order no. &amp; date</h3></div>
     <div class="form-row">
-      <div class="field"><label for="buyer_order_no">Order no.</label><input type="text" id="buyer_order_no" name="buyer_order_no" value="{{ data.buyer_order_no | default('', true) }}"></div>
+      <div class="field"><label for="buyer_order_no">Order no.</label><textarea id="buyer_order_no" name="buyer_order_no" rows="3">{{ data.buyer_order_no | default('', true) }}</textarea></div>
       <div class="field"><label for="buyer_order_date">Order date</label><input type="date" id="buyer_order_date" name="buyer_order_date" value="{{ (data.buyer_order_date | default('', true))[:10] }}"></div>
     </div>
   </div>
