@@ -416,14 +416,14 @@ class OurCompany:
 @dataclass
 class Permit:
     """One "permission" the company holds, managed under the Our Company
-    area. It records a stuffing-place number + place of stuffing, the
-    issuing authority, is either valid until an expiry date OR a one-time
-    permit (validity_type), and can carry an uploaded PDF."""
+    area. It records a stuffing-place name + place of stuffing, the issuing
+    authority, is either valid until an expiry date OR a one-time permit
+    (validity_type), and can carry an uploaded PDF."""
     id: Optional[int]
     company_id: int
     permission_number: str
     created_by: int
-    stuffing_place_number: Optional[str] = None
+    stuffing_place_name: Optional[str] = None
     place_of_stuffing: Optional[str] = None
     date_of_issue: Optional[str] = None
     issuing_authority: Optional[str] = None
@@ -445,7 +445,7 @@ class Permit:
             company_id=row["company_id"],
             permission_number=row["permission_number"],
             created_by=row["created_by"],
-            stuffing_place_number=row["stuffing_place_number"],
+            stuffing_place_name=row["stuffing_place_name"],
             place_of_stuffing=row["place_of_stuffing"],
             date_of_issue=row["date_of_issue"],
             issuing_authority=row["issuing_authority"],

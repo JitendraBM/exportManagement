@@ -822,7 +822,7 @@ class CompanyRepository:
 # ============================================================
 class PermitRepository:
     """The permits ("permissions") a company holds, each recording a
-    stuffing-place number + place of stuffing and optionally carrying an
+    stuffing-place name + place of stuffing and optionally carrying an
     uploaded PDF. Managed under the Our Company area."""
 
     def __init__(self, db: Database):
@@ -841,10 +841,10 @@ class PermitRepository:
 
     def create(self, permit: Permit) -> Permit:
         new_id = self.db.execute(
-            "INSERT INTO permits (company_id, stuffing_place_number, place_of_stuffing, permission_number, "
+            "INSERT INTO permits (company_id, stuffing_place_name, place_of_stuffing, permission_number, "
             "date_of_issue, issuing_authority, issuing_authority_address, validity_type, "
             "date_of_expiry, pdf_path, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (permit.company_id, permit.stuffing_place_number, permit.place_of_stuffing, permit.permission_number,
+            (permit.company_id, permit.stuffing_place_name, permit.place_of_stuffing, permit.permission_number,
              permit.date_of_issue, permit.issuing_authority, permit.issuing_authority_address,
              permit.validity_type, permit.date_of_expiry, permit.pdf_path, permit.created_by),
         )
@@ -852,11 +852,11 @@ class PermitRepository:
 
     def update(self, permit_id: int, permit: Permit) -> None:
         self.db.execute(
-            "UPDATE permits SET stuffing_place_number = ?, place_of_stuffing = ?, permission_number = ?, "
+            "UPDATE permits SET stuffing_place_name = ?, place_of_stuffing = ?, permission_number = ?, "
             "date_of_issue = ?, issuing_authority = ?, issuing_authority_address = ?, "
             "validity_type = ?, date_of_expiry = ?, pdf_path = ?, updated_at = datetime('now') "
             "WHERE id = ?",
-            (permit.stuffing_place_number, permit.place_of_stuffing, permit.permission_number,
+            (permit.stuffing_place_name, permit.place_of_stuffing, permit.permission_number,
              permit.date_of_issue, permit.issuing_authority, permit.issuing_authority_address,
              permit.validity_type, permit.date_of_expiry, permit.pdf_path, permit_id),
         )

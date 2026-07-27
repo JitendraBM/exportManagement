@@ -822,7 +822,7 @@ class CompanyService:
 # ============================================================
 class PermitService:
     """The permits ("permissions") a company holds. Each records a
-    stuffing-place number + place of stuffing and the issuing-authority
+    stuffing-place name + place of stuffing and the issuing-authority
     details, is either valid until an expiry date OR a one-time permit, and
     can carry an uploaded PDF (same save/delete pattern as
     PurchaseInvoiceService). Admin-only, like the rest of the Our Company
@@ -886,7 +886,7 @@ class PermitService:
         return Permit(
             id=None, company_id=current_user.company_id,
             permission_number=permission_number, created_by=current_user.id,
-            stuffing_place_number=(fields.get("stuffing_place_number") or "").strip() or None,
+            stuffing_place_name=(fields.get("stuffing_place_name") or "").strip() or None,
             place_of_stuffing=(fields.get("place_of_stuffing") or "").strip() or None,
             date_of_issue=(fields.get("date_of_issue") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,

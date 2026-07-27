@@ -18,7 +18,7 @@ from app.utils import admin_required, verify_delete_password
 permits_bp = Blueprint("permits", __name__, url_prefix="/permits")
 
 _FIELDS = [
-    "stuffing_place_number", "place_of_stuffing", "permission_number", "date_of_issue",
+    "stuffing_place_name", "place_of_stuffing", "permission_number", "date_of_issue",
     "issuing_authority", "issuing_authority_address", "validity_type", "date_of_expiry",
 ]
 
