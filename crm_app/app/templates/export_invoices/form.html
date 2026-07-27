@@ -141,7 +141,33 @@
       {% endfor %}
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-container-btn">+ Add container type</button>
-    <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) asks for.</p>
+    <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) below asks for.</p>
+
+    <div class="field" style="margin-top:14px;"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
+
+    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
+    <div class="table-wrap">
+      <table class="ledger" id="cd-table">
+        <thead>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
+        </thead>
+        <tbody id="cd-body">
+          {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
+          {% for cd in cd_rows %}
+          <tr class="cd-row">
+            <td class="cd-sr">{{ loop.index }}</td>
+            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
+            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
+            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
+            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
+            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="sync-cd-btn">↻ Match rows to container count</button>
+    <p class="hint">Rows are generated from the container count above — use the button to add/remove rows so they always match; there's no manual blank-row add.</p>
   </div>
 
   <div class="card">
@@ -218,32 +244,6 @@
       <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
       <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
-
-    <div class="field"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
-
-    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
-    <div class="table-wrap">
-      <table class="ledger" id="cd-table">
-        <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
-        </thead>
-        <tbody id="cd-body">
-          {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
-          {% for cd in cd_rows %}
-          <tr class="cd-row">
-            <td class="cd-sr">{{ loop.index }}</td>
-            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
-            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
-            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-cd-btn">+ Add container row</button>
-    <button type="button" class="btn btn-ghost btn-sm" id="sync-cd-btn">↻ Match rows to container count</button>
   </div>
 
   <div class="card">
@@ -522,7 +522,6 @@
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
-  document.getElementById('add-cd-btn').addEventListener('click', () => { cdBody.appendChild(cdRowTemplate()); cdRenumber(); });
   cdBody.addEventListener('click', (e) => { if (e.target.classList.contains('js-remove-cd')) { e.target.closest('tr').remove(); cdRenumber(); } });
 
   // Rebuild the 11B table so it has exactly one row per physical container
