@@ -20,6 +20,7 @@ from datetime import date
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
+from app.services import pallet_alt_quantity
 from app.utils import login_required, admin_required, verify_delete_password
 
 export_invoices_bp = Blueprint("export_invoices", __name__, url_prefix="/export-invoices")
@@ -122,6 +123,36 @@ def _extract_purchase_details(form) -> list:
     return rows
 
 
+def _pallet_types_map(items) -> dict:
+    """product_id -> plain dicts of that product's pallet types, for rows
+    already tied to a catalog product - fills each row's Pallet type
+    dropdown ('loose', the built-in no-pallet default, is added by the form
+    itself). Mirrors app/routes/proforma_invoices.py's helper of the same
+    name; without it every row's dropdown falls back to just 'Loose'."""
+    container = current_app.container
+    result = {}
+    for item in items or []:
+        raw_id = item.get("product_id") if isinstance(item, dict) else item.product_id
+        if not raw_id:
+            continue
+        try:
+            product_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if product_id in result:
+            continue
+        try:
+            product = container.product_service.get_product(product_id, g.user.company_id)
+        except NotFoundError:
+            continue
+        result[product_id] = [
+            {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
+             "alt_qty_per_pallet": pallet_alt_quantity(pt, product)}
+            for pt in container.product_service.pallet_types_for_product(product_id)
+        ]
+    return result
+
+
 def _form_context():
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
@@ -134,11 +165,13 @@ def _form_context():
 def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, status_code=200):
     leads, proforma_invoices, company, permits = _form_context()
+    rows = form_items if form_items is not None else (invoice.items if invoice else [])
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
         company=company, permits=permits, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
+        pallet_types_map=_pallet_types_map(rows),
         today=date.today().isoformat(),
     )
     return (html, status_code) if status_code != 200 else html
