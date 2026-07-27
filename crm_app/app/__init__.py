@@ -277,14 +277,21 @@ def create_app(config_class=Config) -> Flask:
     # --- opt-in interactive debugger for a WSGI server (gunicorn/waitress) --------------------------------------------------
     # Under those servers, app.run(debug=True) never runs, so Flask's normal
     # debug wiring has no effect - the browser just gets a bare 500. Setting
-    # WERKZEUG_DEBUG=1 wraps the app in Werkzeug's DebuggedApplication so a
-    # 500 shows the full interactive traceback in the browser instead.
+    # WERKZEUG_DEBUG=1 does the two things app.run(debug=True) would normally
+    # do for us: (1) app.debug = True stops Flask from swallowing the
+    # exception into a generic 500 response itself, so it actually propagates
+    # out of the WSGI app; (2) DebuggedApplication then catches that
+    # propagated exception and renders the full interactive traceback.
+    # Without both, the exception never reaches the debugger and you just
+    # get a bare "Internal Server Error" - which is exactly what step (1)
+    # being missing looks like.
     # SECURITY: this traceback page includes an interactive Python console
     # that can execute arbitrary code for anyone who can reach it - only set
     # WERKZEUG_DEBUG=1 while a firewall/VPN restricts access to trusted IPs,
     # and unset it (then restart) as soon as you're done diagnosing.
     if os.environ.get("WERKZEUG_DEBUG") == "1":
         from werkzeug.debug import DebuggedApplication
+        app.debug = True
         app.wsgi_app = DebuggedApplication(app.wsgi_app, evalex=True)
 
     return app
