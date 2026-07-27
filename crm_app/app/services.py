@@ -2777,12 +2777,12 @@ class ExportInvoiceService:
     def _clean_export_invoice_number(self, company_id: int, raw: str, exclude_id: Optional[int] = None) -> str:
         """Unlike the other documents in this pipeline, the export invoice
         number is typed in by hand (it must match the number on the physical
-        customs paperwork), not auto-generated. Up to 16 digits."""
+        customs paperwork), not auto-generated. Free text, up to 16 characters."""
         number = (raw or "").strip()
         if not number:
             raise ValidationError("Export invoice number is compulsory.")
-        if not number.isdigit() or len(number) > 16:
-            raise ValidationError("Export invoice number must be up to 16 digits.")
+        if len(number) > 16:
+            raise ValidationError("Export invoice number must be at most 16 characters.")
         if self.export_invoice_repo.number_exists(company_id, number, exclude_id):
             raise ValidationError(f"Export invoice number '{number}' is already in use.")
         return number
