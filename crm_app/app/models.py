@@ -1471,8 +1471,6 @@ class ExportInvoice:
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
-    fob_value: float = 0
-    cnf_value: float = 0
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -1545,8 +1543,6 @@ class ExportInvoice:
             certification=g("certification", 0) or 0,
             other_charges=g("other_charges", 0) or 0,
             discount_amount=g("discount_amount", 0) or 0,
-            fob_value=g("fob_value", 0) or 0,
-            cnf_value=g("cnf_value", 0) or 0,
             bank_name=g("bank_name"),
             bank_account_number=g("bank_account_number"),
             bank_ifsc_code=g("bank_ifsc_code"),
@@ -1585,6 +1581,16 @@ class ExportInvoice:
     def invoice_value_usd(self) -> float:
         return (self.subtotal_usd + self.sea_freight + self.insurance
                 + self.certification + self.other_charges - self.discount_amount)
+
+    @property
+    def cnf_value(self) -> float:
+        """Total value of the bill in USD, before sea freight/insurance/etc are applied."""
+        return self.subtotal_usd
+
+    @property
+    def fob_value(self) -> float:
+        """Value of the bill after sea freight/insurance/etc - same as invoice_value_usd."""
+        return self.invoice_value_usd
 
     @property
     def invoice_value_inr(self) -> float:

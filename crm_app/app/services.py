@@ -3042,8 +3042,6 @@ class ExportInvoiceService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            fob_value=_float("fob_value", 0),
-            cnf_value=_float("cnf_value", 0),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
