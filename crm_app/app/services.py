@@ -2816,9 +2816,11 @@ class ExportInvoiceService:
         return result
 
     def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
-        """Merge the selected PIs' goods lines and import EPCG / export-under
-        / supplier-exemption rows by walking each PI -> its purchase orders ->
-        their purchase invoices. Returns a dict the form/route consumes."""
+        """Merge the selected PIs' goods lines, sum their sea freight /
+        insurance / certification / other charges / discount, and import
+        EPCG / export-under / supplier-exemption rows by walking each PI ->
+        its purchase orders -> their purchase invoices. Returns a dict the
+        form/route consumes."""
         proformas = self._load_proformas(proforma_ids, company_id)
         first = proformas[0] if proformas else None
 
@@ -2840,6 +2842,15 @@ class ExportInvoiceService:
         buyer_order_pi = next((pi for pi in proformas if pi.buyer_order_no), None)
         buyer_order_no = buyer_order_pi.buyer_order_no if buyer_order_pi else None
         buyer_order_date = buyer_order_pi.invoice_date if buyer_order_pi else None
+
+        # Charges: every selected PI contributes its own sea freight /
+        # insurance / certification / other charges / discount, so these
+        # import as the SUM across all of them, not a single PI's value.
+        sea_freight = sum(pi.sea_freight or 0 for pi in proformas)
+        insurance = sum(pi.insurance or 0 for pi in proformas)
+        certification = sum(pi.certification or 0 for pi in proformas)
+        other_charges = sum(pi.other_charges or 0 for pi in proformas)
+        discount_amount = sum(pi.discount_amount or 0 for pi in proformas)
 
         # Walk the chain for EPCG / export-under / exemption purchase details.
         epcg_number = epcg_date = None
@@ -2897,6 +2908,11 @@ class ExportInvoiceService:
             "payment_terms": first.payment_terms if first else None,
             "buyer_order_no": buyer_order_no,
             "buyer_order_date": buyer_order_date,
+            "sea_freight": sea_freight,
+            "insurance": insurance,
+            "certification": certification,
+            "other_charges": other_charges,
+            "discount_amount": discount_amount,
             "bank_name": first.bank_name if first else None,
             "bank_account_number": first.bank_account_number if first else None,
             "bank_ifsc_code": first.bank_ifsc_code if first else None,
