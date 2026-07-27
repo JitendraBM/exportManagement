@@ -331,20 +331,19 @@ CREATE TABLE IF NOT EXISTS our_company_bank_details (
 
 -- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
--- Company" area. Each permit is tied to one supplier, records the issuing
--- authority + place of stuffing, is either valid until an expiry date OR a
--- one-time permit, and can carry an uploaded PDF. supplier_id stays nullable
--- so deleting a supplier never orphan-crashes an existing permit.)
+-- Company" area. Each permit records a stuffing-place number + place of
+-- stuffing, the issuing authority, is either valid until an expiry date OR
+-- a one-time permit, and can carry an uploaded PDF.)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS permits (
     id                        INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id                INTEGER NOT NULL REFERENCES tenants(id),
-    supplier_id               INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    stuffing_place_number     TEXT,
+    place_of_stuffing         TEXT,
     permission_number         TEXT NOT NULL,
     date_of_issue             TEXT,
     issuing_authority         TEXT,
     issuing_authority_address TEXT,
-    place_of_stuffing         TEXT,
     validity_type             TEXT NOT NULL DEFAULT 'expiry' CHECK (validity_type IN ('expiry', 'one_time')),
     date_of_expiry            TEXT,       -- set only when validity_type = 'expiry'
     pdf_path                  TEXT,       -- uploaded permit PDF, relative to static/

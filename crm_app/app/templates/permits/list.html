@@ -19,7 +19,8 @@
       <thead>
         <tr>
           <th>Permission no.</th>
-          <th>Supplier</th>
+          <th>Stuffing place no.</th>
+          <th>Place of stuffing</th>
           <th>Date of issue</th>
           <th>Issuing authority</th>
           <th>Validity</th>
@@ -31,7 +32,8 @@
         {% for permit in permits %}
         <tr>
           <td class="mono">{{ permit.permission_number }}</td>
-          <td><strong>{{ permit.supplier_name or '—' }}</strong></td>
+          <td class="text-sm">{{ permit.stuffing_place_number or '—' }}</td>
+          <td class="text-sm">{{ permit.place_of_stuffing or '—' }}</td>
           <td class="text-sm">{{ permit.date_of_issue or '—' }}</td>
           <td class="text-sm">{{ permit.issuing_authority or '—' }}</td>
           <td class="text-sm">

@@ -18,8 +18,8 @@ from app.utils import admin_required, verify_delete_password
 permits_bp = Blueprint("permits", __name__, url_prefix="/permits")
 
 _FIELDS = [
-    "supplier_id", "permission_number", "date_of_issue", "issuing_authority",
-    "issuing_authority_address", "place_of_stuffing", "validity_type", "date_of_expiry",
+    "stuffing_place_number", "place_of_stuffing", "permission_number", "date_of_issue",
+    "issuing_authority", "issuing_authority_address", "validity_type", "date_of_expiry",
 ]
 
 
@@ -49,12 +49,12 @@ def new_permit():
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
             return render_template(
-                "permits/form.html", permit=None, suppliers=_suppliers(),
+                "permits/form.html", permit=None,
                 form_data=request.form, today=date.today().isoformat(),
             ), 400
 
     return render_template(
-        "permits/form.html", permit=None, suppliers=_suppliers(),
+        "permits/form.html", permit=None,
         form_data=None, today=date.today().isoformat(),
     )
 
@@ -80,12 +80,12 @@ def edit_permit(permit_id):
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
             return render_template(
-                "permits/form.html", permit=permit, suppliers=_suppliers(),
+                "permits/form.html", permit=permit,
                 form_data=request.form, today=date.today().isoformat(),
             ), 400
 
     return render_template(
-        "permits/form.html", permit=permit, suppliers=_suppliers(),
+        "permits/form.html", permit=permit,
         form_data=None, today=date.today().isoformat(),
     )
 
@@ -105,7 +105,3 @@ def delete_permit(permit_id):
     except NotFoundError:
         abort(404)
     return redirect(url_for("permits.list_permits"))
-
-
-def _suppliers():
-    return current_app.container.supplier_service.list_all(g.user.company_id)

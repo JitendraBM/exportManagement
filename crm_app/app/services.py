@@ -821,19 +821,19 @@ class CompanyService:
 # PERMIT SERVICE (the "Permissions" tab under Our Company)
 # ============================================================
 class PermitService:
-    """The permits ("permissions") a company holds. Each references one
-    supplier, records the issuing-authority details and place of stuffing,
-    is either valid until an expiry date OR a one-time permit, and can carry
-    an uploaded PDF (same save/delete pattern as PurchaseInvoiceService).
-    Admin-only, like the rest of the Our Company area - the route enforces
-    that; the service still keeps everything company-scoped."""
+    """The permits ("permissions") a company holds. Each records a
+    stuffing-place number + place of stuffing and the issuing-authority
+    details, is either valid until an expiry date OR a one-time permit, and
+    can carry an uploaded PDF (same save/delete pattern as
+    PurchaseInvoiceService). Admin-only, like the rest of the Our Company
+    area - the route enforces that; the service still keeps everything
+    company-scoped."""
 
     VALIDITY_TYPES = ("expiry", "one_time")
 
-    def __init__(self, permit_repo: PermitRepository, supplier_repo: SupplierRepositoryBase,
+    def __init__(self, permit_repo: PermitRepository,
                  upload_folder: str = "", allowed_extensions: set = frozenset()):
         self.permit_repo = permit_repo
-        self.supplier_repo = supplier_repo
         self.upload_folder = upload_folder
         self.allowed_extensions = allowed_extensions
 
@@ -874,13 +874,6 @@ class PermitService:
         if not permission_number:
             raise ValidationError("Permission number is compulsory.")
 
-        supplier_id = int(fields["supplier_id"]) if fields.get("supplier_id") else None
-        if supplier_id is None:
-            raise ValidationError("Supplier is compulsory.")
-        supplier = self.supplier_repo.get_by_id(supplier_id)
-        if not supplier or supplier.company_id != current_user.company_id:
-            raise ValidationError("Please choose a valid supplier.")
-
         validity_type = (fields.get("validity_type") or "expiry").strip()
         if validity_type not in self.VALIDITY_TYPES:
             validity_type = "expiry"
@@ -891,12 +884,13 @@ class PermitService:
             raise ValidationError("Date of expiry is compulsory unless the permit is one-time.")
 
         return Permit(
-            id=None, company_id=current_user.company_id, supplier_id=supplier_id,
+            id=None, company_id=current_user.company_id,
             permission_number=permission_number, created_by=current_user.id,
+            stuffing_place_number=(fields.get("stuffing_place_number") or "").strip() or None,
+            place_of_stuffing=(fields.get("place_of_stuffing") or "").strip() or None,
             date_of_issue=(fields.get("date_of_issue") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
             issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
-            place_of_stuffing=(fields.get("place_of_stuffing") or "").strip() or None,
             validity_type=validity_type, date_of_expiry=date_of_expiry,
         )
 
