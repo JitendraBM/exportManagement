@@ -227,13 +227,13 @@
     <tr>
       <td class="ei-label ei-mid" rowspan="8">Amount<br>In Word</td>
       <td class="ei-val ei-mid ei-left" rowspan="8">{{ invoice.invoice_value_usd | amount_in_words }}</td>
-      <td class="ei-charge-label">FOB VALUE</td>
-      <td class="ei-val ei-right">{{ usd(invoice.fob_value) }}</td>
+      <td class="ei-charge-label">CNF VALUE</td>
+      <td class="ei-val ei-right">{{ usd(invoice.cnf_value) }}</td>
     </tr>
-    <tr><td class="ei-charge-label">CNF VALUE</td><td class="ei-val ei-right">{{ usd(invoice.cnf_value) }}</td></tr>
     <tr><td class="ei-charge-label">SEA FREIGHT</td><td class="ei-val ei-right">{{ usd(invoice.sea_freight) }}</td></tr>
     <tr><td class="ei-charge-label">INSURANCE</td><td class="ei-val ei-right">{{ usd(invoice.insurance) }}</td></tr>
     <tr><td class="ei-charge-label">DISCOUNT</td><td class="ei-val ei-right">{{ usd(invoice.discount_amount) }}</td></tr>
+    <tr><td class="ei-charge-label">FOB VALUE</td><td class="ei-val ei-right">{{ usd(invoice.fob_value) }}</td></tr>
     <tr><td class="ei-charge-label ei-val">INVOICE VALUE USD</td><td class="ei-val ei-right">{{ usd(invoice.invoice_value_usd) }}</td></tr>
     <tr>
       <td class="ei-charge-label">EXCHANGE RATE</td>
