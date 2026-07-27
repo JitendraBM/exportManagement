@@ -1475,6 +1475,7 @@ class ExportInvoice:
     shipping_bill_pdf_path: Optional[str] = None
     examination_date: Optional[str] = None
     location_code_08b: Optional[str] = None
+    booking_no: Optional[str] = None
     issuing_authority: Optional[str] = None
     issuing_authority_address: Optional[str] = None
     permission_no: Optional[str] = None
@@ -1490,7 +1491,7 @@ class ExportInvoice:
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
@@ -1548,6 +1549,7 @@ class ExportInvoice:
             shipping_bill_pdf_path=g("shipping_bill_pdf_path"),
             examination_date=g("examination_date"),
             location_code_08b=g("location_code_08b"),
+            booking_no=g("booking_no"),
             issuing_authority=g("issuing_authority"),
             issuing_authority_address=g("issuing_authority_address"),
             permission_no=g("permission_no"),

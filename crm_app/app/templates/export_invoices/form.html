@@ -219,18 +219,19 @@
       <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
 
+    <div class="field"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
+
     <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container type</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
           {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
           {% for cd in cd_rows %}
           <tr class="cd-row">
             <td class="cd-sr">{{ loop.index }}</td>
-            <td><input type="text" name="cd_container_type[]" value="{{ cd.container_type or '' }}"></td>
             <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
             <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
             <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
@@ -509,12 +510,11 @@
   // ---- 11B container-detail rows --------------------------------------------------
   const cdBody = document.getElementById('cd-body');
   function cdRenumber() { cdBody.querySelectorAll('.cd-row').forEach((tr, i) => { tr.querySelector('.cd-sr').textContent = i + 1; }); }
-  function cdRowTemplate(type) {
+  function cdRowTemplate() {
     const tr = document.createElement('tr');
     tr.className = 'cd-row';
     tr.innerHTML = `
       <td class="cd-sr"></td>
-      <td><input type="text" name="cd_container_type[]" value="${type || ''}"></td>
       <td><input type="text" name="cd_container_no[]"></td>
       <td><input type="text" name="cd_line_seal_no[]"></td>
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
@@ -522,23 +522,21 @@
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
-  document.getElementById('add-cd-btn').addEventListener('click', () => { cdBody.appendChild(cdRowTemplate('')); cdRenumber(); });
+  document.getElementById('add-cd-btn').addEventListener('click', () => { cdBody.appendChild(cdRowTemplate()); cdRenumber(); });
   cdBody.addEventListener('click', (e) => { if (e.target.classList.contains('js-remove-cd')) { e.target.closest('tr').remove(); cdRenumber(); } });
 
   // Rebuild the 11B table so it has exactly one row per physical container
-  // implied by the Container Details counts, preserving already-typed rows.
+  // implied by the total Container Details count, preserving already-typed rows.
   document.getElementById('sync-cd-btn').addEventListener('click', () => {
-    const wanted = [];
+    let wantedCount = 0;
     document.querySelectorAll('#container-rows .container-row').forEach((r) => {
-      const type = r.querySelector('.js-container-type').value;
-      const count = parseInt(r.querySelector('.js-container-count').value, 10) || 0;
-      for (let i = 0; i < count; i++) wanted.push(type);
+      wantedCount += parseInt(r.querySelector('.js-container-count').value, 10) || 0;
     });
     const existing = Array.from(cdBody.querySelectorAll('.cd-row'));
-    if (wanted.length > existing.length) {
-      for (let i = existing.length; i < wanted.length; i++) cdBody.appendChild(cdRowTemplate(wanted[i]));
-    } else if (wanted.length < existing.length) {
-      for (let i = existing.length - 1; i >= wanted.length; i--) existing[i].remove();
+    if (wantedCount > existing.length) {
+      for (let i = existing.length; i < wantedCount; i++) cdBody.appendChild(cdRowTemplate());
+    } else if (wantedCount < existing.length) {
+      for (let i = existing.length - 1; i >= wantedCount; i--) existing[i].remove();
     }
     cdRenumber();
   });

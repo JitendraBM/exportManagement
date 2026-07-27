@@ -3008,6 +3008,7 @@ class ExportInvoiceService:
             self_sealing_declaration=(fields.get("self_sealing_declaration") or "").strip() or None,
             examination_date=(fields.get("examination_date") or "").strip() or None,
             location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
+            booking_no=(fields.get("booking_no") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
             issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
             permission_no=(fields.get("permission_no") or "").strip() or None,
@@ -3054,7 +3055,7 @@ class ExportInvoiceService:
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
             if any(values.values()):
                 rows.append(values)
         return rows
