@@ -2833,21 +2833,12 @@ class ExportInvoiceService:
                     "igst_percent": self._product_igst_percent(it.product_id, company_id),
                 })
 
-        # Buyer orders: the PIs under one export invoice normally share the
-        # SAME buyer order number, so collapse identical order numbers into a
-        # single row (keyed case-insensitively) rather than repeating it once
-        # per PI - each distinct order keeps its first PI as the link.
-        buyer_orders = []
-        seen_orders = set()
-        for pi in proformas:
-            if not pi.buyer_order_no:
-                continue
-            key = pi.buyer_order_no.strip().lower()
-            if key in seen_orders:
-                continue
-            seen_orders.add(key)
-            buyer_orders.append({"order_no": pi.buyer_order_no, "order_date": pi.invoice_date,
-                                 "proforma_invoice_id": pi.id})
+        # Buyer Order No & Date: every PI under one export invoice shares the
+        # same buyer order, so it's a single field taken from the first
+        # selected PI that has one, not a per-PI list.
+        buyer_order_pi = next((pi for pi in proformas if pi.buyer_order_no), None)
+        buyer_order_no = buyer_order_pi.buyer_order_no if buyer_order_pi else None
+        buyer_order_date = buyer_order_pi.invoice_date if buyer_order_pi else None
 
         # Walk the chain for EPCG / export-under / exemption purchase details.
         epcg_number = epcg_date = None
@@ -2903,6 +2894,8 @@ class ExportInvoiceService:
             "port_of_discharge": first.port_of_discharge if first else None,
             "final_destination": first.final_destination if first else None,
             "payment_terms": first.payment_terms if first else None,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
             "bank_name": first.bank_name if first else None,
             "bank_account_number": first.bank_account_number if first else None,
             "bank_ifsc_code": first.bank_ifsc_code if first else None,
@@ -2914,8 +2907,7 @@ class ExportInvoiceService:
             "epcg_date": epcg_date,
             "self_sealing_declaration": company.self_sealing_declaration if company else None,
         }
-        return {"fields": fields, "items": items, "buyer_orders": buyer_orders,
-                "purchase_details": purchase_details}
+        return {"fields": fields, "items": items, "purchase_details": purchase_details}
 
     def _product_igst_percent(self, product_id, company_id: int) -> float:
         if not product_id:
@@ -3023,6 +3015,8 @@ class ExportInvoiceService:
             final_destination=(fields.get("final_destination") or "").strip() or None,
             nature_of_contract=(fields.get("nature_of_contract") or "").strip() or None,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
+            buyer_order_no=(fields.get("buyer_order_no") or "").strip() or None,
+            buyer_order_date=(fields.get("buyer_order_date") or "").strip() or None,
             export_under=(fields.get("export_under") or "").strip() or None,
             epcg_number=(fields.get("epcg_number") or "").strip() or None,
             epcg_date=(fields.get("epcg_date") or "").strip() or None,
@@ -3057,7 +3051,6 @@ class ExportInvoiceService:
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
-        invoice.buyer_orders = self._clean_buyer_orders(fields.get("buyer_orders"), invoice.proforma_invoice_ids)
         invoice.containers = self._clean_containers(fields.get("containers"))
         invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
         invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
@@ -3073,25 +3066,6 @@ class ExportInvoiceService:
             if pi and pi.company_id == company_id:
                 result.append(pi.id)
         return result
-
-    @staticmethod
-    def _clean_buyer_orders(raw, valid_pi_ids: List[int]) -> List[dict]:
-        rows = []
-        for r in raw or []:
-            order_no = (r.get("order_no") or "").strip()
-            order_date = (r.get("order_date") or "").strip()
-            if not order_no and not order_date:
-                continue
-            pi_id = r.get("proforma_invoice_id")
-            try:
-                pi_id = int(pi_id) if pi_id else None
-            except (TypeError, ValueError):
-                pi_id = None
-            if pi_id not in valid_pi_ids:
-                pi_id = None  # only link to a PI this export invoice actually references
-            rows.append({"order_no": order_no or None, "order_date": order_date or None,
-                         "proforma_invoice_id": pi_id})
-        return rows
 
     @staticmethod
     def _clean_containers(raw) -> List[dict]:

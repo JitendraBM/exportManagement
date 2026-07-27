@@ -1425,9 +1425,10 @@ class ExportInvoice:
     pipeline. References one or more Proforma Invoices (many-to-many via
     proforma_invoice_ids). Goods are prefilled from those PIs then edited.
     Tax is computed per-product and shown as IGST or CGST/SGST per tax_mode;
-    the exchange rate is manual and admin-locked once set. The several child
-    lists (buyer_orders / containers / container_details / purchase_details)
-    back the front-page and page-2 annexure blocks."""
+    the exchange rate is manual and admin-locked once set. Buyer Order No &
+    Date is a single field shared by every linked PI. The several child
+    lists (containers / container_details / purchase_details) back the
+    front-page and page-2 annexure blocks."""
     id: Optional[int]
     company_id: int
     export_invoice_number: str
@@ -1447,6 +1448,8 @@ class ExportInvoice:
     final_destination: Optional[str] = None
     nature_of_contract: Optional[str] = None
     payment_terms: Optional[str] = None
+    buyer_order_no: Optional[str] = None
+    buyer_order_date: Optional[str] = None
     export_under: Optional[str] = None
     epcg_number: Optional[str] = None
     epcg_date: Optional[str] = None
@@ -1486,7 +1489,6 @@ class ExportInvoice:
     created_by_name: Optional[str] = None  # populated by joined queries only
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
-    buyer_orders: List[dict] = field(default_factory=list)  # [{order_no, order_date, proforma_invoice_id}]
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
     container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
@@ -1519,6 +1521,8 @@ class ExportInvoice:
             final_destination=g("final_destination"),
             nature_of_contract=g("nature_of_contract"),
             payment_terms=g("payment_terms"),
+            buyer_order_no=g("buyer_order_no"),
+            buyer_order_date=g("buyer_order_date"),
             export_under=g("export_under"),
             epcg_number=g("epcg_number"),
             epcg_date=g("epcg_date"),

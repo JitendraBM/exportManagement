@@ -74,9 +74,7 @@
     <tr>
       <td class="ei-label ei-mid">Buyer Order<br>No &amp; Date</td>
       <td class="ei-val ei-left" colspan="3">
-        {% for bo in invoice.buyer_orders %}
-          {{ bo.order_no or '-' }}{% if bo.order_date %} &nbsp;·&nbsp; {{ dmy(bo.order_date) }}{% endif %}<br>
-        {% else %}-{% endfor %}
+        {{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp;·&nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}
       </td>
     </tr>
     <tr>
