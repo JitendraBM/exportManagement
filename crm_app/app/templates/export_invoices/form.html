@@ -25,14 +25,17 @@
       {% set selected_str = selected_ids | map('string') | list %}
       <div id="proforma-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;">
         {% for pi in proforma_invoices %}
-        <label style="display:block;padding:4px 0;cursor:pointer;">
-          <input type="checkbox" class="js-pi-check" name="proforma_invoice_ids[]" value="{{ pi.id }}" {{ 'checked' if pi.id | string in selected_str }}>
+        <label class="js-pi-label" style="display:block;padding:4px 0;cursor:pointer;">
+          <input type="checkbox" class="js-pi-check" name="proforma_invoice_ids[]" value="{{ pi.id }}"
+                 data-company-key="{{ pi.lead_id or ((pi.consignee_name or '') | lower | trim) }}"
+                 {{ 'checked' if pi.id | string in selected_str }}>
           <strong>{{ pi.invoice_number }}</strong> — {{ pi.consignee_name }}{% if pi.buyer_order_no %} · <span class="text-soft">Order {{ pi.buyer_order_no }}</span>{% endif %} ({{ pi.invoice_date }})
         </label>
         {% else %}
         <div class="text-soft text-sm">No proforma invoices yet.</div>
         {% endfor %}
       </div>
+      <p class="hint">One export invoice covers a single buyer — ticking a PI narrows the list above to that same buyer's other PIs; untick all to pick a different buyer.</p>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load goods &amp; details from selected PIs</button>
     <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. It reloads the page, so do it before typing anything you want to keep.</p>
@@ -515,6 +518,30 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', recalcTotals);
   });
+
+  // ---- reference-PI picker: restrict to one buyer at a time -----------------
+  // One export invoice covers a single buyer's PIs, so once any box is
+  // checked, every other checkbox whose PI belongs to a different buyer
+  // (same lead if the PI is linked to one, else its consignee name) is
+  // disabled and dimmed rather than removed, so the reason stays visible.
+  const proformaPicker = document.getElementById('proforma-picker');
+  function refreshProformaPickerFilter() {
+    const checked = Array.from(proformaPicker.querySelectorAll('.js-pi-check:checked'));
+    const keys = new Set(checked.map((c) => c.dataset.companyKey));
+    const activeKey = keys.size === 1 ? [...keys][0] : null;
+    proformaPicker.querySelectorAll('.js-pi-check').forEach((cb) => {
+      const label = cb.closest('.js-pi-label');
+      const blocked = activeKey !== null && cb.dataset.companyKey !== activeKey && !cb.checked;
+      cb.disabled = blocked;
+      if (label) label.style.opacity = blocked ? '0.4' : '';
+    });
+  }
+  if (proformaPicker) {
+    proformaPicker.addEventListener('change', (e) => {
+      if (e.target.classList.contains('js-pi-check')) refreshProformaPickerFilter();
+    });
+    refreshProformaPickerFilter();
+  }
 
   // ---- reference-PI loader --------------------------------------------------
   document.getElementById('load-from-pis-btn').addEventListener('click', () => {

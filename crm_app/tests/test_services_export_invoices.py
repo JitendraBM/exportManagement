@@ -134,6 +134,12 @@ class TestExportProformaLinks:
         assert set(got.proforma_invoice_ids) == {p1.id, p2.id}
         assert len(got.linked_proformas) == 2
 
+    def test_rejects_proformas_from_different_buyers(self, container, seed):
+        p1 = make_proforma(container, seed, consignee_name="ROBUST INTERNATIONAL")
+        p2 = make_proforma(container, seed, consignee_name="OTHER BUYER LTD")
+        with pytest.raises(ValidationError):
+            make_export(container, seed, proforma_ids=[p1.id, p2.id])
+
     def test_prefill_merges_goods_from_all_selected_pis(self, container, seed):
         p1 = make_proforma(container, seed)
         p2 = make_proforma(container, seed)
