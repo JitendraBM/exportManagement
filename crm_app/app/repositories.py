@@ -1609,12 +1609,16 @@ class ExportInvoiceRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+    def number_exists(self, company_id: int, export_invoice_number: str, exclude_id: Optional[int] = None) -> bool:
+        """Export invoice numbers are typed in by hand (not auto-generated),
+        so create/update check this first to give a clean validation error
+        instead of tripping the UNIQUE(company_id, export_invoice_number)
+        constraint."""
         row = self.db.query_one(
-            "SELECT COUNT(*) AS cnt FROM export_invoices WHERE company_id = ? AND export_invoice_number LIKE ?",
-            (company_id, f"{number_prefix}%"),
+            "SELECT id FROM export_invoices WHERE company_id = ? AND export_invoice_number = ? AND id != ?",
+            (company_id, export_invoice_number, exclude_id or 0),
         )
-        return row["cnt"] if row else 0
+        return row is not None
 
     def get_by_id(self, invoice_id: int) -> Optional[ExportInvoice]:
         row = self.db.query_one(
@@ -1707,7 +1711,7 @@ class ExportInvoiceRepository:
 
     def update(self, invoice_id: int, invoice: ExportInvoice) -> None:
         self.db.execute(
-            """UPDATE export_invoices SET invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
+            """UPDATE export_invoices SET export_invoice_number = ?, invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
                    notify_name = ?, notify_address = ?, country_of_origin = ?, country_of_destination = ?,
                    place_of_receipt = ?, pre_carriage_by = ?, port_of_loading = ?, port_of_discharge = ?,
                    final_destination = ?, nature_of_contract = ?, payment_terms = ?, buyer_order_no = ?, buyer_order_date = ?, export_under = ?,
@@ -1720,15 +1724,17 @@ class ExportInvoiceRepository:
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
-            self._header_params(invoice) + (invoice_id,),
+            (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
         )
         self._replace_children(invoice_id, invoice)
 
     def _header_params(self, invoice: ExportInvoice) -> tuple:
         """The EDITABLE header column values, in the exact order both INSERT
-        and UPDATE list them (from invoice_date onward). company_id and
-        export_invoice_number are immutable, so create() prepends them and
-        update() never touches them. Kept as one tuple so the two long column
+        and UPDATE list them (from invoice_date onward). company_id is
+        immutable, so create() prepends it separately; export_invoice_number
+        is now hand-entered and editable, so create() also prepends it
+        separately (right after company_id) while update() prepends it on
+        its own ahead of this tuple. Kept as one tuple so the two long column
         lists can never drift apart."""
         return (
             invoice.invoice_date, invoice.lead_id,

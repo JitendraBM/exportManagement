@@ -54,9 +54,9 @@ def make_proforma(container, seed, product=None, buyer_order_no="EXP/003", **ove
     return container.proforma_invoice_service.create(seed.admin, fields, [item])
 
 
-def make_export(container, seed, proforma_ids=None, items=None, **over):
+def make_export(container, seed, proforma_ids=None, items=None, export_invoice_number="1000000001", **over):
     fields = {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-02-20",
-              "tax_mode": "igst", "exchange_rate": "86.70"}
+              "tax_mode": "igst", "exchange_rate": "86.70", "export_invoice_number": export_invoice_number}
     if proforma_ids:
         fields["proforma_invoice_ids"] = [str(p) for p in proforma_ids]
     fields.update(over)
@@ -68,12 +68,27 @@ def make_export(container, seed, proforma_ids=None, items=None, **over):
 # Basic create / read / update / delete
 # ==========================================================================
 class TestExportCrud:
-    def test_create_generates_number_and_persists(self, container, seed):
-        inv = make_export(container, seed)
-        assert inv.export_invoice_number.startswith("EXPINV")
+    def test_create_persists_the_typed_number(self, container, seed):
+        inv = make_export(container, seed, export_invoice_number="1234567890")
+        assert inv.export_invoice_number == "1234567890"
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
+
+    def test_number_is_required(self, container, seed):
+        with pytest.raises(ValidationError):
+            make_export(container, seed, export_invoice_number="")
+
+    def test_number_must_be_digits_only_and_at_most_16_chars(self, container, seed):
+        with pytest.raises(ValidationError):
+            make_export(container, seed, export_invoice_number="ABC123")
+        with pytest.raises(ValidationError):
+            make_export(container, seed, export_invoice_number="1" * 17)
+
+    def test_number_must_be_unique_per_company(self, container, seed):
+        make_export(container, seed, export_invoice_number="5555555555")
+        with pytest.raises(ValidationError):
+            make_export(container, seed, export_invoice_number="5555555555")
 
     def test_get_is_tenant_scoped(self, container, seed):
         inv = make_export(container, seed)
@@ -102,7 +117,7 @@ class TestExportCrud:
         # editing later (with a new invoice_date) does not move examination_date
         updated = container.export_invoice_service.update(
             seed.admin, inv.id,
-            {"consignee_name": "ROBUST", "invoice_date": "2026-03-01", "exchange_rate": "86.70"},
+            {"consignee_name": "ROBUST", "invoice_date": "2026-03-01", "exchange_rate": "86.70", "export_invoice_number": "1000000001"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
         assert updated.examination_date == "2026-02-20"
 
@@ -230,25 +245,25 @@ class TestExportExchangeRate:
     def test_admin_can_change_rate(self, container, seed):
         inv = make_export(container, seed, exchange_rate="86.70")
         updated = container.export_invoice_service.update(
-            seed.admin, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "90"},
+            seed.admin, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "90", "export_invoice_number": "1000000002"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
         assert updated.exchange_rate == 90
 
     def test_non_admin_owner_cannot_change_rate(self, container, seed):
         inv = container.export_invoice_service.create(
-            seed.employee, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70"},
+            seed.employee, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70", "export_invoice_number": "1000000002"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
         with pytest.raises(PermissionDeniedError):
             container.export_invoice_service.update(
-                seed.employee, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "99"},
+                seed.employee, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "99", "export_invoice_number": "1000000003"},
                 [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
 
     def test_non_admin_blank_rate_keeps_stored_value(self, container, seed):
         inv = container.export_invoice_service.create(
-            seed.employee, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70"},
+            seed.employee, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70", "export_invoice_number": "1000000002"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
         updated = container.export_invoice_service.update(
-            seed.employee, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": ""},
+            seed.employee, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "", "export_invoice_number": "1000000004"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}])
         assert updated.exchange_rate == 86.70
 
@@ -293,12 +308,12 @@ class TestExportChildLists:
 class TestExportPdfAndVersions:
     def test_shipping_bill_pdf_upload_and_remove(self, container, seed):
         inv = container.export_invoice_service.create(
-            seed.admin, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70"},
+            seed.admin, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70", "export_invoice_number": "1000000002"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}],
             pdf_file=upload())
         assert inv.shipping_bill_pdf_path
         removed = container.export_invoice_service.update(
-            seed.admin, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70"},
+            seed.admin, inv.id, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70", "export_invoice_number": "1000000002"},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}],
             remove_pdf=True)
         assert removed.shipping_bill_pdf_path is None
@@ -306,7 +321,7 @@ class TestExportPdfAndVersions:
     def test_rejects_non_pdf_shipping_bill(self, container, seed):
         with pytest.raises(ValidationError):
             container.export_invoice_service.create(
-                seed.admin, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70"},
+                seed.admin, {"consignee_name": "R", "invoice_date": "2026-02-20", "exchange_rate": "86.70", "export_invoice_number": "1000000002"},
                 [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}],
                 pdf_file=upload("evil.exe"))
 
