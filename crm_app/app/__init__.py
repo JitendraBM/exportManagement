@@ -11,6 +11,8 @@ action). Swapping SQLite for another database later means editing this file
 plus `app/database.py` - routes, services and templates are untouched.
 """
 
+import os
+
 from flask import Flask, g, session, render_template
 
 from config import Config
@@ -260,5 +262,18 @@ def create_app(config_class=Config) -> Flask:
     @app.errorhandler(404)
     def not_found(e):
         return render_template("errors/404.html"), 404
+
+    # --- opt-in interactive debugger for a WSGI server (gunicorn/waitress) --------------------------------------------------
+    # Under those servers, app.run(debug=True) never runs, so Flask's normal
+    # debug wiring has no effect - the browser just gets a bare 500. Setting
+    # WERKZEUG_DEBUG=1 wraps the app in Werkzeug's DebuggedApplication so a
+    # 500 shows the full interactive traceback in the browser instead.
+    # SECURITY: this traceback page includes an interactive Python console
+    # that can execute arbitrary code for anyone who can reach it - only set
+    # WERKZEUG_DEBUG=1 while a firewall/VPN restricts access to trusted IPs,
+    # and unset it (then restart) as soon as you're done diagnosing.
+    if os.environ.get("WERKZEUG_DEBUG") == "1":
+        from werkzeug.debug import DebuggedApplication
+        app.wsgi_app = DebuggedApplication(app.wsgi_app, evalex=True)
 
     return app
