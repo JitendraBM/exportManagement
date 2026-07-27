@@ -43,12 +43,12 @@
 <div class="pk-sheet">
   <table>
     <colgroup>
-      <col style="width:6.5%"><col style="width:12%"><col style="width:16.5%"><col style="width:5%">
-      <col style="width:6%"><col style="width:6%"><col style="width:9%"><col style="width:6%">
-      <col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:6%">
+      <col style="width:6%"><col style="width:11%"><col style="width:11%"><col style="width:7%"><col style="width:5%">
+      <col style="width:6%"><col style="width:6%"><col style="width:9%"><col style="width:5.5%">
+      <col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:6.5%">
     </colgroup>
 
-    <tr><td class="pk-title" colspan="13">&lt; &lt; &lt; &lt; &lt; &nbsp;PACKING DETAILS&nbsp; &gt; &gt; &gt; &gt; &gt;</td></tr>
+    <tr><td class="pk-title" colspan="14">&lt; &lt; &lt; &lt; &lt; &nbsp;PACKING DETAILS&nbsp; &gt; &gt; &gt; &gt; &gt;</td></tr>
 
     {% if packing_list.purchase_invoice_id %}
       {% set pk_src_label, pk_src_number = 'PURCHASE INVOICE NO', packing_list.purchase_invoice_number %}
@@ -63,13 +63,14 @@
       <td class="pk-label pk-left" colspan="2">{{ pk_src_label }}</td>
       <td class="pk-label" colspan="3">{{ pk_src_number or '-' }}</td>
       <td class="pk-label">DATE</td>
-      <td class="pk-label" colspan="7">{{ packing_list.packing_list_date | long_date }}</td>
+      <td class="pk-label" colspan="8">{{ packing_list.packing_list_date | long_date }}</td>
     </tr>
 
     <tr class="pk-head">
       <td rowspan="2">INDEX</td>
       <td rowspan="2">PRODUCT</td>
       <td rowspan="2">PRODUCT</td>
+      <td rowspan="2">HSN CODE</td>
       <td colspan="2">BOX PACKING</td>
       <td rowspan="2">SURFACE</td>
       <td rowspan="2">MODEL NO<br>OR NAME</td>
@@ -98,6 +99,7 @@
         {% endif %}
       </td>
       <td class="pk-desc">{{ item.product_name }}</td>
+      <td>{{ item.hsn_code or '' }}</td>
       <td>{{ product.quantity if product and product.quantity else '' }}</td>
       <td>{{ product.alternate_quantity if product and product.alternate_quantity else '' }}</td>
       <td>{{ (design.surface or '')|upper if design else '' }}</td>
@@ -112,7 +114,7 @@
     {% endfor %}
 
     <tr>
-      <td class="pk-label" colspan="7">TOTAL</td>
+      <td class="pk-label" colspan="8">TOTAL</td>
       <td class="pk-label">{{ num(packing_list.total_pallets) }}</td>
       <td class="pk-label">{{ num(packing_list.total_boxes) }}</td>
       <td class="pk-label">{{ num(packing_list.total_pcs) }}</td>
@@ -122,7 +124,7 @@
     </tr>
     <tr>
       <td class="pk-label pk-left" colspan="2">REMARKS :</td>
-      <td class="pk-left" colspan="11">{{ (packing_list.remarks or '')|upper }}</td>
+      <td class="pk-left" colspan="12">{{ (packing_list.remarks or '')|upper }}</td>
     </tr>
     <tr>
       <td class="pk-sign-cell" colspan="6">
@@ -131,7 +133,7 @@
           <div class="pk-label">SEAL &amp; SIGNATURE</div>
         </div>
       </td>
-      <td class="pk-sign-cell" colspan="7">
+      <td class="pk-sign-cell" colspan="8">
         <div class="pk-sign-flex pk-sign-right">
           <div class="pk-label">FOR&nbsp; {{ company.company_name|upper if company else '' }}</div>
           <div class="pk-label">AUTHORISED SIGNATORY</div>
