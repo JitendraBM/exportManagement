@@ -128,8 +128,7 @@
       <td class="ei-label ei-mid" rowspan="3">Container Details</td>
       <td class="ei-label ei-mid" rowspan="6">Bank Details</td>
       <td class="ei-val ei-left ei-mid" rowspan="6">
-        <span class="ei-val">BENEFICIARY</span><br>
-        <span class="ei-val">{{ company.company_name|upper if company else '' }}</span><br>
+        <span class="ei-val">BENEFICIARY : {{ company.company_name|upper if company else '' }}</span><br>
         <span class="ei-val">{{ (invoice.bank_name or '-')|upper }}</span><br>
         <span class="ei-val">{{ (invoice.bank_address or '')|upper|replace('\n', '<br>')|safe }}</span>
         {% if invoice.bank_account_number %}<br><span class="ei-val">A/C NO : {{ invoice.bank_account_number }}</span>{% endif %}

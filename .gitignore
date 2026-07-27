@@ -5,7 +5,12 @@ crm_app/instance/*.db
 crm_app/instance/backups/
 crm_app/.venv/
 crm_app/venv/
+<<<<<<< HEAD
 crm_app/tests_venv/
 crm_app/app/static/uploads/
 logs/
 crm_app/discord bot/
+=======
+crm_app/app/static/uploads/
+logs/
+>>>>>>> 67dbdd4 (redesign: beneficiery and name in same line)
