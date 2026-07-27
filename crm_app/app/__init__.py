@@ -282,5 +282,11 @@ def create_app(config_class=Config) -> Flask:
         from werkzeug.debug import DebuggedApplication
         app.debug = True
         app.wsgi_app = DebuggedApplication(app.wsgi_app, evalex=True)
+        # Unambiguous proof-of-life in the process's own stdout/stderr - if
+        # this line never shows up in the server's logs after a restart,
+        # the env var isn't reaching this process (wrong .env file, wrong
+        # working directory, or gunicorn wasn't actually restarted) and no
+        # amount of waiting for the browser to show a traceback will help.
+        print(">>> WERKZEUG_DEBUG=1 detected - interactive debugger is ACTIVE for this worker <<<", flush=True)
 
     return app
