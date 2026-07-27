@@ -149,6 +149,19 @@ class TestExportProformaLinks:
         built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
         assert built["fields"]["buyer_order_no"] == "EXP/002"
 
+    def test_prefill_sums_charges_from_all_selected_pis(self, container, seed):
+        p1 = make_proforma(container, seed, sea_freight="100", insurance="20", certification="5",
+                            other_charges="10", discount_amount="2")
+        p2 = make_proforma(container, seed, sea_freight="50", insurance="30", certification="0",
+                            other_charges="0", discount_amount="8")
+        built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
+        fields = built["fields"]
+        assert fields["sea_freight"] == 150
+        assert fields["insurance"] == 50
+        assert fields["certification"] == 5
+        assert fields["other_charges"] == 10
+        assert fields["discount_amount"] == 10
+
     def test_prefill_export_under_from_company_lut(self, container, seed):
         make_company(container, seed, lut="LUT-123")
         p1 = make_proforma(container, seed)
