@@ -36,13 +36,14 @@
 
     <table class="pi-items">
       <colgroup>
-        <col style="width:8%"><col style="width:36%"><col style="width:5.5%"><col style="width:7%">
-        <col style="width:14%"><col style="width:7.5%"><col style="width:12%"><col style="width:10%">
+        <col style="width:7%"><col style="width:29%"><col style="width:8%"><col style="width:5.5%"><col style="width:7%">
+        <col style="width:13%"><col style="width:7%"><col style="width:5.5%"><col style="width:18%">
       </colgroup>
       <thead>
         <tr>
           <td rowspan="2">Serial Number</td>
           <td rowspan="2">Description Of Goods</td>
+          <td rowspan="2">HSN Code</td>
           <td colspan="3">Quantity Details</td>
           <td rowspan="2">Rate<br>In USD</td>
           <td rowspan="2">Unit</td>
@@ -57,11 +58,12 @@
       <tbody>
         {{ goods.rows(annex_items, pi_mode, annex_sr_start) }}
         <tr class="pi-filler js-page-filler">
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
         </tr>
         <tr>
           <td></td>
           <td class="pi-val pi-center">TOTAL</td>
+          <td></td>
           <td class="pi-val pi-center">{{ '{:,.2f}'.format(axns.pallets) if axns.pallets else '' }}</td>
           <td class="pi-val pi-center">{{ '{:,.0f}'.format(axns.boxes) if axns.boxes else '' }}</td>
           <td class="pi-val pi-right">{{ '{:,.2f}'.format(axns.qty) }}</td>

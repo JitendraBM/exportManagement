@@ -224,13 +224,14 @@
   <!-- Goods -->
   <table class="pi-items">
     <colgroup>
-      <col style="width:8%"><col style="width:36%"><col style="width:5.5%"><col style="width:7%">
-      <col style="width:14%"><col style="width:7.5%"><col style="width:5.5%"><col style="width:16.5%">
+      <col style="width:7%"><col style="width:29%"><col style="width:8%"><col style="width:5.5%"><col style="width:7%">
+      <col style="width:13%"><col style="width:7%"><col style="width:5.5%"><col style="width:18%">
     </colgroup>
     <thead>
       <tr>
         <td rowspan="2">Serial Number</td>
         <td rowspan="2">Description Of Goods</td>
+        <td rowspan="2">HSN Code</td>
         <td colspan="3">Quantity Details</td>
         <td rowspan="2">Rate<br>In USD</td>
         <td rowspan="2">Unit</td>
@@ -248,15 +249,16 @@
       <tr class="pi-goods">
         <td></td>
         <td class="pi-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
       <tr class="pi-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="pi-val pi-center">TOTAL</td>
+        <td></td>
         <td class="pi-val pi-center">{{ '{:,.2f}'.format(ns.pallets) if ns.pallets else '' }}</td>
         <td class="pi-val pi-center">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="pi-val pi-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
