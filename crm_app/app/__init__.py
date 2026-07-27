@@ -107,7 +107,7 @@ class ServiceContainer:
         )
         self.inventory_service = InventoryService(self.product_service, self.packing_list_repo)
         self.permit_service = PermitService(
-            self.permit_repo, self.supplier_repo,
+            self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
         self.document_version_service = DocumentVersionService(self.document_version_repo)

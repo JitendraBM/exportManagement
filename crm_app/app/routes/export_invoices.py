@@ -125,15 +125,16 @@ def _form_context():
     leads = container.lead_service.list_for_dashboard(g.user)
     proforma_invoices = container.proforma_invoice_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
-    return leads, proforma_invoices, company
+    permits = container.permit_service.list_all(g.user.company_id)
+    return leads, proforma_invoices, company, permits
 
 
 def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, status_code=200):
-    leads, proforma_invoices, company = _form_context()
+    leads, proforma_invoices, company, permits = _form_context()
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
-        company=company, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
+        company=company, permits=permits, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
         today=date.today().isoformat(),
