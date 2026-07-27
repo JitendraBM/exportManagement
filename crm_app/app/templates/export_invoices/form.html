@@ -74,11 +74,13 @@
         </select>
       </div>
       <div class="field">
-        <label for="tax_mode">Tax applied as</label>
+        <label for="tax_mode">Supply meant for</label>
+        {% set tm = data.tax_mode | default('igst', true) %}
+        {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
+        {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else None) or {}).get('lut_number') if company and company.lut_details else None %}
         <select id="tax_mode" name="tax_mode">
-          {% set tm = data.tax_mode | default('igst', true) %}
-          <option value="igst" {{ 'selected' if tm != 'cgst_sgst' }}>IGST</option>
-          <option value="cgst_sgst" {{ 'selected' if tm == 'cgst_sgst' }}>CGST / SGST</option>
+          <option value="igst" {{ 'selected' if tm != 'lut' }}>With Payment of IGST</option>
+          <option value="lut" {{ 'selected' if tm == 'lut' }}>Without Payment of IGST under LUT{{ ' no. ' + lut_no if lut_no else '' }}</option>
         </select>
       </div>
       <div class="field">

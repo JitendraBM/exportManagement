@@ -223,18 +223,15 @@ class TestExportTax:
         # line1: 100usd*100rate*18% = 1800 ; line2: 100usd*100rate*5% = 500
         assert round(got.tax_total_inr, 2) == 2300.0
         assert round(got.igst_amount_inr, 2) == 2300.0
-        assert got.cgst_amount_inr == 0
 
-    def test_cgst_sgst_mode_splits_tax_in_half(self, container, seed):
+    def test_lut_mode_is_zero_rated(self, container, seed):
         make_company(container, seed)
         p18 = make_product(container, seed, name="WallTile", igst="18")
-        inv = make_export(container, seed, exchange_rate="100", tax_mode="cgst_sgst", items=[
+        inv = make_export(container, seed, exchange_rate="100", tax_mode="lut", items=[
             {"product_name": "WallTile", "product_id": str(p18.id), "quantity_value": "10", "unit": "SQM", "price_usd": "10"},
         ])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert round(got.tax_total_inr, 2) == 1800.0
-        assert round(got.cgst_amount_inr, 2) == 900.0
-        assert round(got.sgst_amount_inr, 2) == 900.0
         assert got.igst_amount_inr == 0
 
 

@@ -36,7 +36,7 @@ from app.models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
     DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
-    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_CGST_SGST,
+    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_LUT,
     EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
 )
 from app.repositories import (
@@ -2704,8 +2704,10 @@ class ExportInvoiceService:
     - It references MANY proforma invoices (many-to-many). Goods are
       prefilled from those PIs (build_prefill_from_proformas) then edited.
     - Tax is computed per-product: each line snapshots its product's IGST %,
-      the amounts are summed and shown as IGST or CGST/SGST per tax_mode
-      (see ExportInvoice.tax_total_inr / igst_amount_inr / ...).
+      the amounts are summed, and charged (or not) per tax_mode - "Supply
+      meant for" is either "With Payment of IGST" or "Without Payment of
+      IGST under LUT" (zero-rated) (see ExportInvoice.tax_total_inr /
+      igst_amount_inr).
     - The exchange rate is typed in manually; once a value is set only an
       admin may change it (enforced in update()).
     - EPCG number/date, the "export under" text and the supplier
