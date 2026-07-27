@@ -36,7 +36,7 @@ from app.models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
     DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
-    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_CGST_SGST,
+    ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_LUT,
     EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
 )
 from app.repositories import (
@@ -2722,8 +2722,10 @@ class ExportInvoiceService:
     - It references MANY proforma invoices (many-to-many). Goods are
       prefilled from those PIs (build_prefill_from_proformas) then edited.
     - Tax is computed per-product: each line snapshots its product's IGST %,
-      the amounts are summed and shown as IGST or CGST/SGST per tax_mode
-      (see ExportInvoice.tax_total_inr / igst_amount_inr / ...).
+      the amounts are summed, and charged (or not) per tax_mode - "Supply
+      meant for" is either "With Payment of IGST" or "Without Payment of
+      IGST under LUT" (zero-rated) (see ExportInvoice.tax_total_inr /
+      igst_amount_inr).
     - The exchange rate is typed in manually; once a value is set only an
       admin may change it (enforced in update()).
     - EPCG number/date, the "export under" text and the supplier
@@ -2771,14 +2773,19 @@ class ExportInvoiceService:
         if invoice.created_by != current_user.id:
             raise PermissionDeniedError("You can only manage export invoices you created yourself.")
 
-    # ---- number generation --------------------------------------------------
-    def _generate_number(self, company_id: int, invoice_date: str) -> str:
-        """EXPINV{YYYYMMDD}{seq} - that day's export invoice count + 1 for
-        this company, zero-padded to 3 digits."""
-        date_part = invoice_date.replace("-", "")
-        prefix = f"EXPINV{date_part}"
-        seq = self.export_invoice_repo.count_for_date_prefix(company_id, prefix) + 1
-        return f"{prefix}{seq:03d}"
+    # ---- number validation --------------------------------------------------
+    def _clean_export_invoice_number(self, company_id: int, raw: str, exclude_id: Optional[int] = None) -> str:
+        """Unlike the other documents in this pipeline, the export invoice
+        number is typed in by hand (it must match the number on the physical
+        customs paperwork), not auto-generated. Up to 16 digits."""
+        number = (raw or "").strip()
+        if not number:
+            raise ValidationError("Export invoice number is compulsory.")
+        if not number.isdigit() or len(number) > 16:
+            raise ValidationError("Export invoice number must be up to 16 digits.")
+        if self.export_invoice_repo.number_exists(company_id, number, exclude_id):
+            raise ValidationError(f"Export invoice number '{number}' is already in use.")
+        return number
 
     # ---- prefill from selected proforma invoices --------------------------------------------------
     def _load_proformas(self, proforma_ids: list, company_id: int) -> List[ProformaInvoice]:
@@ -2795,9 +2802,12 @@ class ExportInvoiceService:
         return result
 
     def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
-        """Merge the selected PIs' goods lines and import EPCG / export-under
-        / supplier-exemption rows by walking each PI -> its purchase orders ->
-        their purchase invoices. Returns a dict the form/route consumes."""
+        """Merge the selected PIs' goods lines, sum their sea freight /
+        insurance / certification / other charges / discount, take Nature of
+        contract from the first PI's Terms of delivery, and import EPCG /
+        export-under / supplier-exemption rows by walking each PI -> its
+        purchase orders -> their purchase invoices. Returns a dict the
+        form/route consumes."""
         proformas = self._load_proformas(proforma_ids, company_id)
         first = proformas[0] if proformas else None
 
@@ -2813,21 +2823,21 @@ class ExportInvoiceService:
                     "igst_percent": self._product_igst_percent(it.product_id, company_id),
                 })
 
-        # Buyer orders: the PIs under one export invoice normally share the
-        # SAME buyer order number, so collapse identical order numbers into a
-        # single row (keyed case-insensitively) rather than repeating it once
-        # per PI - each distinct order keeps its first PI as the link.
-        buyer_orders = []
-        seen_orders = set()
-        for pi in proformas:
-            if not pi.buyer_order_no:
-                continue
-            key = pi.buyer_order_no.strip().lower()
-            if key in seen_orders:
-                continue
-            seen_orders.add(key)
-            buyer_orders.append({"order_no": pi.buyer_order_no, "order_date": pi.invoice_date,
-                                 "proforma_invoice_id": pi.id})
+        # Buyer Order No & Date: every PI under one export invoice shares the
+        # same buyer order, so it's a single field taken from the first
+        # selected PI that has one, not a per-PI list.
+        buyer_order_pi = next((pi for pi in proformas if pi.buyer_order_no), None)
+        buyer_order_no = buyer_order_pi.buyer_order_no if buyer_order_pi else None
+        buyer_order_date = buyer_order_pi.invoice_date if buyer_order_pi else None
+
+        # Charges: every selected PI contributes its own sea freight /
+        # insurance / certification / other charges / discount, so these
+        # import as the SUM across all of them, not a single PI's value.
+        sea_freight = sum(pi.sea_freight or 0 for pi in proformas)
+        insurance = sum(pi.insurance or 0 for pi in proformas)
+        certification = sum(pi.certification or 0 for pi in proformas)
+        other_charges = sum(pi.other_charges or 0 for pi in proformas)
+        discount_amount = sum(pi.discount_amount or 0 for pi in proformas)
 
         # Walk the chain for EPCG / export-under / exemption purchase details.
         epcg_number = epcg_date = None
@@ -2882,7 +2892,15 @@ class ExportInvoiceService:
             "port_of_loading": first.port_of_loading if first else None,
             "port_of_discharge": first.port_of_discharge if first else None,
             "final_destination": first.final_destination if first else None,
+            "nature_of_contract": first.terms_of_delivery if first else None,
             "payment_terms": first.payment_terms if first else None,
+            "buyer_order_no": buyer_order_no,
+            "buyer_order_date": buyer_order_date,
+            "sea_freight": sea_freight,
+            "insurance": insurance,
+            "certification": certification,
+            "other_charges": other_charges,
+            "discount_amount": discount_amount,
             "bank_name": first.bank_name if first else None,
             "bank_account_number": first.bank_account_number if first else None,
             "bank_ifsc_code": first.bank_ifsc_code if first else None,
@@ -2895,8 +2913,7 @@ class ExportInvoiceService:
             "epcg_date": epcg_date,
             "self_sealing_declaration": company.self_sealing_declaration if company else None,
         }
-        return {"fields": fields, "items": items, "buyer_orders": buyer_orders,
-                "purchase_details": purchase_details}
+        return {"fields": fields, "items": items, "purchase_details": purchase_details}
 
     def _product_igst_percent(self, product_id, company_id: int) -> float:
         if not product_id:
@@ -2958,7 +2975,11 @@ class ExportInvoiceService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
-    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem]) -> ExportInvoice:
+    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem],
+                       invoice_id: Optional[int] = None) -> ExportInvoice:
+        export_invoice_number = self._clean_export_invoice_number(
+            current_user.company_id, fields.get("export_invoice_number"), exclude_id=invoice_id,
+        )
         consignee_name = (fields.get("consignee_name") or "").strip()
         if not consignee_name:
             raise ValidationError("Consignee name is compulsory.")
@@ -2994,7 +3015,8 @@ class ExportInvoiceService:
                     authorised_desig = (match.get("designation") or "").strip() or None
 
         invoice = ExportInvoice(
-            id=None, company_id=current_user.company_id, export_invoice_number="", invoice_date=invoice_date,
+            id=None, company_id=current_user.company_id, export_invoice_number=export_invoice_number,
+            invoice_date=invoice_date,
             consignee_name=consignee_name, created_by=current_user.id, lead_id=lead_id,
             consignee_address=(fields.get("consignee_address") or "").strip() or None,
             notify_name=(fields.get("notify_name") or "").strip() or None,
@@ -3008,6 +3030,8 @@ class ExportInvoiceService:
             final_destination=(fields.get("final_destination") or "").strip() or None,
             nature_of_contract=(fields.get("nature_of_contract") or "").strip() or None,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
+            buyer_order_no=(fields.get("buyer_order_no") or "").strip() or None,
+            buyer_order_date=(fields.get("buyer_order_date") or "").strip() or None,
             export_under=(fields.get("export_under") or "").strip() or None,
             epcg_number=(fields.get("epcg_number") or "").strip() or None,
             epcg_date=(fields.get("epcg_date") or "").strip() or None,
@@ -3031,6 +3055,7 @@ class ExportInvoiceService:
             self_sealing_declaration=(fields.get("self_sealing_declaration") or "").strip() or None,
             examination_date=(fields.get("examination_date") or "").strip() or None,
             location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
+            booking_no=(fields.get("booking_no") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
             issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
             permission_no=(fields.get("permission_no") or "").strip() or None,
@@ -3042,41 +3067,29 @@ class ExportInvoiceService:
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
-        invoice.buyer_orders = self._clean_buyer_orders(fields.get("buyer_orders"), invoice.proforma_invoice_ids)
         invoice.containers = self._clean_containers(fields.get("containers"))
         invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
         invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
         return invoice
 
     def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
-        result = []
+        """One export invoice covers a single buyer, so every selected PI
+        must share the same buyer - its lead_id when linked to one, else its
+        consignee name. The form already restricts the picker to one buyer
+        at a time; this is the server-side backstop."""
+        pis = []
         for pid in dict.fromkeys(raw_ids or []):
             try:
                 pi = self.proforma_invoice_repo.get_by_id(int(pid))
             except (TypeError, ValueError):
                 continue
             if pi and pi.company_id == company_id:
-                result.append(pi.id)
-        return result
-
-    @staticmethod
-    def _clean_buyer_orders(raw, valid_pi_ids: List[int]) -> List[dict]:
-        rows = []
-        for r in raw or []:
-            order_no = (r.get("order_no") or "").strip()
-            order_date = (r.get("order_date") or "").strip()
-            if not order_no and not order_date:
-                continue
-            pi_id = r.get("proforma_invoice_id")
-            try:
-                pi_id = int(pi_id) if pi_id else None
-            except (TypeError, ValueError):
-                pi_id = None
-            if pi_id not in valid_pi_ids:
-                pi_id = None  # only link to a PI this export invoice actually references
-            rows.append({"order_no": order_no or None, "order_date": order_date or None,
-                         "proforma_invoice_id": pi_id})
-        return rows
+                pis.append(pi)
+        if pis:
+            keys = {pi.lead_id or (pi.consignee_name or "").strip().lower() for pi in pis}
+            if len(keys) > 1:
+                raise ValidationError("All selected proforma invoices must belong to the same buyer.")
+        return [pi.id for pi in pis]
 
     @staticmethod
     def _clean_containers(raw) -> List[dict]:
@@ -3097,7 +3110,7 @@ class ExportInvoiceService:
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
             if any(values.values()):
                 rows.append(values)
         return rows
@@ -3141,7 +3154,6 @@ class ExportInvoiceService:
         if not invoice.examination_date:
             invoice.examination_date = invoice.invoice_date
         invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
-        invoice.export_invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
         created = self.export_invoice_repo.create(invoice)
         self.version_service.record("export_invoice", created, current_user.id)
         if self.party_repos:
@@ -3153,7 +3165,7 @@ class ExportInvoiceService:
         existing = self.get(invoice_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
-        invoice = self._build_header(current_user, fields, items)
+        invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
 
         # Exchange rate is set once by anyone; changing it later is admin-only.
         # (The form disables the field for non-admins, so a normal edit

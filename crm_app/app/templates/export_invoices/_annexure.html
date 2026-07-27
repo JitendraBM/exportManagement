@@ -2,9 +2,10 @@
    examination report annexure. Always generated. Section 05 (examination
    date) defaults to the creation date; 08B is a free textbox; section 09
    lists the four costliest product lines and repeats the front page's
-   FOB/CNF; section 11B has one row per physical container (Tare/Gross weight
-   are printed columns left blank); section 13's top cell is the fixed claim
-   text, its bottom cell the imported EPCG info (or "-"). #}
+   FOB/CNF; Booking No. prints directly above the 11B table; section 11B has
+   one row per physical container (Tare Weight is a printed column left
+   blank); section 13's top cell is the fixed claim text, its bottom cell the
+   imported EPCG info (or "-"). #}
 <style>
   .ei-annexure { background: #fff; color: #000; width: 205mm; margin: 24px auto 48px; padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25); font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.2; }
   .ei-annexure .ei-a-title { border: 1px solid #000; text-align: center; font-size: 12px; font-weight: bold; padding: 3px 0; }
@@ -99,40 +100,44 @@
     </tr>
   </table>
 
-  <!-- 11B: one row per physical container. Tare/Gross weight are left blank. -->
+  <!-- Booking No.: printed as its own boxed row directly above the 11B
+       container table. -->
   <table>
-    <colgroup><col style="width:4%"><col style="width:14%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:14%"><col style="width:9%"><col style="width:9%"></colgroup>
+    <colgroup><col style="width:22%"><col style="width:78%"></colgroup>
     <tr>
-      <td class="ei-a-c ei-a-lbl" colspan="8"><strong>11B — Seal Nos. For Containerised Cargo</strong></td>
+      <td class="ei-a-lbl">BOOKING NO</td>
+      <td class="ei-a-v">{{ invoice.booking_no or '-' }}</td>
     </tr>
+  </table>
+
+  <!-- 11B: one row per physical container. Tare weight is a printed column
+       left blank. -->
+  <table>
+    <colgroup><col style="width:8%"><col style="width:24%"><col style="width:22%"><col style="width:22%"><col style="width:12%"><col style="width:12%"></colgroup>
     <tr>
       <td class="ei-a-c ei-a-lbl">SR</td>
-      <td class="ei-a-c ei-a-lbl">Container Type</td>
       <td class="ei-a-c ei-a-lbl">Container No.</td>
       <td class="ei-a-c ei-a-lbl">Line Seal No.</td>
       <td class="ei-a-c ei-a-lbl">RFID Seal No.</td>
       <td class="ei-a-c ei-a-lbl">Vehicle No.</td>
       <td class="ei-a-c ei-a-lbl">Tare Weight</td>
-      <td class="ei-a-c ei-a-lbl">Gross Weight</td>
     </tr>
     {% for cd in invoice.container_details %}
     <tr>
       <td class="ei-a-c">{{ loop.index }}</td>
-      <td class="ei-a-v">{{ cd.container_type or '' }}</td>
       <td class="ei-a-v">{{ cd.container_no or '' }}</td>
       <td class="ei-a-v">{{ cd.line_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.rfid_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.vehicle_no or '' }}</td>
       <td></td>
-      <td></td>
     </tr>
     {% else %}
-    <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td></tr>
     {% endfor %}
     {# Blank filler cells: sized by _page_filler.html so the container table
        grows with empty rows and the annexure fills its A4 page exactly. #}
     <tr class="js-page-filler">
-      <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td></td>
     </tr>
   </table>
 

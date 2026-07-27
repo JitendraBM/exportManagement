@@ -1559,21 +1559,26 @@ class ProformaInvoiceRepository:
 
 
 class ExportInvoiceRepository:
-    """Persistence for the Export Invoice: the header row plus its items and
-    the four child lists (proforma links, buyer orders, containers, per-
-    container 11B rows, purchase details). It is a leaf of the pipeline -
-    nothing is generated from it - so delete just cascades its own children
-    (all ON DELETE CASCADE). Mirrors ProformaInvoiceRepository."""
+    """Persistence for the Export Invoice: the header row (which carries the
+    single Buyer Order No & Date shared by every linked PI) plus its items
+    and child lists (proforma links, containers, per-container 11B rows,
+    purchase details). It is a leaf of the pipeline - nothing is generated
+    from it - so delete just cascades its own children (all ON DELETE
+    CASCADE). Mirrors ProformaInvoiceRepository."""
 
     def __init__(self, db: Database):
         self.db = db
 
-    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+    def number_exists(self, company_id: int, export_invoice_number: str, exclude_id: Optional[int] = None) -> bool:
+        """Export invoice numbers are typed in by hand (not auto-generated),
+        so create/update check this first to give a clean validation error
+        instead of tripping the UNIQUE(company_id, export_invoice_number)
+        constraint."""
         row = self.db.query_one(
-            "SELECT COUNT(*) AS cnt FROM export_invoices WHERE company_id = ? AND export_invoice_number LIKE ?",
-            (company_id, f"{number_prefix}%"),
+            "SELECT id FROM export_invoices WHERE company_id = ? AND export_invoice_number = ? AND id != ?",
+            (company_id, export_invoice_number, exclude_id or 0),
         )
-        return row["cnt"] if row else 0
+        return row is not None
 
     def get_by_id(self, invoice_id: int) -> Optional[ExportInvoice]:
         row = self.db.query_one(
@@ -1604,12 +1609,6 @@ class ExportInvoiceRepository:
                 (invoice_id,),
             )
         ]
-        invoice.buyer_orders = [
-            dict(r) for r in self.db.query(
-                "SELECT order_no, order_date, proforma_invoice_id FROM export_invoice_buyer_orders "
-                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
-            )
-        ]
         invoice.containers = [
             dict(r) for r in self.db.query(
                 "SELECT container_type, container_count FROM export_invoice_containers "
@@ -1618,7 +1617,7 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no "
+                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1656,15 +1655,15 @@ class ExportInvoiceRepository:
                (company_id, export_invoice_number, invoice_date, lead_id, consignee_name, consignee_address,
                 notify_name, notify_address, country_of_origin, country_of_destination, place_of_receipt,
                 pre_carriage_by, port_of_loading, port_of_discharge, final_destination, nature_of_contract,
-                payment_terms, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
+                payment_terms, buyer_order_no, buyer_order_date, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
                 sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
-                shipping_bill_pdf_path, examination_date, location_code_08b, issuing_authority,
+                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, remarks, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1672,41 +1671,44 @@ class ExportInvoiceRepository:
 
     def update(self, invoice_id: int, invoice: ExportInvoice) -> None:
         self.db.execute(
-            """UPDATE export_invoices SET invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
+            """UPDATE export_invoices SET export_invoice_number = ?, invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
                    notify_name = ?, notify_address = ?, country_of_origin = ?, country_of_destination = ?,
                    place_of_receipt = ?, pre_carriage_by = ?, port_of_loading = ?, port_of_discharge = ?,
-                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, export_under = ?,
+                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, buyer_order_no = ?, buyer_order_date = ?, export_under = ?,
                    epcg_number = ?, epcg_date = ?, loading_type = ?, tax_mode = ?, exchange_rate = ?,
                    sea_freight = ?, insurance = ?, certification = ?, other_charges = ?, discount_amount = ?,
                    fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
                    bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
-                   examination_date = ?, location_code_08b = ?, issuing_authority = ?, issuing_authority_address = ?,
+                   examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
-            self._header_params(invoice) + (invoice_id,),
+            (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
         )
         self._replace_children(invoice_id, invoice)
 
     def _header_params(self, invoice: ExportInvoice) -> tuple:
         """The EDITABLE header column values, in the exact order both INSERT
-        and UPDATE list them (from invoice_date onward). company_id and
-        export_invoice_number are immutable, so create() prepends them and
-        update() never touches them. Kept as one tuple so the two long column
+        and UPDATE list them (from invoice_date onward). company_id is
+        immutable, so create() prepends it separately; export_invoice_number
+        is now hand-entered and editable, so create() also prepends it
+        separately (right after company_id) while update() prepends it on
+        its own ahead of this tuple. Kept as one tuple so the two long column
         lists can never drift apart."""
         return (
             invoice.invoice_date, invoice.lead_id,
             invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
             invoice.country_of_origin, invoice.country_of_destination, invoice.place_of_receipt,
             invoice.pre_carriage_by, invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
-            invoice.nature_of_contract, invoice.payment_terms, invoice.export_under, invoice.epcg_number,
+            invoice.nature_of_contract, invoice.payment_terms, invoice.buyer_order_no, invoice.buyer_order_date,
+            invoice.export_under, invoice.epcg_number,
             invoice.epcg_date, invoice.loading_type, invoice.tax_mode, invoice.exchange_rate, invoice.sea_freight,
             invoice.insurance, invoice.certification, invoice.other_charges, invoice.discount_amount,
             invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
             invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
-            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b,
+            invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
             invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
             invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.remarks,
@@ -1733,15 +1735,6 @@ class ExportInvoiceRepository:
                     (invoice_id, pid),
                 )
 
-            conn.execute("DELETE FROM export_invoice_buyer_orders WHERE export_invoice_id = ?", (invoice_id,))
-            for i, bo in enumerate(invoice.buyer_orders, start=1):
-                conn.execute(
-                    "INSERT INTO export_invoice_buyer_orders (export_invoice_id, sr_no, order_no, order_date, proforma_invoice_id) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (invoice_id, i, bo.get("order_no") or None, bo.get("order_date") or None,
-                     bo.get("proforma_invoice_id") or None),
-                )
-
             conn.execute("DELETE FROM export_invoice_containers WHERE export_invoice_id = ?", (invoice_id,))
             for i, c in enumerate(invoice.containers, start=1):
                 conn.execute(
@@ -1754,9 +1747,9 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (invoice_id, i, cd.get("container_type") or None, cd.get("container_no") or None,
+                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None),
                 )
 

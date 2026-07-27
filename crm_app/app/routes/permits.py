@@ -2,10 +2,10 @@
 app/routes/permits.py
 -----------------------
 "PERMISSIONS" - the permits a company holds, managed as a tab under the
-"Our Company" area. Admin-only, like the rest of that area. Each permit is
-tied to one supplier, records the issuing authority + place of stuffing, is
-either valid until an expiry date OR a one-time permit, and can carry an
-uploaded PDF (stored like a purchase invoice's supplier PDF).
+"Our Company" area. Admin-only, like the rest of that area. Each permit
+records a stuffing-place name + place of stuffing and the issuing
+authority, is either valid until an expiry date OR a one-time permit, and
+can carry an uploaded PDF (stored like a purchase invoice's supplier PDF).
 """
 
 from datetime import date

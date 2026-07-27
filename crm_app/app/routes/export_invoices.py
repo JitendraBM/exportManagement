@@ -9,7 +9,8 @@ PIs/suppliers), so it is normally started from one or more PIs via
 `?proforma_invoice_ids=` (a comma-separated or repeated query arg) which
 prefills the goods lines and imports EPCG / export-under / supplier-exemption
 details by walking each PI's purchase orders to their purchase invoices. The
-invoice number is auto-generated EXPINV{YYYYMMDD}{seq} and never editable.
+invoice number is typed in by hand (up to 16 digits, unique per company),
+matching the number on the physical customs paperwork.
 Mirrors app/routes/proforma_invoices.py, plus an optional Shipping Bill PDF
 upload (same idiom as purchase_invoices.py).
 """
@@ -19,6 +20,7 @@ from datetime import date
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
+from app.services import pallet_alt_quantity
 from app.utils import login_required, admin_required, verify_delete_password
 
 export_invoices_bp = Blueprint("export_invoices", __name__, url_prefix="/export-invoices")
@@ -27,14 +29,16 @@ export_invoices_bp = Blueprint("export_invoices", __name__, url_prefix="/export-
 CONTAINER_TYPES = ["20FT FCL", "40FT FCL", "20FT LCL", "40FT LCL", "40FT HC"]
 
 _HEADER_FIELDS = [
+    "export_invoice_number",
     "invoice_date", "lead_id", "consignee_name", "consignee_address", "notify_name", "notify_address",
     "country_of_origin", "country_of_destination", "place_of_receipt", "pre_carriage_by",
     "port_of_loading", "port_of_discharge", "final_destination", "nature_of_contract", "payment_terms",
+    "buyer_order_no", "buyer_order_date",
     "export_under", "epcg_number", "epcg_date", "loading_type", "tax_mode", "exchange_rate",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount", "fob_value", "cnf_value",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
-    "examination_date", "location_code_08b", "issuing_authority", "issuing_authority_address",
+    "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "remarks",
 ]
@@ -46,7 +50,6 @@ def _extract_fields(form) -> dict:
     `fields` dict alongside the scalars)."""
     fields = {key: form.get(key, "") for key in _HEADER_FIELDS}
     fields["proforma_invoice_ids"] = form.getlist("proforma_invoice_ids[]")
-    fields["buyer_orders"] = _extract_buyer_orders(form)
     fields["containers"] = _extract_containers(form)
     fields["container_details_list"] = _extract_container_details(form)
     fields["purchase_details"] = _extract_purchase_details(form)
@@ -79,20 +82,6 @@ def _extract_items(form) -> list:
     return items
 
 
-def _extract_buyer_orders(form) -> list:
-    nos = form.getlist("bo_order_no[]")
-    dates = form.getlist("bo_order_date[]")
-    pids = form.getlist("bo_proforma_invoice_id[]")
-    rows = []
-    for i in range(max(len(nos), len(dates), len(pids))):
-        rows.append({
-            "order_no": nos[i] if i < len(nos) else "",
-            "order_date": dates[i] if i < len(dates) else "",
-            "proforma_invoice_id": pids[i] if i < len(pids) else "",
-        })
-    return rows
-
-
 def _extract_containers(form) -> list:
     types = form.getlist("container_type[]")
     counts = form.getlist("container_count[]")
@@ -106,16 +95,14 @@ def _extract_containers(form) -> list:
 
 
 def _extract_container_details(form) -> list:
-    types = form.getlist("cd_container_type[]")
     nos = form.getlist("cd_container_no[]")
     line_seals = form.getlist("cd_line_seal_no[]")
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
-    n = max(len(types), len(nos), len(line_seals), len(rfids), len(vehicles))
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles))
     rows = []
     for i in range(n):
         rows.append({
-            "container_type": types[i] if i < len(types) else "",
             "container_no": nos[i] if i < len(nos) else "",
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
@@ -136,22 +123,55 @@ def _extract_purchase_details(form) -> list:
     return rows
 
 
+def _pallet_types_map(items) -> dict:
+    """product_id -> plain dicts of that product's pallet types, for rows
+    already tied to a catalog product - fills each row's Pallet type
+    dropdown ('loose', the built-in no-pallet default, is added by the form
+    itself). Mirrors app/routes/proforma_invoices.py's helper of the same
+    name; without it every row's dropdown falls back to just 'Loose'."""
+    container = current_app.container
+    result = {}
+    for item in items or []:
+        raw_id = item.get("product_id") if isinstance(item, dict) else item.product_id
+        if not raw_id:
+            continue
+        try:
+            product_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if product_id in result:
+            continue
+        try:
+            product = container.product_service.get_product(product_id, g.user.company_id)
+        except NotFoundError:
+            continue
+        result[product_id] = [
+            {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
+             "alt_qty_per_pallet": pallet_alt_quantity(pt, product)}
+            for pt in container.product_service.pallet_types_for_product(product_id)
+        ]
+    return result
+
+
 def _form_context():
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
     proforma_invoices = container.proforma_invoice_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
-    return leads, proforma_invoices, company
+    permits = container.permit_service.list_all(g.user.company_id)
+    return leads, proforma_invoices, company, permits
 
 
-def _render_form(invoice, form_data, form_items, buyer_orders=None, containers=None,
+def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, status_code=200):
-    leads, proforma_invoices, company = _form_context()
+    leads, proforma_invoices, company, permits = _form_context()
+    rows = form_items if form_items is not None else (invoice.items if invoice else [])
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
-        company=company, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
-        form_buyer_orders=buyer_orders, form_containers=containers,
+        company=company, permits=permits, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
+        form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
+        pallet_types_map=_pallet_types_map(rows),
         today=date.today().isoformat(),
     )
     return (html, status_code) if status_code != 200 else html
@@ -181,7 +201,7 @@ def new_export_invoice():
             fields = _extract_fields(request.form)
             return _render_form(
                 None, request.form, _extract_items(request.form),
-                buyer_orders=fields["buyer_orders"], containers=fields["containers"],
+                containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
                 status_code=400,
             )
@@ -189,7 +209,7 @@ def new_export_invoice():
     # GET: optionally prefill from one or more proforma invoices.
     prefill = None
     form_items = None
-    buyer_orders = containers = container_details = purchase_details = None
+    containers = container_details = purchase_details = None
     raw_ids = request.args.get("proforma_invoice_ids") or request.args.get("proforma_invoice_id")
     proforma_ids = [p for p in (raw_ids.split(",") if raw_ids else []) if p.strip()]
     if proforma_ids:
@@ -197,9 +217,8 @@ def new_export_invoice():
         prefill = dict(built["fields"])
         prefill["invoice_date"] = date.today().isoformat()
         form_items = built["items"]
-        buyer_orders = built["buyer_orders"]
         purchase_details = built["purchase_details"]
-    return _render_form(None, prefill, form_items, buyer_orders=buyer_orders, containers=containers,
+    return _render_form(None, prefill, form_items, containers=containers,
                         container_details=container_details, purchase_details=purchase_details)
 
 
@@ -238,14 +257,14 @@ def edit_export_invoice(export_invoice_id):
             fields = _extract_fields(request.form)
             return _render_form(
                 invoice, request.form, _extract_items(request.form),
-                buyer_orders=fields["buyer_orders"], containers=fields["containers"],
+                containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
                 status_code=400,
             )
 
     return _render_form(
         invoice, None, None,
-        buyer_orders=invoice.buyer_orders, containers=invoice.containers,
+        containers=invoice.containers,
         container_details=invoice.container_details, purchase_details=invoice.purchase_details,
     )
 

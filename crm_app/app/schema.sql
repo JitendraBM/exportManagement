@@ -737,6 +737,8 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     final_destination           TEXT,
     nature_of_contract          TEXT,          -- e.g. "CNF- (Beira)"
     payment_terms               TEXT,
+    buyer_order_no               TEXT,
+    buyer_order_date             TEXT,
     export_under                TEXT,          -- imported "SUPPLY MEANT FOR EXPORT..." / LUT text, editable
     epcg_number                 TEXT,          -- imported from the chain's purchase invoices when present, editable
     epcg_date                   TEXT,
@@ -763,6 +765,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     -- page-2 Self-Sealing Examination Report annexure fields
     examination_date            TEXT,          -- defaults to the creation date
     location_code_08b           TEXT,          -- section 08B, free text
+    booking_no                  TEXT,          -- shipping line booking number, printed above the 11B container table
     issuing_authority           TEXT,
     issuing_authority_address   TEXT,
     permission_no               TEXT,
@@ -803,17 +806,6 @@ CREATE TABLE IF NOT EXISTS export_invoice_proforma_links (
     export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
     proforma_invoice_id   INTEGER NOT NULL REFERENCES proforma_invoices(id) ON DELETE CASCADE,
     UNIQUE (export_invoice_id, proforma_invoice_id)
-);
-
--- Buyer Order No & Date rows - a free repeatable list, each row optionally
--- tied to one of the referenced proforma invoices.
-CREATE TABLE IF NOT EXISTS export_invoice_buyer_orders (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
-    sr_no                 INTEGER NOT NULL,
-    order_no              TEXT,
-    order_date            TEXT,
-    proforma_invoice_id   INTEGER REFERENCES proforma_invoices(id) ON DELETE SET NULL
 );
 
 -- Front-page Container Details: a list of {type, count} (e.g. 9 x 20FT FCL).
@@ -980,7 +972,6 @@ CREATE INDEX IF NOT EXISTS idx_export_invoices_date ON export_invoices(invoice_d
 CREATE INDEX IF NOT EXISTS idx_export_invoice_items_invoice ON export_invoice_items(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_links_invoice ON export_invoice_proforma_links(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_links_proforma ON export_invoice_proforma_links(proforma_invoice_id);
-CREATE INDEX IF NOT EXISTS idx_export_invoice_buyer_orders_invoice ON export_invoice_buyer_orders(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_containers_invoice ON export_invoice_containers(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_container_details_invoice ON export_invoice_container_details(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_purchase_details_invoice ON export_invoice_purchase_details(export_invoice_id);

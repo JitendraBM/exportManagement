@@ -11,7 +11,6 @@
   <div>
     <div class="eyebrow">Sales documents</div>
     <h1>{{ 'Edit ' + invoice.export_invoice_number if invoice else 'New export invoice' }}</h1>
-    {% if not invoice %}<div class="text-sm text-soft">Invoice number is generated automatically on save.</div>{% endif %}
   </div>
 </div>
 
@@ -26,22 +25,45 @@
       {% set selected_str = selected_ids | map('string') | list %}
       <div id="proforma-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;">
         {% for pi in proforma_invoices %}
-        <label style="display:block;padding:4px 0;cursor:pointer;">
-          <input type="checkbox" class="js-pi-check" name="proforma_invoice_ids[]" value="{{ pi.id }}" {{ 'checked' if pi.id | string in selected_str }}>
+        <label class="js-pi-label" style="display:block;padding:4px 0;cursor:pointer;">
+          <input type="checkbox" class="js-pi-check" name="proforma_invoice_ids[]" value="{{ pi.id }}"
+                 data-company-key="{{ pi.lead_id or ((pi.consignee_name or '') | lower | trim) }}"
+                 {{ 'checked' if pi.id | string in selected_str }}>
           <strong>{{ pi.invoice_number }}</strong> — {{ pi.consignee_name }}{% if pi.buyer_order_no %} · <span class="text-soft">Order {{ pi.buyer_order_no }}</span>{% endif %} ({{ pi.invoice_date }})
         </label>
         {% else %}
         <div class="text-soft text-sm">No proforma invoices yet.</div>
         {% endfor %}
       </div>
+      <p class="hint">One export invoice covers a single buyer — ticking a PI narrows the list above to that same buyer's other PIs; untick all to pick a different buyer.</p>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load goods &amp; details from selected PIs</button>
     <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. It reloads the page, so do it before typing anything you want to keep.</p>
   </div>
 
   <div class="card">
+    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN &amp; invoice no. (imported for exemption purchases)</span></h3></div>
+    <div id="purchase-detail-rows">
+      {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
+      {% for pd in pd_rows %}
+      <div class="form-row purchase-detail-row">
+        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
+        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-pd-btn">+ Add supplier row</button>
+  </div>
+
+  <div class="card">
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
+      <div class="field">
+        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(up to 16 digits)</span></label>
+        <input type="text" id="export_invoice_number" name="export_invoice_number" required inputmode="numeric" pattern="\d{1,16}" maxlength="16"
+               value="{{ data.export_invoice_number | default('', true) }}">
+      </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
       <div class="field"><label for="nature_of_contract">Nature of contract</label><input type="text" id="nature_of_contract" name="nature_of_contract" placeholder="e.g. CNF- (Beira)" value="{{ data.nature_of_contract | default('', true) }}"></div>
     </div>
@@ -55,11 +77,13 @@
         </select>
       </div>
       <div class="field">
-        <label for="tax_mode">Tax applied as</label>
+        <label for="tax_mode">Supply meant for</label>
+        {% set tm = data.tax_mode | default('igst', true) %}
+        {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
+        {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else None) or {}).get('lut_number') if company and company.lut_details else None %}
         <select id="tax_mode" name="tax_mode">
-          {% set tm = data.tax_mode | default('igst', true) %}
-          <option value="igst" {{ 'selected' if tm != 'cgst_sgst' }}>IGST</option>
-          <option value="cgst_sgst" {{ 'selected' if tm == 'cgst_sgst' }}>CGST / SGST</option>
+          <option value="igst" {{ 'selected' if tm != 'lut' }}>With Payment of IGST</option>
+          <option value="lut" {{ 'selected' if tm == 'lut' }}>Without Payment of IGST under LUT{{ ' no. ' + lut_no if lut_no else '' }}</option>
         </select>
       </div>
       <div class="field">
@@ -67,6 +91,42 @@
         <input type="number" step="0.0001" id="exchange_rate" name="exchange_rate" value="{{ data.exchange_rate | default('', true) }}" {{ '' if can_edit_rate else 'disabled' }}>
         {% if not can_edit_rate %}<div class="text-sm text-soft">Set already — only an admin can change it.</div>{% endif %}
       </div>
+    </div>
+    <div class="field">
+      <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — prefills the Permit Details section below from Our Company permits)</span></label>
+      <select id="permit_select">
+        <option value="">— Select a permit —</option>
+        {% for p in permits %}
+          <option value="{{ p.id }}" data-permission-number="{{ p.permission_number }}"
+                  data-issuing-authority="{{ p.issuing_authority or '' }}"
+                  data-issuing-authority-address="{{ p.issuing_authority_address or '' }}"
+                  data-date-of-issue="{{ p.date_of_issue or '' }}"
+                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
+            {{ p.permission_number }}{% if p.place_of_stuffing %} — {{ p.place_of_stuffing }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Permit Details</h3></div>
+    <div class="form-row">
+      <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
+      <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
+    </div>
+    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="issuing_authority">Issuing authority</label><input type="text" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}"></div>
+    </div>
+    <div class="field"><label for="issuing_authority_address">Issuing authority address</label><textarea id="issuing_authority_address" name="issuing_authority_address" rows="2">{{ data.issuing_authority_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
+      <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
+      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
   </div>
 
@@ -84,23 +144,10 @@
 
   <div class="card">
     <div class="card-header"><h3>Buyer order no. &amp; date</h3></div>
-    <div id="buyer-order-rows">
-      {% set bo_rows = form_buyer_orders if form_buyer_orders is not none else (invoice.buyer_orders if invoice else []) %}
-      {% for bo in bo_rows %}
-      <div class="form-row buyer-order-row">
-        <div class="field"><label>Order no.</label><input type="text" name="bo_order_no[]" value="{{ bo.order_no or '' }}"></div>
-        <div class="field"><label>Order date</label><input type="date" name="bo_order_date[]" value="{{ (bo.order_date or '')[:10] }}"></div>
-        <div class="field"><label>Linked PI</label>
-          <select name="bo_proforma_invoice_id[]">
-            <option value="">— none —</option>
-            {% for pi in proforma_invoices %}<option value="{{ pi.id }}" {{ 'selected' if bo.proforma_invoice_id and bo.proforma_invoice_id | string == pi.id | string }}>{{ pi.invoice_number }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-bo">Remove</button></div>
-      </div>
-      {% endfor %}
+    <div class="form-row">
+      <div class="field"><label for="buyer_order_no">Order no.</label><input type="text" id="buyer_order_no" name="buyer_order_no" value="{{ data.buyer_order_no | default('', true) }}"></div>
+      <div class="field"><label for="buyer_order_date">Order date</label><input type="date" id="buyer_order_date" name="buyer_order_date" value="{{ (data.buyer_order_date | default('', true))[:10] }}"></div>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-bo-btn">+ Add buyer order</button>
   </div>
 
   <div class="card">
@@ -139,77 +186,33 @@
       {% endfor %}
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-container-btn">+ Add container type</button>
-    <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) asks for.</p>
-  </div>
+    <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) below asks for.</p>
 
-  <div class="card">
-    <div class="card-header"><h3>Products</h3></div>
+    <div class="field" style="margin-top:14px;"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
+
+    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
     <div class="table-wrap">
-      <table class="ledger" id="items-table">
+      <table class="ledger" id="cd-table">
         <thead>
-          <tr>
-            <th>Sr</th>
-            <th style="min-width:220px;">Product</th>
-            <th>HSN code</th>
-            <th>Boxes</th>
-            <th style="min-width:150px;">Pallet type</th>
-            <th>Plts</th>
-            <th>Qty (SQM/LM)</th>
-            <th>Unit</th>
-            <th>Price (USD)</th>
-            <th>IGST %</th>
-            <th class="num">Total (USD)</th>
-            <th></th>
-          </tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
         </thead>
-        <tbody id="items-body">
-          {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
-          {% for row in rows %}
-          <tr class="item-row" data-alt-qty="" data-pallet-types="[]" data-igst="{{ row.igst_percent | default('', true) }}">
-            <td class="js-sr">{{ loop.index }}</td>
-            <td>
-              <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
-              <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
-              <input type="hidden" name="item_surface[]" class="js-surface" value="{{ row.surface or '' }}">
-              <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
-            </td>
-            <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
-            <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
-            <td><select class="js-pallet-type"><option value="">Loose — no pallets</option></select></td>
-            <td><input type="number" step="0.01" name="item_pallets[]" class="js-pallets" value="{{ row.pallets or '' }}"></td>
-            <td><input type="number" step="0.01" name="item_quantity_value[]" class="js-qty" required value="{{ row.quantity_value or '' }}"></td>
-            <td>
-              <select name="item_unit[]" class="js-unit">
-                {% for u in PRODUCT_UNITS %}<option value="{{ u }}" {{ 'selected' if row.unit == u }}>{{ u }}</option>{% endfor %}
-                {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
-              </select>
-            </td>
-            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
-            <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
-            <td class="num js-total">0.00</td>
-            <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
+        <tbody id="cd-body">
+          {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
+          {% for cd in cd_rows %}
+          <tr class="cd-row">
+            <td class="cd-sr">{{ loop.index }}</td>
+            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
+            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
+            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
+            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
+            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
-    <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
-    <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field" style="max-width:180px;"><label for="fob_value">FOB value (USD)</label><input type="number" step="0.01" id="fob_value" name="fob_value" value="{{ data.fob_value | default(0, true) }}"></div>
-      <div class="field" style="max-width:180px;"><label for="cnf_value">CNF value (USD)</label><input type="number" step="0.01" id="cnf_value" name="cnf_value" value="{{ data.cnf_value | default(0, true) }}"></div>
-    </div>
-    <div class="flex-between" style="margin-top:14px;">
-      <div></div>
-      <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
-    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="sync-cd-btn">↻ Match rows to container count</button>
+    <p class="hint">Rows are generated from the container count above — use the button to add/remove rows so they always match; there's no manual blank-row add.</p>
   </div>
 
   <div class="card">
@@ -219,21 +222,6 @@
       <div class="field"><label for="epcg_number">EPCG licence no. <span class="text-soft text-sm">(imported from purchase invoices when present)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
       <div class="field"><label for="epcg_date">EPCG date</label><input type="date" id="epcg_date" name="epcg_date" value="{{ (data.epcg_date | default('', true))[:10] }}"></div>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN &amp; invoice no. (imported for exemption purchases)</span></h3></div>
-    <div id="purchase-detail-rows">
-      {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
-      {% for pd in pd_rows %}
-      <div class="form-row purchase-detail-row">
-        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
-        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
-        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
-      </div>
-      {% endfor %}
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-pd-btn">+ Add supplier row</button>
   </div>
 
   <div class="card">
@@ -283,52 +271,6 @@
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Self-sealing examination report (page 2)</h3></div>
-    <div class="form-row">
-      <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
-      <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="issuing_authority">Issuing authority</label><input type="text" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="issuing_authority_address">Issuing authority address</label><textarea id="issuing_authority_address" name="issuing_authority_address" rows="2">{{ data.issuing_authority_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
-      <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
-      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
-    </div>
-
-    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
-    <div class="table-wrap">
-      <table class="ledger" id="cd-table">
-        <thead>
-          <tr><th>Sr</th><th>Container type</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
-        </thead>
-        <tbody id="cd-body">
-          {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
-          {% for cd in cd_rows %}
-          <tr class="cd-row">
-            <td class="cd-sr">{{ loop.index }}</td>
-            <td><input type="text" name="cd_container_type[]" value="{{ cd.container_type or '' }}"></td>
-            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
-            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
-            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-cd-btn">+ Add container row</button>
-    <button type="button" class="btn btn-ghost btn-sm" id="sync-cd-btn">↻ Match rows to container count</button>
-  </div>
-
-  <div class="card">
     <div class="card-header"><h3>Shipping bill (optional)</h3></div>
     {% if invoice and invoice.shipping_bill_pdf_path %}
     <div class="text-sm" style="margin-bottom:8px;">
@@ -337,6 +279,78 @@
     </div>
     {% endif %}
     <div class="field"><label for="shipping_bill_pdf">Upload shipping bill PDF</label><input type="file" id="shipping_bill_pdf" name="shipping_bill_pdf" accept="application/pdf"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Products</h3></div>
+    <div class="table-wrap">
+      <table class="ledger" id="items-table">
+        <thead>
+          <tr>
+            <th>Sr</th>
+            <th style="min-width:220px;">Product</th>
+            <th>HSN code</th>
+            <th>Boxes</th>
+            <th style="min-width:150px;">Pallet type</th>
+            <th>Plts</th>
+            <th>Qty (SQM/LM)</th>
+            <th>Unit</th>
+            <th>Price (USD)</th>
+            <th>IGST %</th>
+            <th class="num">Total (USD)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="items-body">
+          {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
+          {% for row in rows %}
+          <tr class="item-row" data-alt-qty=""
+              data-pallet-types="{{ (pallet_types_map.get(row.product_id | int, []) if row.product_id else []) | tojson | forceescape }}"
+              data-igst="{{ row.igst_percent | default('', true) }}">
+            <td class="js-sr">{{ loop.index }}</td>
+            <td>
+              <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
+              <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
+              <input type="hidden" name="item_surface[]" class="js-surface" value="{{ row.surface or '' }}">
+              <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
+            </td>
+            <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
+            <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
+            <td><select class="js-pallet-type"><option value="">Loose — no pallets</option></select></td>
+            <td><input type="number" step="0.01" name="item_pallets[]" class="js-pallets" value="{{ row.pallets or '' }}"></td>
+            <td><input type="number" step="0.01" name="item_quantity_value[]" class="js-qty" required value="{{ row.quantity_value or '' }}"></td>
+            <td>
+              <select name="item_unit[]" class="js-unit">
+                {% for u in PRODUCT_UNITS %}<option value="{{ u }}" {{ 'selected' if row.unit == u }}>{{ u }}</option>{% endfor %}
+                {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
+              </select>
+            </td>
+            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
+            <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
+            <td class="num js-total">0.00</td>
+            <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
+    <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
+    <div class="form-row" style="margin-top:14px;">
+      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="max-width:180px;"><label for="fob_value">FOB value (USD)</label><input type="number" step="0.01" id="fob_value" name="fob_value" value="{{ data.fob_value | default(0, true) }}"></div>
+      <div class="field" style="max-width:180px;"><label for="cnf_value">CNF value (USD)</label><input type="number" step="0.01" id="cnf_value" name="cnf_value" value="{{ data.cnf_value | default(0, true) }}"></div>
+    </div>
+    <div class="flex-between" style="margin-top:14px;">
+      <div></div>
+      <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
+    </div>
   </div>
 
   <div class="card">
@@ -456,6 +470,31 @@
     palletsEl.readOnly = false;
   }
 
+  // A row rendered from a saved invoice or a PI prefill already has Plts
+  // and a product tied to it; work out which pallet-type option that
+  // implies (Loose / a matching type / Manual) instead of always
+  // defaulting to Loose with an empty dropdown.
+  function initRowPalletSelection(tr) {
+    let types = [];
+    try { types = JSON.parse(tr.dataset.palletTypes || '[]'); } catch (e) {}
+    populatePalletOptions(tr, types, false);
+    const sel = tr.querySelector('.js-pallet-type');
+    const palletsEl = tr.querySelector('.js-pallets');
+    const pallets = parseFloat(palletsEl.value) || 0;
+    if (!pallets) {
+      sel.value = '';
+      palletsEl.value = '';
+      palletsEl.readOnly = true;
+      return;
+    }
+    const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
+    const match = boxes
+      ? (types || []).find((t) => Math.abs(boxes / t.boxes_per_pallet - pallets) < 1e-6)
+      : null;
+    sel.value = match ? String(match.boxes_per_pallet) : 'manual';
+    recalcRowPallets(tr);
+  }
+
   document.getElementById('add-row-btn').addEventListener('click', () => {
     const tr = rowTemplate();
     itemsBody.appendChild(tr);
@@ -480,6 +519,30 @@
     if (el) el.addEventListener('input', recalcTotals);
   });
 
+  // ---- reference-PI picker: restrict to one buyer at a time -----------------
+  // One export invoice covers a single buyer's PIs, so once any box is
+  // checked, every other checkbox whose PI belongs to a different buyer
+  // (same lead if the PI is linked to one, else its consignee name) is
+  // disabled and dimmed rather than removed, so the reason stays visible.
+  const proformaPicker = document.getElementById('proforma-picker');
+  function refreshProformaPickerFilter() {
+    const checked = Array.from(proformaPicker.querySelectorAll('.js-pi-check:checked'));
+    const keys = new Set(checked.map((c) => c.dataset.companyKey));
+    const activeKey = keys.size === 1 ? [...keys][0] : null;
+    proformaPicker.querySelectorAll('.js-pi-check').forEach((cb) => {
+      const label = cb.closest('.js-pi-label');
+      const blocked = activeKey !== null && cb.dataset.companyKey !== activeKey && !cb.checked;
+      cb.disabled = blocked;
+      if (label) label.style.opacity = blocked ? '0.4' : '';
+    });
+  }
+  if (proformaPicker) {
+    proformaPicker.addEventListener('change', (e) => {
+      if (e.target.classList.contains('js-pi-check')) refreshProformaPickerFilter();
+    });
+    refreshProformaPickerFilter();
+  }
+
   // ---- reference-PI loader --------------------------------------------------
   document.getElementById('load-from-pis-btn').addEventListener('click', () => {
     const ids = Array.from(document.querySelectorAll('.js-pi-check:checked')).map((c) => c.value).filter(Boolean);
@@ -487,26 +550,12 @@
     window.location = '{{ url_for("export_invoices.new_export_invoice") }}?proforma_invoice_ids=' + encodeURIComponent(ids.join(','));
   });
 
-  // ---- repeatable list helpers (buyer orders / containers / purchase details / 11B) ----
+  // ---- repeatable list helpers (containers / purchase details / 11B) ----
   function bindRemove(containerId, rowClass, removeClass, after) {
     document.getElementById(containerId).addEventListener('click', (e) => {
       if (e.target.classList.contains(removeClass)) { e.target.closest('.' + rowClass).remove(); if (after) after(); }
     });
   }
-
-  const proformaOptionsHtml = `{% for pi in proforma_invoices %}<option value="{{ pi.id }}">{{ pi.invoice_number }}</option>{% endfor %}`;
-  document.getElementById('add-bo-btn').addEventListener('click', () => {
-    const wrap = document.getElementById('buyer-order-rows');
-    const div = document.createElement('div');
-    div.className = 'form-row buyer-order-row';
-    div.innerHTML = `
-      <div class="field"><label>Order no.</label><input type="text" name="bo_order_no[]"></div>
-      <div class="field"><label>Order date</label><input type="date" name="bo_order_date[]"></div>
-      <div class="field"><label>Linked PI</label><select name="bo_proforma_invoice_id[]"><option value="">— none —</option>${proformaOptionsHtml}</select></div>
-      <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-bo">Remove</button></div>`;
-    wrap.appendChild(div);
-  });
-  bindRemove('buyer-order-rows', 'buyer-order-row', 'js-remove-bo');
 
   const containerTypeOptions = `{% for ct in container_types %}<option value="{{ ct }}">{{ ct }}</option>{% endfor %}`;
   document.getElementById('add-container-btn').addEventListener('click', () => {
@@ -536,12 +585,11 @@
   // ---- 11B container-detail rows --------------------------------------------------
   const cdBody = document.getElementById('cd-body');
   function cdRenumber() { cdBody.querySelectorAll('.cd-row').forEach((tr, i) => { tr.querySelector('.cd-sr').textContent = i + 1; }); }
-  function cdRowTemplate(type) {
+  function cdRowTemplate() {
     const tr = document.createElement('tr');
     tr.className = 'cd-row';
     tr.innerHTML = `
       <td class="cd-sr"></td>
-      <td><input type="text" name="cd_container_type[]" value="${type || ''}"></td>
       <td><input type="text" name="cd_container_no[]"></td>
       <td><input type="text" name="cd_line_seal_no[]"></td>
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
@@ -549,23 +597,20 @@
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
-  document.getElementById('add-cd-btn').addEventListener('click', () => { cdBody.appendChild(cdRowTemplate('')); cdRenumber(); });
   cdBody.addEventListener('click', (e) => { if (e.target.classList.contains('js-remove-cd')) { e.target.closest('tr').remove(); cdRenumber(); } });
 
   // Rebuild the 11B table so it has exactly one row per physical container
-  // implied by the Container Details counts, preserving already-typed rows.
+  // implied by the total Container Details count, preserving already-typed rows.
   document.getElementById('sync-cd-btn').addEventListener('click', () => {
-    const wanted = [];
+    let wantedCount = 0;
     document.querySelectorAll('#container-rows .container-row').forEach((r) => {
-      const type = r.querySelector('.js-container-type').value;
-      const count = parseInt(r.querySelector('.js-container-count').value, 10) || 0;
-      for (let i = 0; i < count; i++) wanted.push(type);
+      wantedCount += parseInt(r.querySelector('.js-container-count').value, 10) || 0;
     });
     const existing = Array.from(cdBody.querySelectorAll('.cd-row'));
-    if (wanted.length > existing.length) {
-      for (let i = existing.length; i < wanted.length; i++) cdBody.appendChild(cdRowTemplate(wanted[i]));
-    } else if (wanted.length < existing.length) {
-      for (let i = existing.length - 1; i >= wanted.length; i--) existing[i].remove();
+    if (wantedCount > existing.length) {
+      for (let i = existing.length; i < wantedCount; i++) cdBody.appendChild(cdRowTemplate());
+    } else if (wantedCount < existing.length) {
+      for (let i = existing.length - 1; i >= wantedCount; i--) existing[i].remove();
     }
     cdRenumber();
   });
@@ -580,6 +625,17 @@
     document.getElementById('bank_swift_code').value = opt.dataset.swift || '';
     document.getElementById('bank_branch').value = opt.dataset.branch || '';
     document.getElementById('bank_address').value = opt.dataset.address || '';
+  });
+
+  // ---- permit dropdown prefill --------------------------------------------------
+  document.getElementById('permit_select').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt.value) return;
+    document.getElementById('permission_no').value = opt.dataset.permissionNumber || '';
+    document.getElementById('permission_date').value = (opt.dataset.dateOfIssue || '').slice(0, 10);
+    document.getElementById('permission_expiry').value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
+    document.getElementById('issuing_authority').value = opt.dataset.issuingAuthority || '';
+    document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
   });
 
   // ---- product picker --------------------------------------------------
@@ -635,7 +691,7 @@
     overlay.hidden = true;
   }
 
-  itemsBody.querySelectorAll('.item-row').forEach((tr) => { populatePalletOptions(tr, [], false); recalcRowPallets(tr); });
+  itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
   recalcTotals();
 })();
