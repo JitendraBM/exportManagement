@@ -40,6 +40,21 @@
   </div>
 
   <div class="card">
+    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN &amp; invoice no. (imported for exemption purchases)</span></h3></div>
+    <div id="purchase-detail-rows">
+      {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
+      {% for pd in pd_rows %}
+      <div class="form-row purchase-detail-row">
+        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
+        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-pd-btn">+ Add supplier row</button>
+  </div>
+
+  <div class="card">
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
@@ -206,21 +221,6 @@
       <div class="field"><label for="epcg_number">EPCG licence no. <span class="text-soft text-sm">(imported from purchase invoices when present)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
       <div class="field"><label for="epcg_date">EPCG date</label><input type="date" id="epcg_date" name="epcg_date" value="{{ (data.epcg_date | default('', true))[:10] }}"></div>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN &amp; invoice no. (imported for exemption purchases)</span></h3></div>
-    <div id="purchase-detail-rows">
-      {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
-      {% for pd in pd_rows %}
-      <div class="form-row purchase-detail-row">
-        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
-        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
-        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
-      </div>
-      {% endfor %}
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-pd-btn">+ Add supplier row</button>
   </div>
 
   <div class="card">
