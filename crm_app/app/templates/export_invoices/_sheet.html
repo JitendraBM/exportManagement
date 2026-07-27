@@ -13,18 +13,20 @@
   .ei-title { border: 1px solid #000; text-align: center; font-size: 14px; font-weight: bold; padding: 3px 0; }
   .ei-subtitle { border: 1px solid #000; border-top: none; text-align: center; font-size: 9px; font-weight: bold; padding: 2px 0; }
   .ei-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
-  .ei-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: center; word-wrap: break-word; }
+  .ei-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: left; word-wrap: break-word; }
   .ei-label { font-size: 9px; }
   .ei-val { font-weight: bold; }
   .ei-left { text-align: left; vertical-align: top; }
-  .ei-right { text-align: right; }
+  .ei-right { text-align: left; }
   .ei-mid { vertical-align: middle !important; }
+  .ei-bottom { vertical-align: bottom !important; }
+  .ei-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
   .ei-side { writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-size: 9px; font-weight: bold; letter-spacing: 1px; vertical-align: middle; }
-  .ei-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
+  .ei-items thead td { text-align: left; vertical-align: middle; font-size: 9px; }
   .ei-charge-label { text-align: left; font-weight: bold; font-size: 9px; }
   .ei-sign-cell { height: 90px; padding: 4px 6px; }
   .ei-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
-  .ei-stamp { text-align: right; }
+  .ei-stamp { text-align: left; }
   @media print { .ei-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
 
@@ -172,13 +174,14 @@
   {% endfor %}
   <table class="ei-items">
     <colgroup>
-      <col style="width:5%"><col style="width:40%"><col style="width:8%"><col style="width:7%">
+      <col style="width:5%"><col style="width:32%"><col style="width:8%"><col style="width:8%"><col style="width:7%">
       <col style="width:9%"><col style="width:10%"><col style="width:6%"><col style="width:15%">
     </colgroup>
     <thead>
       <tr>
         <td rowspan="2">Sr</td>
         <td rowspan="2">Description Of Goods</td>
+        <td rowspan="2">HSN Code</td>
         <td colspan="3">Quantity Details</td>
         <td rowspan="2">Rate<br>In USD</td>
         <td rowspan="2">Per</td>
@@ -190,9 +193,10 @@
       {% for item in invoice.items %}
       <tr>
         <td>{{ loop.index }}</td>
-        <td class="ei-left ei-val">{{ item.product_name }}{% if item.hsn_code %} <span class="ei-label">- HSN {{ item.hsn_code }}</span>{% endif %}</td>
+        <td class="ei-left ei-val ei-bottom">{{ item.product_name }}</td>
+        <td>{{ item.hsn_code or '' }}</td>
         <td>{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
-        <td>{{ '{:,.0f}'.format(item.quantity_boxes) if item.quantity_boxes else '' }}</td>
+        <td>{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ei-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ei-right">{{ '{:,.2f}'.format(item.quantity_value) }}</td>
         <td class="ei-right">{{ usd(item.price_usd) }}</td>
         <td>{{ item.unit }}</td>
@@ -202,11 +206,12 @@
       {# Blank filler cell: sized by _page_filler.html so the goods list
          stretches and the front sheet fills its A4 page exactly. #}
       <tr class="ei-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="ei-val">TOTAL</td>
+        <td></td>
         <td class="ei-val">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-val">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="ei-val ei-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
@@ -235,14 +240,30 @@
       <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td>
     </tr>
     <tr>
-      <td class="ei-charge-label">IGST</td>
-      <td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td>
+      {% if invoice.tax_mode == 'cgst_sgst' %}
+      <td class="ei-charge-label">CGST</td><td class="ei-val ei-right">{{ inr(invoice.cgst_amount_inr) }}</td>
+      {% else %}
+      <td class="ei-charge-label">IGST</td><td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) }}</td>
+      {% endif %}
+    </tr>
+  </table>
+  {% if invoice.tax_mode == 'cgst_sgst' %}
+  <table>
+    <colgroup><col style="width:52%"><col style="width:28%"><col style="width:20%"></colgroup>
+    <tr>
+      <td class="ei-charge-label">SGST</td>
+      <td class="ei-val ei-right">{{ inr(invoice.sgst_amount_inr) }}</td>
+      <td class="ei-charge-label">INVOICE VALUE INR</td>
+    </tr>
+    <tr>
+      <td class="ei-charge-label">INVOICE VALUE INR</td>
+      <td class="ei-val ei-right" colspan="2">{{ inr(invoice.invoice_value_inr) }}</td>
     </tr>
   </table>
   <table>
     <colgroup><col style="width:52%"><col style="width:28%"><col style="width:20%"></colgroup>
     <tr>
-      <td class="ei-charge-label" style="text-align:right;">INVOICE VALUE INR</td>
+      <td class="ei-charge-label">INVOICE VALUE INR</td>
       <td class="ei-val ei-right" colspan="2">{{ inr(invoice.invoice_value_inr) }}</td>
     </tr>
   </table>

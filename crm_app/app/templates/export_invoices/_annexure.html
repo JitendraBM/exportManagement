@@ -11,7 +11,7 @@
   .ei-annexure .ei-a-title { border: 1px solid #000; text-align: center; font-size: 12px; font-weight: bold; padding: 3px 0; }
   .ei-annexure table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
   .ei-annexure td { border: 1px solid #000; padding: 2px 4px; vertical-align: top; text-align: left; word-wrap: break-word; }
-  .ei-a-c { text-align: center; }
+  .ei-a-c { text-align: left; }
   .ei-a-v { font-weight: bold; }
   .ei-a-lbl { font-size: 8px; }
   @media print { .ei-annexure { width: auto; margin: 0; padding: 0; box-shadow: none; } }
@@ -76,7 +76,7 @@
     </tr>
     {% for item in invoice.top_costliest_items %}
     <tr>
-      <td class="ei-a-v">{{ item.product_name }}{% if item.hsn_code %} - HSN {{ item.hsn_code }}{% endif %}</td>
+      <td class="ei-a-v">{{ item.product_name }}</td>
       <td class="ei-a-lbl">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
       <td class="ei-a-v">{{ ausd(item.total_usd) }}</td>
     </tr>
@@ -177,7 +177,7 @@
         <span class="ei-a-lbl">Self Sealing Declaration</span><br>
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '')|replace('\n','<br>')|safe }}
       </td>
-      <td style="text-align:right;height:60px;vertical-align:bottom;">
+      <td style="text-align:left;height:60px;vertical-align:bottom;">
         <div class="ei-a-v">FOR {{ company.company_name|upper if company else '' }}</div>
         <div class="ei-a-v">Authorised Signatory</div>
         {% if invoice.authorised_person_designation %}<div>{{ invoice.authorised_person_designation }}</div>{% endif %}

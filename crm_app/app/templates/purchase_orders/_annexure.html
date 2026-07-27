@@ -33,13 +33,14 @@
 
     <table class="po-items">
       <colgroup>
-        <col style="width:5%"><col style="width:41%"><col style="width:9%"><col style="width:10%">
+        <col style="width:5%"><col style="width:33%"><col style="width:8%"><col style="width:9%"><col style="width:10%">
         <col style="width:11%"><col style="width:7%"><col style="width:17%">
       </colgroup>
       <thead>
         <tr>
           <td rowspan="2">SR<br>NO</td>
           <td rowspan="2">DESCRIPTION OF GOODS</td>
+          <td rowspan="2">HSN CODE</td>
           <td colspan="2">QUANTITY</td>
           <td colspan="2">EX-FACTORY PRICE</td>
           <td rowspan="2">TOTAL (INR)</td>
@@ -55,20 +56,22 @@
         {% for item in annex_items %}
         <tr class="po-goods">
           <td class="po-center">{{ item.sr_no }}</td>
-          <td>{{ item.product_name }}{% if item.hsn_code %} &nbsp;HSNC : {{ item.hsn_code }}{% endif %}</td>
-          <td class="po-center">{{ ax_num(item.quantity_boxes) }}</td>
-          <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
+          <td class="po-bottom">{{ item.product_name }}</td>
+          <td class="po-center">{{ item.hsn_code or '' }}</td>
+          <td class="po-center">{% if item.quantity_boxes %}{{ ax_num(item.quantity_boxes) }} <span class="po-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+          <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="po-unit-sm">{{ item.unit }}</span></td>
           <td class="po-right">{{ ax_inr(item.price_inr) }}</td>
           <td class="po-center">{{ item.price_per }}</td>
           <td class="po-right">{{ ax_inr(item.total_inr) }}</td>
         </tr>
         {% endfor %}
         <tr class="po-filler js-page-filler">
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
         </tr>
         <tr>
           <td></td>
           <td class="po-val po-center">TOTAL QUANTITY</td>
+          <td></td>
           <td class="po-val po-center">{{ ax_num(axns.boxes) }}</td>
           <td class="po-val po-right">{{ '{:,.2f}'.format(axns.qty) }}</td>
           <td class="po-val po-center" colspan="2">TOTAL AMOUNT</td>

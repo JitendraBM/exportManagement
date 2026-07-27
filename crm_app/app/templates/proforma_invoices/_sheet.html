@@ -34,17 +34,19 @@
     padding: 3px 0;
   }
   .pi-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
-  .pi-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: center; word-wrap: break-word; }
+  .pi-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: left; word-wrap: break-word; }
   .pi-label { font-size: 9px; }
   .pi-val { font-weight: bold; }
-  .pi-center { text-align: center; }
+  .pi-center { text-align: left; }
   /* Multi-line paragraph cells (exporter/consignee/bank addresses) - no
      sibling in the same row to vertically line up with, so keep them
      reading from the top like a letterhead rather than centering a short
      block in a tall cell. */
   .pi-left { text-align: left; vertical-align: top; }
-  .pi-right { text-align: right; }
+  .pi-right { text-align: left; }
   .pi-mid { vertical-align: middle !important; }
+  .pi-bottom { vertical-align: bottom !important; }
+  .pi-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
   .pi-side {
     writing-mode: vertical-rl;
     transform: rotate(180deg);
@@ -69,13 +71,13 @@
   .pi-email-flex { display: flex; align-items: stretch; }
   .pi-email-flex > div { padding: 3px 5px; }
   .pi-email-flex > div + div { border-left: 1px solid #000; }
-  .pi-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
+  .pi-items thead td { text-align: left; vertical-align: middle; font-size: 9px; }
   .pi-items tbody tr.pi-goods td, .pi-items tbody tr.pi-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
   .pi-items tbody tr.pi-group-gap td { height: 8px; padding: 0; }
-  .pi-charge-label { text-align: center; font-weight: bold; font-size: 9px; vertical-align: middle; }
+  .pi-charge-label { text-align: left; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .pi-sign-cell { height: 92px; padding: 4px 6px; }
   .pi-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
-  .pi-stamp { text-align: right; }
+  .pi-stamp { text-align: left; }
   @media print {
     .pi-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
   }
@@ -222,22 +224,23 @@
   <!-- Goods -->
   <table class="pi-items">
     <colgroup>
-      <col style="width:17%"><col style="width:36%"><col style="width:5.5%"><col style="width:7%">
-      <col style="width:9.5%"><col style="width:7.5%"><col style="width:5.5%"><col style="width:12%">
+      <col style="width:7%"><col style="width:29%"><col style="width:8%"><col style="width:5.5%"><col style="width:7%">
+      <col style="width:13%"><col style="width:7%"><col style="width:5.5%"><col style="width:18%">
     </colgroup>
     <thead>
       <tr>
-        <td rowspan="2">Marks &amp; Nos / Container No</td>
+        <td rowspan="2">Serial Number</td>
         <td rowspan="2">Description Of Goods</td>
+        <td rowspan="2">HSN Code</td>
         <td colspan="3">Quantity Details</td>
         <td rowspan="2">Rate<br>In USD</td>
-        <td rowspan="2">Per</td>
+        <td rowspan="2">Unit</td>
         <td rowspan="2">Total<br>Amount</td>
       </tr>
       <tr>
-        <td>Plts</td>
-        <td>Boxes</td>
-        <td>SQM /<br>LM</td>
+        <td>Pack</td>
+        <td>Qty</td>
+        <td>Alt Qty</td>
       </tr>
     </thead>
     <tbody>
@@ -246,15 +249,16 @@
       <tr class="pi-goods">
         <td></td>
         <td class="pi-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
       <tr class="pi-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="pi-val pi-center">TOTAL</td>
+        <td></td>
         <td class="pi-val pi-center">{{ '{:,.2f}'.format(ns.pallets) if ns.pallets else '' }}</td>
         <td class="pi-val pi-center">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="pi-val pi-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
@@ -337,13 +341,8 @@
       <td colspan="2" style="border-bottom:none; height:26px;"></td>
     </tr>
     <tr>
-      <td colspan="2" class="pi-left" style="border-top:none; border-bottom:none;">
-        ALL BANKING CHARGES OUTSIDE INDIA WILL BE IN ACCOUNT OF APPLICANT
-      </td>
-    </tr>
-    <tr>
       <td colspan="2" class="pi-left" style="border-top:none;">
-        ABOVE OFFER IS VALID 10 DAYS OF ISSUE OF THIS PROFORMA INVOICE
+        <span class="pi-val">REMARKS :</span> {{ (invoice.remarks or '')|upper|replace('\n', '<br>')|safe }}
       </td>
     </tr>
     <tr>

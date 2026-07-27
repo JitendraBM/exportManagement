@@ -18,7 +18,7 @@
     line-height: 1.35;
   }
   .pk-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  .pk-sheet td { border: 1px solid #000; padding: 3px 4px; vertical-align: middle; text-align: center; word-wrap: break-word; }
+  .pk-sheet td { border: 1px solid #000; padding: 3px 4px; vertical-align: middle; text-align: left; word-wrap: break-word; }
   .pk-sheet tr { break-inside: avoid; page-break-inside: avoid; }
   .pk-title { font-weight: bold; font-size: 11px; letter-spacing: 1px; padding: 4px; }
   .pk-label { font-weight: bold; }
@@ -26,10 +26,11 @@
   .pk-head td { font-weight: bold; }
   .pk-item td { height: 88px; }
   .pk-photo img { max-width: 100%; max-height: 84px; object-fit: contain; }
-  .pk-desc { white-space: pre-line; }
+  .pk-desc { white-space: pre-line; vertical-align: bottom; }
+  .pk-unit-sm { font-size: .85em; text-transform: uppercase; }
   .pk-sign-cell { height: 70px; padding: 4px 6px; vertical-align: top; }
   .pk-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; text-align: left; }
-  .pk-sign-right { text-align: right; }
+  .pk-sign-right { text-align: left; }
   @media print {
     .pk-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
   }
@@ -42,12 +43,12 @@
 <div class="pk-sheet">
   <table>
     <colgroup>
-      <col style="width:6.5%"><col style="width:12%"><col style="width:16.5%"><col style="width:5%">
-      <col style="width:6%"><col style="width:6%"><col style="width:9%"><col style="width:6%">
-      <col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:6%">
+      <col style="width:6%"><col style="width:11%"><col style="width:11%"><col style="width:7%"><col style="width:5%">
+      <col style="width:6%"><col style="width:6%"><col style="width:9%"><col style="width:5.5%">
+      <col style="width:7%"><col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:6.5%">
     </colgroup>
 
-    <tr><td class="pk-title" colspan="13">&lt; &lt; &lt; &lt; &lt; &nbsp;PACKING DETAILS&nbsp; &gt; &gt; &gt; &gt; &gt;</td></tr>
+    <tr><td class="pk-title" colspan="14">&lt; &lt; &lt; &lt; &lt; &nbsp;PACKING DETAILS&nbsp; &gt; &gt; &gt; &gt; &gt;</td></tr>
 
     {% if packing_list.purchase_invoice_id %}
       {% set pk_src_label, pk_src_number = 'PURCHASE INVOICE NO', packing_list.purchase_invoice_number %}
@@ -62,13 +63,14 @@
       <td class="pk-label pk-left" colspan="2">{{ pk_src_label }}</td>
       <td class="pk-label" colspan="3">{{ pk_src_number or '-' }}</td>
       <td class="pk-label">DATE</td>
-      <td class="pk-label" colspan="7">{{ packing_list.packing_list_date | long_date }}</td>
+      <td class="pk-label" colspan="8">{{ packing_list.packing_list_date | long_date }}</td>
     </tr>
 
     <tr class="pk-head">
       <td rowspan="2">INDEX</td>
       <td rowspan="2">PRODUCT</td>
       <td rowspan="2">PRODUCT</td>
+      <td rowspan="2">HSN CODE</td>
       <td colspan="2">BOX PACKING</td>
       <td rowspan="2">SURFACE</td>
       <td rowspan="2">MODEL NO<br>OR NAME</td>
@@ -97,21 +99,22 @@
         {% endif %}
       </td>
       <td class="pk-desc">{{ item.product_name }}</td>
+      <td>{{ item.hsn_code or '' }}</td>
       <td>{{ product.quantity if product and product.quantity else '' }}</td>
       <td>{{ product.alternate_quantity if product and product.alternate_quantity else '' }}</td>
       <td>{{ (design.surface or '')|upper if design else '' }}</td>
       <td>{{ item.design_name or '' }}</td>
       <td>{{ num(item.pallets) }}</td>
-      <td>{{ num(item.quantity_boxes) }}</td>
+      <td>{% if item.quantity_boxes %}{{ num(item.quantity_boxes) }} <span class="pk-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
       <td>{{ num(item.pcs) }}</td>
-      <td>{{ num(item.quantity_value) }}</td>
+      <td>{% if item.quantity_value %}{{ num(item.quantity_value) }} <span class="pk-unit-sm">{{ item.unit }}</span>{% endif %}</td>
       <td>{{ num(item.net_weight_kg) }}</td>
       <td>{{ num(item.gross_weight_kg) }}</td>
     </tr>
     {% endfor %}
 
     <tr>
-      <td class="pk-label" colspan="7">TOTAL</td>
+      <td class="pk-label" colspan="8">TOTAL</td>
       <td class="pk-label">{{ num(packing_list.total_pallets) }}</td>
       <td class="pk-label">{{ num(packing_list.total_boxes) }}</td>
       <td class="pk-label">{{ num(packing_list.total_pcs) }}</td>
@@ -121,7 +124,7 @@
     </tr>
     <tr>
       <td class="pk-label pk-left" colspan="2">REMARKS :</td>
-      <td class="pk-left" colspan="11">{{ (packing_list.remarks or '')|upper }}</td>
+      <td class="pk-left" colspan="12">{{ (packing_list.remarks or '')|upper }}</td>
     </tr>
     <tr>
       <td class="pk-sign-cell" colspan="6">
@@ -130,7 +133,7 @@
           <div class="pk-label">SEAL &amp; SIGNATURE</div>
         </div>
       </td>
-      <td class="pk-sign-cell" colspan="7">
+      <td class="pk-sign-cell" colspan="8">
         <div class="pk-sign-flex pk-sign-right">
           <div class="pk-label">FOR&nbsp; {{ company.company_name|upper if company else '' }}</div>
           <div class="pk-label">AUTHORISED SIGNATORY</div>

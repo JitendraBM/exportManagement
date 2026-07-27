@@ -338,7 +338,7 @@ CREATE TABLE IF NOT EXISTS our_company_bank_details (
 CREATE TABLE IF NOT EXISTS permits (
     id                        INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id                INTEGER NOT NULL REFERENCES tenants(id),
-    stuffing_place_name     TEXT,
+    stuffing_place_name       TEXT,
     place_of_stuffing         TEXT,
     permission_number         TEXT NOT NULL,
     date_of_issue             TEXT,
@@ -483,6 +483,7 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     dimension_mm        TEXT,
     hsn_code            TEXT,
     quantity_boxes      REAL,
+    quantity_unit       TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     pallets             REAL,      -- "Plts" column - same derived-from-boxes pattern as proforma_invoice_items.pallets
     quantity_value       REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
@@ -555,6 +556,7 @@ CREATE TABLE IF NOT EXISTS proforma_invoice_items (
     surface               TEXT,      -- optional finish (GLOSSY / MATT / ...), drives the surface-grouped print view
     pallets                REAL,      -- "Plts" column
     quantity_boxes        REAL,
+    quantity_unit         TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     quantity_value         REAL NOT NULL DEFAULT 0,
     unit                  TEXT NOT NULL DEFAULT 'SQM',
     price_usd             REAL NOT NULL DEFAULT 0,
@@ -612,6 +614,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
     product_name        TEXT NOT NULL,
     hsn_code            TEXT,
     quantity_boxes      REAL,
+    quantity_unit       TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     quantity_value      REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
     price_inr           REAL NOT NULL DEFAULT 0,
@@ -788,6 +791,7 @@ CREATE TABLE IF NOT EXISTS export_invoice_items (
     surface               TEXT,
     pallets               REAL,
     quantity_boxes        REAL,
+    quantity_unit         TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     quantity_value        REAL NOT NULL DEFAULT 0,
     unit                  TEXT NOT NULL DEFAULT 'SQM',
     price_usd             REAL NOT NULL DEFAULT 0,
@@ -892,6 +896,7 @@ CREATE TABLE IF NOT EXISTS packing_list_items (
     box_per_pallet      REAL,                              -- BOX PER PALLET column on the printed sheet
     pallets             REAL,
     quantity_boxes      REAL,
+    quantity_unit       TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     pcs                 REAL,                              -- PCS column on the printed sheet
     quantity_value      REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
