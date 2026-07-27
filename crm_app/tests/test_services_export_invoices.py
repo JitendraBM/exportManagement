@@ -79,9 +79,11 @@ class TestExportCrud:
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="")
 
-    def test_number_must_be_digits_only_and_at_most_16_chars(self, container, seed):
-        with pytest.raises(ValidationError):
-            make_export(container, seed, export_invoice_number="ABC123")
+    def test_number_allows_free_text(self, container, seed):
+        inv = make_export(container, seed, export_invoice_number="EXP/AB-001")
+        assert inv.export_invoice_number == "EXP/AB-001"
+
+    def test_number_must_be_at_most_16_chars(self, container, seed):
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="1" * 17)
 

@@ -60,8 +60,8 @@
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
       <div class="field">
-        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(up to 16 digits)</span></label>
-        <input type="text" id="export_invoice_number" name="export_invoice_number" required inputmode="numeric" pattern="\d{1,16}" maxlength="16"
+        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(max 16 characters)</span></label>
+        <input type="text" id="export_invoice_number" name="export_invoice_number" required maxlength="16"
                value="{{ data.export_invoice_number | default('', true) }}">
       </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
