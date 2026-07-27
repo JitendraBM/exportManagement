@@ -9,7 +9,8 @@ PIs/suppliers), so it is normally started from one or more PIs via
 `?proforma_invoice_ids=` (a comma-separated or repeated query arg) which
 prefills the goods lines and imports EPCG / export-under / supplier-exemption
 details by walking each PI's purchase orders to their purchase invoices. The
-invoice number is auto-generated EXPINV{YYYYMMDD}{seq} and never editable.
+invoice number is typed in by hand (up to 16 digits, unique per company),
+matching the number on the physical customs paperwork.
 Mirrors app/routes/proforma_invoices.py, plus an optional Shipping Bill PDF
 upload (same idiom as purchase_invoices.py).
 """
@@ -27,6 +28,7 @@ export_invoices_bp = Blueprint("export_invoices", __name__, url_prefix="/export-
 CONTAINER_TYPES = ["20FT FCL", "40FT FCL", "20FT LCL", "40FT LCL", "40FT HC"]
 
 _HEADER_FIELDS = [
+    "export_invoice_number",
     "invoice_date", "lead_id", "consignee_name", "consignee_address", "notify_name", "notify_address",
     "country_of_origin", "country_of_destination", "place_of_receipt", "pre_carriage_by",
     "port_of_loading", "port_of_discharge", "final_destination", "nature_of_contract", "payment_terms",

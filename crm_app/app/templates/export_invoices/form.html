@@ -11,7 +11,6 @@
   <div>
     <div class="eyebrow">Sales documents</div>
     <h1>{{ 'Edit ' + invoice.export_invoice_number if invoice else 'New export invoice' }}</h1>
-    {% if not invoice %}<div class="text-sm text-soft">Invoice number is generated automatically on save.</div>{% endif %}
   </div>
 </div>
 
@@ -57,6 +56,11 @@
   <div class="card">
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
+      <div class="field">
+        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(up to 16 digits)</span></label>
+        <input type="text" id="export_invoice_number" name="export_invoice_number" required inputmode="numeric" pattern="\d{1,16}" maxlength="16"
+               value="{{ data.export_invoice_number | default('', true) }}">
+      </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
       <div class="field"><label for="nature_of_contract">Nature of contract</label><input type="text" id="nature_of_contract" name="nature_of_contract" placeholder="e.g. CNF- (Beira)" value="{{ data.nature_of_contract | default('', true) }}"></div>
     </div>

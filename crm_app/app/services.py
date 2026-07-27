@@ -2753,14 +2753,19 @@ class ExportInvoiceService:
         if invoice.created_by != current_user.id:
             raise PermissionDeniedError("You can only manage export invoices you created yourself.")
 
-    # ---- number generation --------------------------------------------------
-    def _generate_number(self, company_id: int, invoice_date: str) -> str:
-        """EXPINV{YYYYMMDD}{seq} - that day's export invoice count + 1 for
-        this company, zero-padded to 3 digits."""
-        date_part = invoice_date.replace("-", "")
-        prefix = f"EXPINV{date_part}"
-        seq = self.export_invoice_repo.count_for_date_prefix(company_id, prefix) + 1
-        return f"{prefix}{seq:03d}"
+    # ---- number validation --------------------------------------------------
+    def _clean_export_invoice_number(self, company_id: int, raw: str, exclude_id: Optional[int] = None) -> str:
+        """Unlike the other documents in this pipeline, the export invoice
+        number is typed in by hand (it must match the number on the physical
+        customs paperwork), not auto-generated. Up to 16 digits."""
+        number = (raw or "").strip()
+        if not number:
+            raise ValidationError("Export invoice number is compulsory.")
+        if not number.isdigit() or len(number) > 16:
+            raise ValidationError("Export invoice number must be up to 16 digits.")
+        if self.export_invoice_repo.number_exists(company_id, number, exclude_id):
+            raise ValidationError(f"Export invoice number '{number}' is already in use.")
+        return number
 
     # ---- prefill from selected proforma invoices --------------------------------------------------
     def _load_proformas(self, proforma_ids: list, company_id: int) -> List[ProformaInvoice]:
@@ -2927,7 +2932,11 @@ class ExportInvoiceService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
-    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem]) -> ExportInvoice:
+    def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem],
+                       invoice_id: Optional[int] = None) -> ExportInvoice:
+        export_invoice_number = self._clean_export_invoice_number(
+            current_user.company_id, fields.get("export_invoice_number"), exclude_id=invoice_id,
+        )
         consignee_name = (fields.get("consignee_name") or "").strip()
         if not consignee_name:
             raise ValidationError("Consignee name is compulsory.")
@@ -2963,7 +2972,8 @@ class ExportInvoiceService:
                     authorised_desig = (match.get("designation") or "").strip() or None
 
         invoice = ExportInvoice(
-            id=None, company_id=current_user.company_id, export_invoice_number="", invoice_date=invoice_date,
+            id=None, company_id=current_user.company_id, export_invoice_number=export_invoice_number,
+            invoice_date=invoice_date,
             consignee_name=consignee_name, created_by=current_user.id, lead_id=lead_id,
             consignee_address=(fields.get("consignee_address") or "").strip() or None,
             notify_name=(fields.get("notify_name") or "").strip() or None,
@@ -3093,7 +3103,6 @@ class ExportInvoiceService:
         if not invoice.examination_date:
             invoice.examination_date = invoice.invoice_date
         invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
-        invoice.export_invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
         created = self.export_invoice_repo.create(invoice)
         self.version_service.record("export_invoice", created, current_user.id)
         if self.party_repos:
@@ -3105,7 +3114,7 @@ class ExportInvoiceService:
         existing = self.get(invoice_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
-        invoice = self._build_header(current_user, fields, items)
+        invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
 
         # Exchange rate is set once by anyone; changing it later is admin-only.
         # (The form disables the field for non-admins, so a normal edit
