@@ -30,6 +30,7 @@ _HEADER_FIELDS = [
     "invoice_date", "lead_id", "consignee_name", "consignee_address", "notify_name", "notify_address",
     "country_of_origin", "country_of_destination", "place_of_receipt", "pre_carriage_by",
     "port_of_loading", "port_of_discharge", "final_destination", "nature_of_contract", "payment_terms",
+    "buyer_order_no", "buyer_order_date",
     "export_under", "epcg_number", "epcg_date", "loading_type", "tax_mode", "exchange_rate",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount", "fob_value", "cnf_value",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
@@ -46,7 +47,6 @@ def _extract_fields(form) -> dict:
     `fields` dict alongside the scalars)."""
     fields = {key: form.get(key, "") for key in _HEADER_FIELDS}
     fields["proforma_invoice_ids"] = form.getlist("proforma_invoice_ids[]")
-    fields["buyer_orders"] = _extract_buyer_orders(form)
     fields["containers"] = _extract_containers(form)
     fields["container_details_list"] = _extract_container_details(form)
     fields["purchase_details"] = _extract_purchase_details(form)
@@ -77,20 +77,6 @@ def _extract_items(form) -> list:
             "price_usd": prices[i] if i < len(prices) else "",
         })
     return items
-
-
-def _extract_buyer_orders(form) -> list:
-    nos = form.getlist("bo_order_no[]")
-    dates = form.getlist("bo_order_date[]")
-    pids = form.getlist("bo_proforma_invoice_id[]")
-    rows = []
-    for i in range(max(len(nos), len(dates), len(pids))):
-        rows.append({
-            "order_no": nos[i] if i < len(nos) else "",
-            "order_date": dates[i] if i < len(dates) else "",
-            "proforma_invoice_id": pids[i] if i < len(pids) else "",
-        })
-    return rows
 
 
 def _extract_containers(form) -> list:
@@ -144,13 +130,13 @@ def _form_context():
     return leads, proforma_invoices, company
 
 
-def _render_form(invoice, form_data, form_items, buyer_orders=None, containers=None,
+def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, status_code=200):
     leads, proforma_invoices, company = _form_context()
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
         company=company, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
-        form_buyer_orders=buyer_orders, form_containers=containers,
+        form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
         today=date.today().isoformat(),
     )
@@ -181,7 +167,7 @@ def new_export_invoice():
             fields = _extract_fields(request.form)
             return _render_form(
                 None, request.form, _extract_items(request.form),
-                buyer_orders=fields["buyer_orders"], containers=fields["containers"],
+                containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
                 status_code=400,
             )
@@ -189,7 +175,7 @@ def new_export_invoice():
     # GET: optionally prefill from one or more proforma invoices.
     prefill = None
     form_items = None
-    buyer_orders = containers = container_details = purchase_details = None
+    containers = container_details = purchase_details = None
     raw_ids = request.args.get("proforma_invoice_ids") or request.args.get("proforma_invoice_id")
     proforma_ids = [p for p in (raw_ids.split(",") if raw_ids else []) if p.strip()]
     if proforma_ids:
@@ -197,9 +183,8 @@ def new_export_invoice():
         prefill = dict(built["fields"])
         prefill["invoice_date"] = date.today().isoformat()
         form_items = built["items"]
-        buyer_orders = built["buyer_orders"]
         purchase_details = built["purchase_details"]
-    return _render_form(None, prefill, form_items, buyer_orders=buyer_orders, containers=containers,
+    return _render_form(None, prefill, form_items, containers=containers,
                         container_details=container_details, purchase_details=purchase_details)
 
 
@@ -238,14 +223,14 @@ def edit_export_invoice(export_invoice_id):
             fields = _extract_fields(request.form)
             return _render_form(
                 invoice, request.form, _extract_items(request.form),
-                buyer_orders=fields["buyer_orders"], containers=fields["containers"],
+                containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
                 status_code=400,
             )
 
     return _render_form(
         invoice, None, None,
-        buyer_orders=invoice.buyer_orders, containers=invoice.containers,
+        containers=invoice.containers,
         container_details=invoice.container_details, purchase_details=invoice.purchase_details,
     )
 

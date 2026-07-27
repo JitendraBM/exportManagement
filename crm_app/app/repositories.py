@@ -1564,11 +1564,12 @@ class ProformaInvoiceRepository:
 
 
 class ExportInvoiceRepository:
-    """Persistence for the Export Invoice: the header row plus its items and
-    the four child lists (proforma links, buyer orders, containers, per-
-    container 11B rows, purchase details). It is a leaf of the pipeline -
-    nothing is generated from it - so delete just cascades its own children
-    (all ON DELETE CASCADE). Mirrors ProformaInvoiceRepository."""
+    """Persistence for the Export Invoice: the header row (which carries the
+    single Buyer Order No & Date shared by every linked PI) plus its items
+    and child lists (proforma links, containers, per-container 11B rows,
+    purchase details). It is a leaf of the pipeline - nothing is generated
+    from it - so delete just cascades its own children (all ON DELETE
+    CASCADE). Mirrors ProformaInvoiceRepository."""
 
     def __init__(self, db: Database):
         self.db = db
@@ -1607,12 +1608,6 @@ class ExportInvoiceRepository:
                    JOIN proforma_invoices pi ON pi.id = l.proforma_invoice_id
                    WHERE l.export_invoice_id = ? ORDER BY pi.invoice_date, pi.id""",
                 (invoice_id,),
-            )
-        ]
-        invoice.buyer_orders = [
-            dict(r) for r in self.db.query(
-                "SELECT order_no, order_date, proforma_invoice_id FROM export_invoice_buyer_orders "
-                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
         invoice.containers = [
@@ -1661,7 +1656,7 @@ class ExportInvoiceRepository:
                (company_id, export_invoice_number, invoice_date, lead_id, consignee_name, consignee_address,
                 notify_name, notify_address, country_of_origin, country_of_destination, place_of_receipt,
                 pre_carriage_by, port_of_loading, port_of_discharge, final_destination, nature_of_contract,
-                payment_terms, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
+                payment_terms, buyer_order_no, buyer_order_date, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
                 sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
@@ -1669,7 +1664,7 @@ class ExportInvoiceRepository:
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, remarks, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1680,7 +1675,7 @@ class ExportInvoiceRepository:
             """UPDATE export_invoices SET invoice_date = ?, lead_id = ?, consignee_name = ?, consignee_address = ?,
                    notify_name = ?, notify_address = ?, country_of_origin = ?, country_of_destination = ?,
                    place_of_receipt = ?, pre_carriage_by = ?, port_of_loading = ?, port_of_discharge = ?,
-                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, export_under = ?,
+                   final_destination = ?, nature_of_contract = ?, payment_terms = ?, buyer_order_no = ?, buyer_order_date = ?, export_under = ?,
                    epcg_number = ?, epcg_date = ?, loading_type = ?, tax_mode = ?, exchange_rate = ?,
                    sea_freight = ?, insurance = ?, certification = ?, other_charges = ?, discount_amount = ?,
                    fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
@@ -1705,7 +1700,8 @@ class ExportInvoiceRepository:
             invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
             invoice.country_of_origin, invoice.country_of_destination, invoice.place_of_receipt,
             invoice.pre_carriage_by, invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
-            invoice.nature_of_contract, invoice.payment_terms, invoice.export_under, invoice.epcg_number,
+            invoice.nature_of_contract, invoice.payment_terms, invoice.buyer_order_no, invoice.buyer_order_date,
+            invoice.export_under, invoice.epcg_number,
             invoice.epcg_date, invoice.loading_type, invoice.tax_mode, invoice.exchange_rate, invoice.sea_freight,
             invoice.insurance, invoice.certification, invoice.other_charges, invoice.discount_amount,
             invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
@@ -1736,15 +1732,6 @@ class ExportInvoiceRepository:
                 conn.execute(
                     "INSERT INTO export_invoice_proforma_links (export_invoice_id, proforma_invoice_id) VALUES (?, ?)",
                     (invoice_id, pid),
-                )
-
-            conn.execute("DELETE FROM export_invoice_buyer_orders WHERE export_invoice_id = ?", (invoice_id,))
-            for i, bo in enumerate(invoice.buyer_orders, start=1):
-                conn.execute(
-                    "INSERT INTO export_invoice_buyer_orders (export_invoice_id, sr_no, order_no, order_date, proforma_invoice_id) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (invoice_id, i, bo.get("order_no") or None, bo.get("order_date") or None,
-                     bo.get("proforma_invoice_id") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_containers WHERE export_invoice_id = ?", (invoice_id,))

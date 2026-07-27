@@ -84,23 +84,10 @@
 
   <div class="card">
     <div class="card-header"><h3>Buyer order no. &amp; date</h3></div>
-    <div id="buyer-order-rows">
-      {% set bo_rows = form_buyer_orders if form_buyer_orders is not none else (invoice.buyer_orders if invoice else []) %}
-      {% for bo in bo_rows %}
-      <div class="form-row buyer-order-row">
-        <div class="field"><label>Order no.</label><input type="text" name="bo_order_no[]" value="{{ bo.order_no or '' }}"></div>
-        <div class="field"><label>Order date</label><input type="date" name="bo_order_date[]" value="{{ (bo.order_date or '')[:10] }}"></div>
-        <div class="field"><label>Linked PI</label>
-          <select name="bo_proforma_invoice_id[]">
-            <option value="">— none —</option>
-            {% for pi in proforma_invoices %}<option value="{{ pi.id }}" {{ 'selected' if bo.proforma_invoice_id and bo.proforma_invoice_id | string == pi.id | string }}>{{ pi.invoice_number }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-bo">Remove</button></div>
-      </div>
-      {% endfor %}
+    <div class="form-row">
+      <div class="field"><label for="buyer_order_no">Order no.</label><input type="text" id="buyer_order_no" name="buyer_order_no" value="{{ data.buyer_order_no | default('', true) }}"></div>
+      <div class="field"><label for="buyer_order_date">Order date</label><input type="date" id="buyer_order_date" name="buyer_order_date" value="{{ (data.buyer_order_date | default('', true))[:10] }}"></div>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-bo-btn">+ Add buyer order</button>
   </div>
 
   <div class="card">
@@ -487,26 +474,12 @@
     window.location = '{{ url_for("export_invoices.new_export_invoice") }}?proforma_invoice_ids=' + encodeURIComponent(ids.join(','));
   });
 
-  // ---- repeatable list helpers (buyer orders / containers / purchase details / 11B) ----
+  // ---- repeatable list helpers (containers / purchase details / 11B) ----
   function bindRemove(containerId, rowClass, removeClass, after) {
     document.getElementById(containerId).addEventListener('click', (e) => {
       if (e.target.classList.contains(removeClass)) { e.target.closest('.' + rowClass).remove(); if (after) after(); }
     });
   }
-
-  const proformaOptionsHtml = `{% for pi in proforma_invoices %}<option value="{{ pi.id }}">{{ pi.invoice_number }}</option>{% endfor %}`;
-  document.getElementById('add-bo-btn').addEventListener('click', () => {
-    const wrap = document.getElementById('buyer-order-rows');
-    const div = document.createElement('div');
-    div.className = 'form-row buyer-order-row';
-    div.innerHTML = `
-      <div class="field"><label>Order no.</label><input type="text" name="bo_order_no[]"></div>
-      <div class="field"><label>Order date</label><input type="date" name="bo_order_date[]"></div>
-      <div class="field"><label>Linked PI</label><select name="bo_proforma_invoice_id[]"><option value="">— none —</option>${proformaOptionsHtml}</select></div>
-      <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-bo">Remove</button></div>`;
-    wrap.appendChild(div);
-  });
-  bindRemove('buyer-order-rows', 'buyer-order-row', 'js-remove-bo');
 
   const containerTypeOptions = `{% for ct in container_types %}<option value="{{ ct }}">{{ ct }}</option>{% endfor %}`;
   document.getElementById('add-container-btn').addEventListener('click', () => {

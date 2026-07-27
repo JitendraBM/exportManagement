@@ -126,21 +126,13 @@ class TestExportProformaLinks:
         assert len(built["items"]) == 2
         assert built["fields"]["consignee_name"] == "ROBUST INTERNATIONAL"
 
-    def test_prefill_seeds_buyer_orders_per_pi(self, container, seed):
-        p1 = make_proforma(container, seed, buyer_order_no="EXP/001")
+    def test_prefill_takes_buyer_order_from_first_pi_that_has_one(self, container, seed):
+        # All PIs under one export invoice share the same buyer order, so the
+        # prefill is a single field taken from the first PI that has one.
+        p1 = make_proforma(container, seed, buyer_order_no="")
         p2 = make_proforma(container, seed, buyer_order_no="EXP/002")
         built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
-        nos = {b["order_no"] for b in built["buyer_orders"]}
-        assert nos == {"EXP/001", "EXP/002"}
-
-    def test_prefill_dedupes_shared_buyer_order_number(self, container, seed):
-        # PIs under one export invoice normally share the same buyer order
-        # number - the prefill collapses them into a single row.
-        p1 = make_proforma(container, seed, buyer_order_no="EXP/003/24-25")
-        p2 = make_proforma(container, seed, buyer_order_no="EXP/003/24-25")
-        built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
-        assert len(built["buyer_orders"]) == 1
-        assert built["buyer_orders"][0]["order_no"] == "EXP/003/24-25"
+        assert built["fields"]["buyer_order_no"] == "EXP/002"
 
     def test_prefill_export_under_from_company_lut(self, container, seed):
         make_company(container, seed, lut="LUT-123")
@@ -277,15 +269,11 @@ class TestExportChildLists:
         assert got.total_containers == 2
         assert got.container_details[0]["container_no"] == "ABCD1234"
 
-    def test_buyer_order_only_links_to_referenced_pi(self, container, seed):
-        p1 = make_proforma(container, seed)
-        stray = make_proforma(container, seed)  # NOT referenced by the export invoice
-        inv = make_export(
-            container, seed, proforma_ids=[p1.id],
-            buyer_orders=[{"order_no": "EXP/1", "order_date": "2026-02-01", "proforma_invoice_id": str(stray.id)}])
+    def test_buyer_order_no_and_date_round_trip(self, container, seed):
+        inv = make_export(container, seed, buyer_order_no="EXP/1", buyer_order_date="2026-02-01")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
-        # the stray PI isn't referenced, so the link is dropped (kept as None)
-        assert got.buyer_orders[0]["proforma_invoice_id"] is None
+        assert got.buyer_order_no == "EXP/1"
+        assert got.buyer_order_date == "2026-02-01"
 
     def test_purchase_details_round_trip(self, container, seed):
         inv = make_export(container, seed, purchase_details=[
