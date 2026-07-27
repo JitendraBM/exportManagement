@@ -162,6 +162,12 @@ class TestExportProformaLinks:
         assert fields["other_charges"] == 10
         assert fields["discount_amount"] == 10
 
+    def test_prefill_nature_of_contract_from_first_pi_terms_of_delivery(self, container, seed):
+        p1 = make_proforma(container, seed, terms_of_delivery="CNF- (Beira)")
+        p2 = make_proforma(container, seed, terms_of_delivery="FOB- (Mundra)")
+        built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
+        assert built["fields"]["nature_of_contract"] == "CNF- (Beira)"
+
     def test_prefill_export_under_from_company_lut(self, container, seed):
         make_company(container, seed, lut="LUT-123")
         p1 = make_proforma(container, seed)

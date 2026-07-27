@@ -2785,9 +2785,10 @@ class ExportInvoiceService:
 
     def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
         """Merge the selected PIs' goods lines, sum their sea freight /
-        insurance / certification / other charges / discount, and import
-        EPCG / export-under / supplier-exemption rows by walking each PI ->
-        its purchase orders -> their purchase invoices. Returns a dict the
+        insurance / certification / other charges / discount, take Nature of
+        contract from the first PI's Terms of delivery, and import EPCG /
+        export-under / supplier-exemption rows by walking each PI -> its
+        purchase orders -> their purchase invoices. Returns a dict the
         form/route consumes."""
         proformas = self._load_proformas(proforma_ids, company_id)
         first = proformas[0] if proformas else None
@@ -2873,6 +2874,7 @@ class ExportInvoiceService:
             "port_of_loading": first.port_of_loading if first else None,
             "port_of_discharge": first.port_of_discharge if first else None,
             "final_destination": first.final_destination if first else None,
+            "nature_of_contract": first.terms_of_delivery if first else None,
             "payment_terms": first.payment_terms if first else None,
             "buyer_order_no": buyer_order_no,
             "buyer_order_date": buyer_order_date,
