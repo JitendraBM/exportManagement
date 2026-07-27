@@ -76,7 +76,7 @@
     </tr>
     {% for item in invoice.top_costliest_items %}
     <tr>
-      <td class="ei-a-v">{{ item.product_name }}{% if item.hsn_code %} - HSN {{ item.hsn_code }}{% endif %}</td>
+      <td class="ei-a-v">{{ item.product_name }}</td>
       <td class="ei-a-lbl">{{ '{:,.2f}'.format(item.quantity_value) }} {{ item.unit }}</td>
       <td class="ei-a-v">{{ ausd(item.total_usd) }}</td>
     </tr>

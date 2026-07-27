@@ -174,13 +174,14 @@
   {% endfor %}
   <table class="ei-items">
     <colgroup>
-      <col style="width:5%"><col style="width:40%"><col style="width:8%"><col style="width:7%">
+      <col style="width:5%"><col style="width:32%"><col style="width:8%"><col style="width:8%"><col style="width:7%">
       <col style="width:9%"><col style="width:10%"><col style="width:6%"><col style="width:15%">
     </colgroup>
     <thead>
       <tr>
         <td rowspan="2">Sr</td>
         <td rowspan="2">Description Of Goods</td>
+        <td rowspan="2">HSN Code</td>
         <td colspan="3">Quantity Details</td>
         <td rowspan="2">Rate<br>In USD</td>
         <td rowspan="2">Per</td>
@@ -192,7 +193,8 @@
       {% for item in invoice.items %}
       <tr>
         <td>{{ loop.index }}</td>
-        <td class="ei-left ei-val ei-bottom">{{ item.product_name }}{% if item.hsn_code %} <span class="ei-label">- HSN {{ item.hsn_code }}</span>{% endif %}</td>
+        <td class="ei-left ei-val ei-bottom">{{ item.product_name }}</td>
+        <td>{{ item.hsn_code or '' }}</td>
         <td>{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
         <td>{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ei-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ei-right">{{ '{:,.2f}'.format(item.quantity_value) }}</td>
@@ -204,11 +206,12 @@
       {# Blank filler cell: sized by _page_filler.html so the goods list
          stretches and the front sheet fills its A4 page exactly. #}
       <tr class="ei-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="ei-val">TOTAL</td>
+        <td></td>
         <td class="ei-val">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-val">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="ei-val ei-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
