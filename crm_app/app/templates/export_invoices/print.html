@@ -29,6 +29,7 @@
     </div>
     <div class="flex gap-8">
       {% if not historical_version %}
+      <a href="{{ url_for('export_packing_lists.view_for_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Export packing list</a>
       {% if invoice.shipping_bill_pdf_path %}
       <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank" class="btn btn-ghost btn-sm">📎 Shipping bill</a>
       {% endif %}

@@ -40,7 +40,7 @@ _HEADER_FIELDS = [
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
     "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
-    "remarks",
+    "stuffing_location", "remarks",
 ]
 
 
@@ -53,6 +53,7 @@ def _extract_fields(form) -> dict:
     fields["containers"] = _extract_containers(form)
     fields["container_details_list"] = _extract_container_details(form)
     fields["purchase_details"] = _extract_purchase_details(form)
+    fields["packing_allocations"] = _extract_packing_allocations(form)
     return fields
 
 
@@ -99,7 +100,8 @@ def _extract_container_details(form) -> list:
     line_seals = form.getlist("cd_line_seal_no[]")
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles))
+    tares = form.getlist("cd_tare_weight[]")
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares))
     rows = []
     for i in range(n):
         rows.append({
@@ -107,6 +109,7 @@ def _extract_container_details(form) -> list:
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
+            "tare_weight_kg": tares[i] if i < len(tares) else "",
         })
     return rows
 
@@ -123,14 +126,51 @@ def _extract_purchase_details(form) -> list:
     return rows
 
 
-def _pallet_types_map(items) -> dict:
-    """product_id -> plain dicts of that product's pallet types, for rows
-    already tied to a catalog product - fills each row's Pallet type
-    dropdown ('loose', the built-in no-pallet default, is added by the form
-    itself). Mirrors app/routes/proforma_invoices.py's helper of the same
-    name; without it every row's dropdown falls back to just 'Loose'."""
+def _extract_packing_allocations(form) -> list:
+    """The Export Packing List's container split, captured on this same form
+    (the packing list has no form of its own - it is generated from here).
+    One row per "N boxes of goods line X went into container C"; the derived
+    columns are submitted too so a hand-corrected figure survives."""
+    container_indexes = form.getlist("alloc_container_index[]")
+    item_indexes = form.getlist("alloc_invoice_item_index[]")
+    boxes = form.getlist("alloc_boxes[]")
+    group_labels = form.getlist("alloc_group_label[]")
+    pallets = form.getlist("alloc_pallets[]")
+    nets = form.getlist("alloc_net_weight[]")
+    grosses = form.getlist("alloc_gross_weight[]")
+
+    def at(values, i):
+        return values[i] if i < len(values) else ""
+
+    return [
+        {
+            "container_index": at(container_indexes, i),
+            "invoice_item_index": at(item_indexes, i),
+            "quantity_boxes": at(boxes, i),
+            "group_label": at(group_labels, i),
+            "pallets": at(pallets, i),
+            "net_weight_kg": at(nets, i),
+            "gross_weight_kg": at(grosses, i),
+        }
+        for i in range(len(item_indexes))
+    ]
+
+
+def _product_maps(items) -> tuple:
+    """(pallet_types_map, product_meta_map), both keyed by product_id, for
+    the goods rows already tied to a catalog product.
+
+    - pallet_types_map fills each row's Pallet type dropdown ('loose', the
+      built-in no-pallet default, is added by the form itself). Mirrors
+      app/routes/proforma_invoices.py's helper of the same name; without it
+      every row's dropdown falls back to just 'Loose'.
+    - product_meta_map carries the per-box weights and the HSN group heading
+      the Export Packing List's split auto-fills from, so a saved invoice's
+      rows behave like freshly picked ones without a second round trip.
+
+    Both come out of one pass so a product is fetched only once."""
     container = current_app.container
-    result = {}
+    pallet_types_map, meta_map = {}, {}
     for item in items or []:
         raw_id = item.get("product_id") if isinstance(item, dict) else item.product_id
         if not raw_id:
@@ -139,18 +179,53 @@ def _pallet_types_map(items) -> dict:
             product_id = int(raw_id)
         except (TypeError, ValueError):
             continue
-        if product_id in result:
+        if product_id in pallet_types_map:
             continue
         try:
             product = container.product_service.get_product(product_id, g.user.company_id)
         except NotFoundError:
             continue
-        result[product_id] = [
+        pallet_types_map[product_id] = [
             {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
              "alt_qty_per_pallet": pallet_alt_quantity(pt, product)}
             for pt in container.product_service.pallet_types_for_product(product_id)
         ]
-    return result
+        meta_map[product_id] = {
+            "net_weight_kg": product.net_weight_kg,
+            "gross_weight_kg": product.gross_weight_kg,
+            "group_label": container.export_packing_list_service.group_label_for(product, product.product_name),
+        }
+    return pallet_types_map, meta_map
+
+
+def _allocation_rows(invoice, form_allocations):
+    """The container-split rows to render: whatever was just submitted (so a
+    rejected save comes back with the user's own split intact), else the
+    invoice's saved packing list, else nothing - the form's JavaScript then
+    seeds the default "every line whole, in container 1"."""
+    if form_allocations is not None:
+        return form_allocations
+    if not invoice:
+        return []
+    packing_list = current_app.container.export_packing_list_service.get_for_invoice(
+        invoice.id, g.user.company_id
+    )
+    if not packing_list:
+        return []
+    # Goods lines are numbered 1..n in order, so a stored invoice_item_sr_no
+    # maps straight back onto the products table's row index.
+    return [
+        {
+            "container_index": (item.container_sr_no or 1) - 1,
+            "invoice_item_index": (item.invoice_item_sr_no or 1) - 1,
+            "quantity_boxes": item.quantity_boxes,
+            "group_label": item.group_label,
+            "pallets": item.pallets,
+            "net_weight_kg": item.net_weight_kg,
+            "gross_weight_kg": item.gross_weight_kg,
+        }
+        for item in packing_list.items
+    ]
 
 
 def _form_context():
@@ -163,15 +238,17 @@ def _form_context():
 
 
 def _render_form(invoice, form_data, form_items, containers=None,
-                 container_details=None, purchase_details=None, status_code=200):
+                 container_details=None, purchase_details=None, allocations=None, status_code=200):
     leads, proforma_invoices, company, permits = _form_context()
     rows = form_items if form_items is not None else (invoice.items if invoice else [])
+    pallet_types_map, product_meta_map = _product_maps(rows)
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
         company=company, permits=permits, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
-        pallet_types_map=_pallet_types_map(rows),
+        form_allocations=_allocation_rows(invoice, allocations),
+        pallet_types_map=pallet_types_map, product_meta_map=product_meta_map,
         today=date.today().isoformat(),
     )
     return (html, status_code) if status_code != 200 else html
@@ -203,6 +280,7 @@ def new_export_invoice():
                 None, request.form, _extract_items(request.form),
                 containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
+                allocations=fields["packing_allocations"],
                 status_code=400,
             )
 
@@ -259,6 +337,7 @@ def edit_export_invoice(export_invoice_id):
                 invoice, request.form, _extract_items(request.form),
                 containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
+                allocations=fields["packing_allocations"],
                 status_code=400,
             )
 

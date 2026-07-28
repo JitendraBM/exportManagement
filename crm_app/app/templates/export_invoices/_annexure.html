@@ -110,8 +110,7 @@
     </tr>
   </table>
 
-  <!-- 11B: one row per physical container. Tare weight is a printed column
-       left blank. -->
+  <!-- 11B: one row per physical container, tare weight included. -->
   <table>
     <colgroup><col style="width:8%"><col style="width:24%"><col style="width:22%"><col style="width:22%"><col style="width:12%"><col style="width:12%"></colgroup>
     <tr>
@@ -129,7 +128,7 @@
       <td class="ei-a-v">{{ cd.line_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.rfid_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.vehicle_no or '' }}</td>
-      <td></td>
+      <td class="ei-a-v">{% if cd.tare_weight_kg %}{{ '{:,.2f}'.format(cd.tare_weight_kg) }}{% endif %}</td>
     </tr>
     {% else %}
     <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td></tr>
