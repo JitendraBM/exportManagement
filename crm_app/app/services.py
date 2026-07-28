@@ -38,13 +38,15 @@ from app.models import (
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
     ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_LUT,
     EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
+    ExportPackingList, ExportPackingListItem,
 )
 from app.repositories import (
     TenantRepository, UserRepositoryBase, LeadRepositoryBase, PartyRepositoryBase, SupplierRepositoryBase,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
-    ExportInvoiceRepository, PackingListRepository, DocumentVersionRepository, PermitRepository,
+    ExportInvoiceRepository, ExportPackingListRepository,
+    PackingListRepository, DocumentVersionRepository, PermitRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 
@@ -2767,6 +2769,10 @@ class ExportInvoiceService:
       'exemption'.
     - An optional Shipping Bill PDF is stored the same way a Purchase
       Invoice stores the supplier's PDF (_save_pdf/_delete_pdf_file).
+    - Saving one also generates its EXPORT PACKING LIST (one per invoice,
+      see ExportPackingListService) from the container split submitted with
+      the form - the split is validated BEFORE anything is written, so a
+      split that doesn't balance never leaves a half-saved invoice behind.
     - No draft/confirmed lock (always editable), but admin version history is
       kept via DocumentVersionService."""
 
@@ -2775,7 +2781,8 @@ class ExportInvoiceService:
                  purchase_order_repo: PurchaseOrderRepository, purchase_invoice_repo: PurchaseInvoiceRepository,
                  company_repo: CompanyRepository, version_service: "DocumentVersionService",
                  party_repos: Optional[dict] = None, upload_folder: str = "",
-                 allowed_extensions: set = frozenset()):
+                 allowed_extensions: set = frozenset(),
+                 export_packing_list_service: Optional["ExportPackingListService"] = None):
         self.export_invoice_repo = export_invoice_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -2787,6 +2794,9 @@ class ExportInvoiceService:
         self.party_repos = party_repos
         self.upload_folder = upload_folder
         self.allowed_extensions = allowed_extensions
+        # Optional so the service stays constructible on its own in tests;
+        # when wired, every save also regenerates the invoice's packing list.
+        self.export_packing_list_service = export_packing_list_service
 
     # ---- reads --------------------------------------------------
     def get(self, invoice_id: int, company_id: int) -> ExportInvoice:
@@ -3093,6 +3103,7 @@ class ExportInvoiceService:
             permission_expiry=(fields.get("permission_expiry") or "").strip() or None,
             manufacturer_name=(fields.get("manufacturer_name") or "").strip() or None,
             manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
+            stuffing_location=(fields.get("stuffing_location") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
             items=items,
         )
@@ -3137,11 +3148,23 @@ class ExportInvoiceService:
 
     @staticmethod
     def _clean_container_details(raw) -> List[dict]:
+        """Wholly-blank rows are dropped, so a row counts as filled in if ANY
+        of its columns - the tare weight included - carries something. (The
+        export packing list's container split indexes into this cleaned list,
+        so its form JavaScript mirrors the same rule.)"""
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
                       for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
-            if any(values.values()):
+            raw_tare = r.get("tare_weight_kg")
+            if raw_tare in (None, ""):
+                values["tare_weight_kg"] = None
+            else:
+                try:
+                    values["tare_weight_kg"] = float(raw_tare)
+                except (TypeError, ValueError):
+                    raise ValidationError("Container details: tare weight must be a number.")
+            if any(v is not None for v in values.values()):
                 rows.append(values)
         return rows
 
@@ -3176,6 +3199,40 @@ class ExportInvoiceService:
         if os.path.exists(full_path):
             os.remove(full_path)
 
+    # ---- export packing list --------------------------------------------------
+    @staticmethod
+    def _remap_allocations(fields: dict, raw_items: list) -> list:
+        """The form's container-split rows point at goods lines by their
+        position in the PRODUCTS table, but _build_items silently drops rows
+        with a blank product name - so the two lists don't line up 1:1.
+        Rewrite each allocation's index into the built-items list, dropping
+        any that pointed at a row that was skipped."""
+        kept = {}
+        for i, raw in enumerate(raw_items or []):
+            if (raw.get("product_name") or "").strip():
+                kept[i] = len(kept)
+        remapped = []
+        for alloc in fields.get("packing_allocations") or []:
+            try:
+                form_index = int(alloc.get("invoice_item_index"))
+            except (TypeError, ValueError):
+                continue
+            if form_index in kept:
+                remapped.append({**alloc, "invoice_item_index": kept[form_index]})
+        return remapped
+
+    def _build_packing_items(self, fields: dict, raw_items: list, invoice: ExportInvoice):
+        """Validate the container split against the goods lines. Returns the
+        packing-list items to persist once the invoice is written, or None
+        when no packing-list service is wired. Raises ValidationError - it is
+        called before the invoice is saved, on purpose."""
+        if not self.export_packing_list_service:
+            return None
+        return self.export_packing_list_service.build_items(
+            invoice.company_id, invoice.items, self._remap_allocations(fields, raw_items),
+            invoice.container_details,
+        )
+
     # ---- writes --------------------------------------------------
     def create(self, current_user: User, fields: dict, raw_items: list, pdf_file=None) -> ExportInvoice:
         items = self._build_items(current_user.company_id, raw_items)
@@ -3183,9 +3240,12 @@ class ExportInvoiceService:
         # Examination date defaults to the creation date, not a later edit.
         if not invoice.examination_date:
             invoice.examination_date = invoice.invoice_date
+        packing_items = self._build_packing_items(fields, raw_items, invoice)
         invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
         created = self.export_invoice_repo.create(invoice)
         self.version_service.record("export_invoice", created, current_user.id)
+        if packing_items is not None:
+            self.export_packing_list_service.save_for_invoice(current_user, created, packing_items)
         if self.party_repos:
             advance_client_status(self.party_repos, self.lead_repo, created.lead_id, "export_invoice")
         return created
@@ -3208,6 +3268,8 @@ class ExportInvoiceService:
         # Examination date is fixed at creation - keep the stored value.
         invoice.examination_date = invoice.examination_date or existing.examination_date
 
+        packing_items = self._build_packing_items(fields, raw_items, invoice)
+
         if pdf_file and pdf_file.filename:
             invoice.shipping_bill_pdf_path = self._save_pdf(pdf_file)
             self._delete_pdf_file(existing.shipping_bill_pdf_path)
@@ -3220,6 +3282,8 @@ class ExportInvoiceService:
         self.export_invoice_repo.update(invoice_id, invoice)
         updated = self.get(invoice_id, current_user.company_id)
         self.version_service.record("export_invoice", updated, current_user.id)
+        if packing_items is not None:
+            self.export_packing_list_service.save_for_invoice(current_user, updated, packing_items)
         if self.party_repos:
             advance_client_status(self.party_repos, self.lead_repo, updated.lead_id, "export_invoice")
         return updated
@@ -3229,6 +3293,317 @@ class ExportInvoiceService:
         self._assert_can_modify(existing, current_user)
         self._delete_pdf_file(existing.shipping_bill_pdf_path)
         self.export_invoice_repo.delete(invoice_id)
+
+
+# ============================================================
+# EXPORT PACKING LIST SERVICE
+# ============================================================
+# How many boxes may be out before the split is called unbalanced. Boxes are
+# whole things, but the form's inputs allow decimals (a part-pallet line can
+# legitimately read 0.5), so compare with a float tolerance rather than ==.
+_BOX_TOLERANCE = 0.001
+
+
+class ExportPackingListService:
+    """The EXPORT PACKING LIST: exactly one per Export Invoice, generated
+    automatically every time that invoice is saved and never created or
+    edited on its own (there is no create/update route - see
+    app/routes/export_packing_lists.py, which is read-only).
+
+    All it owns is the SPLIT: how the invoice's goods lines were divided
+    across the physical containers. Everything else the sheet prints comes
+    off the parent invoice.
+
+    Three things are computed rather than typed:
+
+    - **The quantities.** A row says only "N boxes of goods line X went into
+      container C". SQM/LM, pallets and net/gross weight all follow from N -
+      pallets and quantity pro-rata from the invoice line itself (so the
+      parts always add back up to the whole), weights from the catalog
+      product's per-box figures. A submitted value overrides its derived one,
+      for the odd container that really was weighed differently.
+
+    - **The balance.** Per goods line, the boxes allocated across every
+      container must add up to EXACTLY the boxes on the export invoice:
+      over-allocating loads the same box twice, under-allocating leaves boxes
+      on the floor, and both are refused with a message naming the line and
+      the shortfall. This is checked BEFORE the parent invoice is written, so
+      a bad split never half-saves.
+
+    - **The grouping.** Rows carry the HSN heading they print under
+      (`group_label`, derived from the line's catalog category, else its
+      product name). Within each container the rows are re-ordered so one
+      HSN group runs together, and containers are ordered so a group that
+      spilled over the end of one container resumes at the top of the next -
+      which is what lets the sheet print one heading per group instead of one
+      per row.
+
+    No admin version history: the list holds no independently-authored data
+    (it is regenerated from its invoice on every save), so the parent export
+    invoice's own history is the record."""
+
+    def __init__(self, export_packing_list_repo: ExportPackingListRepository,
+                 export_invoice_repo: ExportInvoiceRepository, product_repo: ProductRepository,
+                 category_repo: Optional[CategoryRepository] = None):
+        self.export_packing_list_repo = export_packing_list_repo
+        self.export_invoice_repo = export_invoice_repo
+        self.product_repo = product_repo
+        self.category_repo = category_repo
+
+    # ---- reads --------------------------------------------------
+    def get(self, packing_list_id: int, company_id: int) -> ExportPackingList:
+        packing_list = self.export_packing_list_repo.get_by_id(packing_list_id)
+        if not packing_list or packing_list.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's list exists.
+            raise NotFoundError(f"Export packing list #{packing_list_id} not found.")
+        return packing_list
+
+    def list_all(self, company_id: int) -> List[ExportPackingList]:
+        return self.export_packing_list_repo.list_all(company_id)
+
+    def get_for_invoice(self, export_invoice_id: int, company_id: int) -> Optional[ExportPackingList]:
+        packing_list = self.export_packing_list_repo.get_for_invoice(export_invoice_id)
+        if not packing_list or packing_list.company_id != company_id:
+            return None
+        return packing_list
+
+    # ---- derived per-row figures --------------------------------------------------
+    def _product(self, product_id, company_id: int) -> Optional[Product]:
+        if not product_id:
+            return None
+        try:
+            product = self.product_repo.get_by_id(int(product_id))
+        except (TypeError, ValueError):
+            return None
+        return product if product and product.company_id == company_id else None
+
+    def group_label_for(self, product, fallback_name: str) -> str:
+        """The HSN heading a goods line prints under. A catalog product sits
+        inside a category ("GLAZED VIRTIFIED TILES"), and that category is
+        what the paper form names above the sizes underneath it - so use it
+        when there is one, and fall back to the line's own name when the
+        product sits at the catalog root or isn't a catalog product at all.
+        Always overridable per row on the form, because the wording on the
+        customs paperwork is not always the catalog's wording."""
+        if product and product.category_id and self.category_repo:
+            category = self.category_repo.get_by_id(product.category_id)
+            if category and category.company_id == product.company_id and category.name:
+                return category.name.strip().upper()
+        return (fallback_name or "").strip().upper()
+
+    @staticmethod
+    def _per_box(total, boxes) -> Optional[float]:
+        """A goods line's per-box figure, taken from the line itself rather
+        than the catalog, so that splitting a line into containers always
+        adds back up to the line - even when the line was hand-edited away
+        from the catalog spec."""
+        try:
+            total, boxes = float(total or 0), float(boxes or 0)
+        except (TypeError, ValueError):
+            return None
+        return (total / boxes) if boxes else None
+
+    # ---- building the allocation --------------------------------------------------
+    def default_allocations(self, items: List[ExportInvoiceItem]) -> List[dict]:
+        """The split an invoice gets when nobody has typed one: every goods
+        line whole, in the first container. That is what "generated by
+        default" means here - saving an export invoice always produces a
+        printable packing list, and splitting it across containers is a
+        refinement the user makes afterwards."""
+        return [
+            {"container_index": 0, "invoice_item_index": i, "quantity_boxes": item.quantity_boxes}
+            for i, item in enumerate(items)
+        ]
+
+    def build_items(self, company_id: int, items: List[ExportInvoiceItem], raw_allocations,
+                    container_details: List[dict]) -> List[ExportPackingListItem]:
+        """Turn the form's allocation rows into packing-list items, deriving
+        every quantity from the boxes and refusing a split that doesn't
+        balance. Raises ValidationError; call it BEFORE persisting the parent
+        invoice."""
+        allocations = self._clean_allocations(raw_allocations, len(items))
+        if not allocations:
+            allocations = self.default_allocations(items)
+        self._assert_balanced(items, allocations)
+
+        built = []
+        for alloc in allocations:
+            item = items[alloc["invoice_item_index"]]
+            product = self._product(item.product_id, company_id)
+            boxes = alloc.get("quantity_boxes")
+            boxes = None if boxes in (None, "") else float(boxes)
+
+            # Quantity + pallets pro-rata off the invoice line; weights off
+            # the catalog product's per-box figures. A submitted value always
+            # wins, so an odd container can be corrected by hand.
+            qty_per_box = self._per_box(item.quantity_value, item.quantity_boxes)
+            pallets_per_box = self._per_box(item.pallets, item.quantity_boxes)
+            if boxes is None:
+                # A goods line with no box count can't be split by boxes -
+                # _assert_balanced has already limited it to a single row, so
+                # this one row simply carries the whole line.
+                quantity_value = item.quantity_value or 0
+                pallets = item.pallets
+            else:
+                quantity_value = round(boxes * qty_per_box, 2) if qty_per_box is not None else 0
+                pallets = round(boxes * pallets_per_box, 2) if pallets_per_box is not None else None
+
+            net = self._override(alloc.get("net_weight_kg"))
+            gross = self._override(alloc.get("gross_weight_kg"))
+            if net is None and boxes is not None and product and product.net_weight_kg:
+                net = round(boxes * product.net_weight_kg, 2)
+            if gross is None and boxes is not None and product and product.gross_weight_kg:
+                gross = round(boxes * product.gross_weight_kg, 2)
+
+            container = self._container_at(container_details, alloc["container_index"])
+            built.append(ExportPackingListItem(
+                id=None, export_packing_list_id=None, sr_no=0,
+                container_sr_no=alloc["container_index"] + 1,
+                container_no=container.get("container_no"),
+                seal_no=container.get("line_seal_no"),
+                rfid_seal_no=container.get("rfid_seal_no"),
+                invoice_item_sr_no=item.sr_no,
+                product_id=item.product_id, product_name=item.product_name,
+                group_label=(alloc.get("group_label") or "").strip().upper()
+                            or self.group_label_for(product, item.product_name),
+                hsn_code=item.hsn_code,
+                pallets=self._override(alloc.get("pallets"), default=pallets),
+                quantity_boxes=boxes, quantity_unit=item.quantity_unit,
+                quantity_value=quantity_value, unit=item.unit,
+                net_weight_kg=net, gross_weight_kg=gross,
+            ))
+        return self._ordered_by_group(built)
+
+    @staticmethod
+    def _override(raw, default=None):
+        """A hand-typed figure, or `default` when the field was left blank -
+        blank means "keep the derived value", not "zero"."""
+        if raw in (None, ""):
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _container_at(container_details: List[dict], index: int) -> dict:
+        """The section-11B row an allocation points at, or an empty snapshot
+        when 11B hasn't been filled in yet (the split is still meaningful -
+        the container numbers just print blank)."""
+        if 0 <= index < len(container_details or []):
+            return container_details[index] or {}
+        return {}
+
+    @staticmethod
+    def _clean_allocations(raw_allocations, item_count: int) -> List[dict]:
+        """Drop blank rows and anything pointing at a goods line that isn't
+        there any more (the form can submit a stale row after a product line
+        is removed). Container index is clamped at 0, not bounded above -
+        section 11B may legitimately still be empty."""
+        rows = []
+        for raw in raw_allocations or []:
+            try:
+                item_index = int(raw.get("invoice_item_index"))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= item_index < item_count:
+                continue
+            boxes_raw = raw.get("quantity_boxes")
+            if boxes_raw in (None, ""):
+                boxes = None
+            else:
+                try:
+                    boxes = float(boxes_raw)
+                except (TypeError, ValueError):
+                    raise ValidationError("Container split: boxes must be a number.")
+                if boxes <= 0:
+                    continue  # a zero-box row means "nothing of this line here"
+            try:
+                container_index = max(int(raw.get("container_index") or 0), 0)
+            except (TypeError, ValueError):
+                container_index = 0
+            rows.append({
+                "container_index": container_index, "invoice_item_index": item_index,
+                "quantity_boxes": boxes, "group_label": raw.get("group_label"),
+                "pallets": raw.get("pallets"),
+                "net_weight_kg": raw.get("net_weight_kg"), "gross_weight_kg": raw.get("gross_weight_kg"),
+            })
+        return rows
+
+    @staticmethod
+    def _assert_balanced(items: List[ExportInvoiceItem], allocations: List[dict]) -> None:
+        """Every box on the export invoice is in exactly one container: no
+        line over-allocated (the same box loaded twice), none left behind."""
+        for i, item in enumerate(items):
+            mine = [a for a in allocations if a["invoice_item_index"] == i]
+            name = item.product_name
+            if not item.quantity_boxes:
+                # Nothing to split by - the line goes into one container whole.
+                if len(mine) > 1:
+                    raise ValidationError(
+                        f"'{name}' has no box count on the export invoice, so it can't be split across "
+                        f"containers - keep it on a single container row."
+                    )
+                continue
+            if not mine:
+                raise ValidationError(
+                    f"'{name}': all {item.quantity_boxes:g} boxes are still unassigned - "
+                    f"add a container row for this product."
+                )
+            allocated = sum(a["quantity_boxes"] or 0 for a in mine)
+            diff = allocated - item.quantity_boxes
+            if diff > _BOX_TOLERANCE:
+                raise ValidationError(
+                    f"'{name}': {allocated:g} boxes split across containers, but the export invoice only "
+                    f"has {item.quantity_boxes:g} - remove {diff:g}."
+                )
+            if diff < -_BOX_TOLERANCE:
+                raise ValidationError(
+                    f"'{name}': {allocated:g} of {item.quantity_boxes:g} boxes split across containers - "
+                    f"{-diff:g} still unassigned."
+                )
+
+    @staticmethod
+    def _ordered_by_group(built: List[ExportPackingListItem]) -> List[ExportPackingListItem]:
+        """Print order, so the HSN headings come out right without the user
+        having to sort anything: containers in order, rows of one HSN group
+        together inside each container, and - where a group carries on from
+        the container before - that group first, so the sheet prints one
+        heading for the run instead of re-announcing it."""
+        by_container = {}
+        for item in built:
+            by_container.setdefault(item.container_sr_no, []).append(item)
+
+        ordered = []
+        last_group = None
+        for container_sr_no in sorted(by_container):
+            groups = {}
+            for item in by_container[container_sr_no]:
+                groups.setdefault(item.group_key, []).append(item)
+            keys = list(groups)  # dicts keep insertion order: first appearance wins
+            if last_group in groups:
+                keys.remove(last_group)
+                keys.insert(0, last_group)
+            for key in keys:
+                ordered.extend(groups[key])
+            if keys:
+                last_group = keys[-1]
+        for i, item in enumerate(ordered, start=1):
+            item.sr_no = i
+        return ordered
+
+    # ---- writes (only ever called by ExportInvoiceService) ----------------------
+    def save_for_invoice(self, current_user: User, invoice: ExportInvoice,
+                         items: List[ExportPackingListItem]) -> ExportPackingList:
+        """Persist the split built by build_items against a freshly saved
+        export invoice. The number/date are minted once, on first
+        generation, and the repository keeps them across later saves."""
+        packing_list = ExportPackingList(
+            id=None, company_id=invoice.company_id, export_invoice_id=invoice.id,
+            packing_list_number=self.export_packing_list_repo.next_number(invoice.company_id, invoice.invoice_date),
+            packing_list_date=invoice.invoice_date, created_by=current_user.id, items=items,
+        )
+        return self.export_packing_list_repo.upsert_for_invoice(packing_list)
 
 
 # ============================================================

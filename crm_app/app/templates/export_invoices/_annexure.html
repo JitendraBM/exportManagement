@@ -187,6 +187,7 @@
        Weight are captured on the form but no longer shown on this printed
        sheet. Gross/Net weight are display-only (no editing field) - they
        only ever show whatever value is already on the row's stored data. -->
+  <!-- 11B: one row per physical container, tare weight included. -->
   <table>
     <colgroup><col style="width:8%"><col style="width:28%"><col style="width:24%"><col style="width:20%"><col style="width:10%"><col style="width:10%"></colgroup>
     <tr>
@@ -205,6 +206,8 @@
       <td class="ei-a-v">{{ cd.rfid_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.gross_weight or '' }}</td>
       <td class="ei-a-v">{{ cd.net_weight or '' }}</td>
+      <td class="ei-a-v">{{ cd.vehicle_no or '' }}</td>
+      <td class="ei-a-v">{% if cd.tare_weight_kg %}{{ '{:,.2f}'.format(cd.tare_weight_kg) }}{% endif %}</td>
     </tr>
     {% else %}
     <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td></tr>

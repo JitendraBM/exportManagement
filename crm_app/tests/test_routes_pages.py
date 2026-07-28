@@ -323,3 +323,111 @@ class TestTenantIsolationOverHttp:
         rival_lead = new_lead(container, rival_admin)
         # The logged-in admin from admin_ctx must not see it.
         assert client.get(f"/leads/{rival_lead.id}").status_code == 404
+
+
+# ==========================================================================
+# Export invoice + its generated export packing list, end to end over HTTP
+# ==========================================================================
+class TestExportPackingListRoutes:
+    def _create_export_invoice(self, client, container, admin, company_id, split=True):
+        """Post the export invoice form the way the browser does, including
+        the container split that generates the packing list."""
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44",
+            net_weight_kg=26.5, gross_weight_kg=27.0)
+        data = {
+            "export_invoice_number": "1000000042", "invoice_date": "2026-02-20",
+            "consignee_name": "ROBUST INTERNATIONAL", "tax_mode": "igst", "exchange_rate": "86.70",
+            "stuffing_location": "ALIVE GRANITO LLP, MORBI",
+            "item_product_id[]": str(product.id), "item_product_name[]": "GVT 600X1200",
+            "item_hsn_code[]": "69072100", "item_quantity_boxes[]": "100",
+            "item_quantity_value[]": "144", "item_unit[]": "SQM", "item_price_usd[]": "5.92",
+            "cd_container_no[]": ["BLJU2253726", "SEGU3227471"],
+            "cd_line_seal_no[]": ["UFL331090", "UFL331095"],
+            "cd_rfid_seal_no[]": ["WIND02432727", "WIND02531142"],
+            "cd_vehicle_no[]": ["", ""],
+            "cd_tare_weight[]": ["2250.5", "2260"],
+        }
+        if split:
+            data.update({
+                "alloc_container_index[]": ["0", "1"],
+                "alloc_invoice_item_index[]": ["0", "0"],
+                "alloc_boxes[]": ["60", "40"],
+                "alloc_group_label[]": ["GLAZED VITRIFIED TILES", "GLAZED VITRIFIED TILES"],
+                "alloc_pallets[]": ["", ""],
+                "alloc_net_weight[]": ["", ""],
+                "alloc_gross_weight[]": ["", ""],
+            })
+        resp = client.post("/export-invoices/new", data=data, follow_redirects=True)
+        assert resp.status_code == 200
+        return container.export_invoice_service.list_all(company_id)[0]
+
+    def test_new_and_edit_forms_render(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        assert client.get("/export-invoices/new").status_code == 200
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        assert client.get(f"/export-invoices/{invoice.id}/edit").status_code == 200
+
+    def test_export_invoice_print_page_renders(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        resp = client.get(f"/export-invoices/{invoice.id}")
+        assert resp.status_code == 200
+        assert b"EXPORT INVOICE" in resp.data
+
+    def test_saving_an_export_invoice_generates_its_packing_list(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+        assert packing_list is not None
+        assert [i.quantity_boxes for i in packing_list.items] == [60, 40]
+
+    def test_packing_list_pages_render(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+
+        assert client.get("/export-packing-lists/").status_code == 200
+        resp = client.get(f"/export-packing-lists/{packing_list.id}")
+        assert resp.status_code == 200
+        assert b"EXPORT PACKING LIST" in resp.data
+        assert b"BLJU2253726" in resp.data
+        assert b"GLAZED VITRIFIED TILES - HSNC 69072100" in resp.data
+        assert b"ALIVE GRANITO LLP, MORBI" in resp.data
+
+    def test_tare_weight_prints_in_the_annexures_11b_table(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        resp = client.get(f"/export-invoices/{invoice.id}")
+        assert resp.status_code == 200
+        assert b"2,250.50" in resp.data
+
+    def test_for_invoice_shortcut_redirects_to_the_generated_list(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+        resp = client.get(f"/export-packing-lists/for-invoice/{invoice.id}")
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith(f"/export-packing-lists/{packing_list.id}")
+
+    def test_an_unbalanced_split_is_rejected_and_nothing_is_saved(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44")
+        resp = client.post("/export-invoices/new", data={
+            "export_invoice_number": "1000000043", "invoice_date": "2026-02-20",
+            "consignee_name": "ROBUST INTERNATIONAL", "tax_mode": "igst", "exchange_rate": "86.70",
+            "item_product_id[]": str(product.id), "item_product_name[]": "GVT 600X1200",
+            "item_quantity_boxes[]": "100", "item_quantity_value[]": "144",
+            "item_unit[]": "SQM", "item_price_usd[]": "5.92",
+            "cd_container_no[]": ["BLJU2253726"], "cd_line_seal_no[]": ["UFL331090"],
+            "cd_rfid_seal_no[]": ["WIND02432727"], "cd_vehicle_no[]": [""],
+            "alloc_container_index[]": ["0"], "alloc_invoice_item_index[]": ["0"],
+            "alloc_boxes[]": ["70"], "alloc_group_label[]": [""],
+            "alloc_pallets[]": [""], "alloc_net_weight[]": [""], "alloc_gross_weight[]": [""],
+        })
+        assert resp.status_code == 400
+        assert b"still unassigned" in resp.data
+        assert container.export_invoice_service.list_all(company_id) == []

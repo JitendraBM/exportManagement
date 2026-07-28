@@ -417,10 +417,13 @@ def delete_design(design_id):
 # JSON APIs (power the pickers on the quotation / proforma /
 # packing list forms)
 # ============================================================
-def _product_json(p, pallet_types=None) -> dict:
+def _product_json(p, pallet_types=None, category_names=None) -> dict:
     return {
         "id": p.id, "name": p.product_name, "description": p.description,
         "hsn_code": p.hsn_code, "category_id": p.category_id,
+        # The product's category is the heading the Export Packing List
+        # groups its HSN block under, so the picker hands it to the form.
+        "category_name": (category_names or {}).get(p.category_id),
         "igst_percent": p.igst_percent, "sgst_percent": p.sgst_percent,
         "cgst_percent": p.cgst_percent,
         "quantity_unit": p.quantity_unit, "quantity": p.quantity,
@@ -449,7 +452,10 @@ def api_list_products():
     container = current_app.container
     products = container.product_service.list_products(g.user.company_id)
     pallet_map = container.product_service.pallet_types_by_product(g.user.company_id)
-    return jsonify({"products": [_product_json(p, pallet_map.get(p.id)) for p in products]})
+    category_names = {c.id: c.name for c in container.product_service.list_categories(g.user.company_id)}
+    return jsonify({
+        "products": [_product_json(p, pallet_map.get(p.id), category_names) for p in products]
+    })
 
 
 @products_bp.route("/api/quick-create", methods=["POST"])

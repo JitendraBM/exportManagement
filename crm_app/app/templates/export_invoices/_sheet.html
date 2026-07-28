@@ -240,6 +240,9 @@
       <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td>
     </tr>
     <tr>
+      {# "Supply meant for" is either With Payment of IGST (the summed
+         per-product tax) or, under LUT, zero-rated - igst_amount_inr
+         already resolves that, so the label never changes. #}
       <td class="ei-charge-label">IGST</td><td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) }}</td>
     </tr>
   </table>

@@ -394,6 +394,11 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
    --------------------------------------------------------------- */
 .text-soft { color: var(--color-text-soft); }
 .text-sm { font-size: .82rem; }
+/* Status wording inside a table cell (e.g. the export packing list's
+   per-product "balanced / still unassigned / over" column). */
+.text-success { color: var(--color-success); font-weight: 600; }
+.text-danger { color: var(--color-danger); font-weight: 600; }
+.text-warn { color: var(--color-accent-deep); font-weight: 600; }
 .mt-0 { margin-top: 0; }
 .mb-0 { margin-bottom: 0; }
 .flex { display: flex; }

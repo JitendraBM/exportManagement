@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Export Packing Lists{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>Export Packing Lists</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice generates exactly one export packing list — there is nothing to create here.
+    The container split it prints is typed into the export invoice itself, under
+    <strong>Export packing list — container split</strong>.
+  </p>
+  {% if packing_lists %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Packing list no.</th>
+          <th>Date</th>
+          <th>Export invoice</th>
+          <th>Created by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pl in packing_lists %}
+        <tr>
+          <td class="mono">{{ pl.packing_list_number }}</td>
+          <td class="text-sm">{{ pl.packing_list_date }}</td>
+          <td class="mono text-sm">{{ pl.export_invoice_number }}</td>
+          <td class="text-sm">{{ pl.created_by_name }}</td>
+          <td><a href="{{ url_for('export_packing_lists.view_export_packing_list', export_packing_list_id=pl.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export packing lists yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">save an export invoice →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
