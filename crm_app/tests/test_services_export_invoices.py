@@ -340,6 +340,39 @@ class TestExportChildLists:
         assert updated.container_details[0]["net_weight"] == "2800"
         assert updated.container_details[0]["tare_weight"] == "2200"
 
+    def test_11b_tare_weight_round_trips(self, container, seed):
+        inv = make_export(
+            container, seed,
+            container_details_list=[
+                {"container_no": "ABCD1234", "line_seal_no": "LS1", "rfid_seal_no": "RF1",
+                 "vehicle_no": "GJ01", "tare_weight_kg": "2250.5"}],
+        )
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.container_details[0]["tare_weight_kg"] == 2250.5
+
+    def test_11b_tare_weight_must_be_a_number(self, container, seed):
+        with pytest.raises(ValidationError):
+            make_export(
+                container, seed,
+                container_details_list=[{"container_no": "ABCD1234", "tare_weight_kg": "heavy"}],
+            )
+
+    def test_a_row_carrying_only_a_tare_weight_is_still_kept(self, container, seed):
+        """Blank 11B rows are dropped, and the export packing list's split
+        indexes into what survives - so a row is 'filled in' if ANY column
+        is, tare weight included, or the container numbering would shift."""
+        inv = make_export(
+            container, seed,
+            container_details_list=[
+                {"container_no": "", "line_seal_no": "", "rfid_seal_no": "", "vehicle_no": "",
+                 "tare_weight_kg": "2100"},
+                {"container_no": "", "line_seal_no": "", "rfid_seal_no": "", "vehicle_no": "",
+                 "tare_weight_kg": ""}],
+        )
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert len(got.container_details) == 1
+        assert got.container_details[0]["tare_weight_kg"] == 2100
+
     def test_buyer_order_no_and_date_round_trip(self, container, seed):
         inv = make_export(container, seed, buyer_order_no="EXP/1", buyer_order_date="2026-02-01")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
