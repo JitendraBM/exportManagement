@@ -200,7 +200,7 @@
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight (KG)</th><th></th></tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
           {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
@@ -211,7 +211,7 @@
             <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
             <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
             <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
-            <td><input type="number" step="0.01" min="0" name="cd_tare_weight[]" value="{{ cd.tare_weight_kg or '' }}"></td>
+            <td><input type="text" name="cd_tare_weight[]" value="{{ cd.tare_weight or '' }}"></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
@@ -631,7 +631,7 @@
       <td><input type="text" name="cd_line_seal_no[]"></td>
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
       <td><input type="text" name="cd_vehicle_no[]"></td>
-      <td><input type="number" step="0.01" min="0" name="cd_tare_weight[]"></td>
+      <td><input type="text" name="cd_tare_weight[]"></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }

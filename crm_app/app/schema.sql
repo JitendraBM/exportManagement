@@ -820,7 +820,9 @@ CREATE TABLE IF NOT EXISTS export_invoice_containers (
     container_count       INTEGER NOT NULL DEFAULT 0
 );
 
--- Page-2 section 11B: one row per PHYSICAL container.
+-- Page-2 section 11B: one row per PHYSICAL container. gross_weight/net_weight
+-- have no form input (unlike tare_weight) - they only ever hold whatever is
+-- already stored on the row, e.g. set by a later process outside this form.
 CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
@@ -830,7 +832,9 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     line_seal_no          TEXT,
     rfid_seal_no          TEXT,
     vehicle_no            TEXT,
-    tare_weight_kg        REAL           -- the empty container's own weight, printed in the 11B Tare Weight column
+    tare_weight           TEXT,
+    gross_weight          TEXT,
+    net_weight            TEXT
 );
 
 -- Purchase Details: supplier GSTIN + invoice-no rows imported from the

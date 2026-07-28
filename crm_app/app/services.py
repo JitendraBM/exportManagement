@@ -3148,23 +3148,16 @@ class ExportInvoiceService:
 
     @staticmethod
     def _clean_container_details(raw) -> List[dict]:
-        """Wholly-blank rows are dropped, so a row counts as filled in if ANY
-        of its columns - the tare weight included - carries something. (The
-        export packing list's container split indexes into this cleaned list,
-        so its form JavaScript mirrors the same rule.)"""
+        # gross_weight/net_weight have no form field (unlike tare_weight) -
+        # they default to None here and update() carries the stored values
+        # forward by row position so an edit doesn't wipe them.
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no")}
-            raw_tare = r.get("tare_weight_kg")
-            if raw_tare in (None, ""):
-                values["tare_weight_kg"] = None
-            else:
-                try:
-                    values["tare_weight_kg"] = float(raw_tare)
-                except (TypeError, ValueError):
-                    raise ValidationError("Container details: tare weight must be a number.")
-            if any(v is not None for v in values.values()):
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight")}
+            values["gross_weight"] = None
+            values["net_weight"] = None
+            if any(values.values()):
                 rows.append(values)
         return rows
 
@@ -3256,6 +3249,14 @@ class ExportInvoiceService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
+
+        # gross_weight/net_weight aren't editable from this form - carry the
+        # stored values forward by row position so editing anything else
+        # doesn't wipe them.
+        for i, cd in enumerate(invoice.container_details):
+            if i < len(existing.container_details):
+                cd["gross_weight"] = existing.container_details[i].get("gross_weight")
+                cd["net_weight"] = existing.container_details[i].get("net_weight")
 
         # Exchange rate is set once by anyone; changing it later is admin-only.
         # (The form disables the field for non-admins, so a normal edit
