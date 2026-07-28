@@ -1618,7 +1618,7 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight_kg "
+                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1748,11 +1748,12 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight_kg) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, "
+                    "gross_weight, net_weight) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (invoice_id, i, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
-                     cd.get("tare_weight_kg")),
+                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))

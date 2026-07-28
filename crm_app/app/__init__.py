@@ -11,6 +11,8 @@ action). Swapping SQLite for another database later means editing this file
 plus `app/database.py` - routes, services and templates are untouched.
 """
 
+import os
+
 from flask import Flask, g, session, render_template
 
 from config import Config
@@ -271,5 +273,31 @@ def create_app(config_class=Config) -> Flask:
     @app.errorhandler(404)
     def not_found(e):
         return render_template("errors/404.html"), 404
+
+    # --- opt-in interactive debugger for a WSGI server (gunicorn/waitress) --------------------------------------------------
+    # Under those servers, app.run(debug=True) never runs, so Flask's normal
+    # debug wiring has no effect - the browser just gets a bare 500. Setting
+    # WERKZEUG_DEBUG=1 does the two things app.run(debug=True) would normally
+    # do for us: (1) app.debug = True stops Flask from swallowing the
+    # exception into a generic 500 response itself, so it actually propagates
+    # out of the WSGI app; (2) DebuggedApplication then catches that
+    # propagated exception and renders the full interactive traceback.
+    # Without both, the exception never reaches the debugger and you just
+    # get a bare "Internal Server Error" - which is exactly what step (1)
+    # being missing looks like.
+    # SECURITY: this traceback page includes an interactive Python console
+    # that can execute arbitrary code for anyone who can reach it - only set
+    # WERKZEUG_DEBUG=1 while a firewall/VPN restricts access to trusted IPs,
+    # and unset it (then restart) as soon as you're done diagnosing.
+    if os.environ.get("WERKZEUG_DEBUG") == "1":
+        from werkzeug.debug import DebuggedApplication
+        app.debug = True
+        app.wsgi_app = DebuggedApplication(app.wsgi_app, evalex=True)
+        # Unambiguous proof-of-life in the process's own stdout/stderr - if
+        # this line never shows up in the server's logs after a restart,
+        # the env var isn't reaching this process (wrong .env file, wrong
+        # working directory, or gunicorn wasn't actually restarted) and no
+        # amount of waiting for the browser to show a traceback will help.
+        print(">>> WERKZEUG_DEBUG=1 detected - interactive debugger is ACTIVE for this worker <<<", flush=True)
 
     return app

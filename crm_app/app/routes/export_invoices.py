@@ -109,7 +109,7 @@ def _extract_container_details(form) -> list:
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
-            "tare_weight_kg": tares[i] if i < len(tares) else "",
+            "tare_weight": tares[i] if i < len(tares) else "",
         })
     return rows
 

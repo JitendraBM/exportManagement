@@ -76,7 +76,7 @@
     <tr>
       <td class="ei-label ei-mid">Buyer Order<br>No &amp; Date</td>
       <td class="ei-val ei-left" colspan="3">
-        {{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp;·&nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}
+        {{ (invoice.buyer_order_no or '-')|replace('\n', '<br>')|safe }}{% if invoice.buyer_order_date %} &nbsp;·&nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}
       </td>
     </tr>
     <tr>
@@ -240,16 +240,14 @@
       <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td>
     </tr>
     <tr>
-      {# "Supply meant for" is either With Payment of IGST (the summed
-         per-product tax) or, under LUT, zero-rated - igst_amount_inr
-         already resolves that, so the label never changes. #}
-      <td class="ei-charge-label">IGST</td><td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) }}</td>
+      <td class="ei-charge-label">IGST</td>
+      <td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td>
     </tr>
   </table>
   <table>
     <colgroup><col style="width:52%"><col style="width:28%"><col style="width:20%"></colgroup>
     <tr>
-      <td class="ei-charge-label">INVOICE VALUE INR</td>
+      <td class="ei-charge-label" style="text-align:right;">INVOICE VALUE INR</td>
       <td class="ei-val ei-right" colspan="2">{{ inr(invoice.invoice_value_inr) }}</td>
     </tr>
   </table>

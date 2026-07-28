@@ -79,9 +79,11 @@ class TestExportCrud:
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="")
 
-    def test_number_must_be_digits_only_and_at_most_16_chars(self, container, seed):
-        with pytest.raises(ValidationError):
-            make_export(container, seed, export_invoice_number="ABC123")
+    def test_number_allows_free_text(self, container, seed):
+        inv = make_export(container, seed, export_invoice_number="EXP/AB-001")
+        assert inv.export_invoice_number == "EXP/AB-001"
+
+    def test_number_must_be_at_most_16_chars(self, container, seed):
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="1" * 17)
 
@@ -300,11 +302,43 @@ class TestExportChildLists:
             containers=[{"container_type": "20FT FCL", "container_count": "2"}],
             container_details_list=[
                 {"container_type": "20FT FCL", "container_no": "ABCD1234", "line_seal_no": "LS1",
-                 "rfid_seal_no": "RF1", "vehicle_no": "GJ01"}],
+                 "rfid_seal_no": "RF1", "vehicle_no": "GJ01", "tare_weight": "2200"}],
         )
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.total_containers == 2
         assert got.container_details[0]["container_no"] == "ABCD1234"
+        assert got.container_details[0]["tare_weight"] == "2200"
+
+    def test_gross_and_net_weight_have_no_form_field_but_survive_edits(self, container, seed):
+        # No form field sets these - they start out blank.
+        inv = make_export(
+            container, seed,
+            containers=[{"container_type": "20FT FCL", "container_count": "1"}],
+            container_details_list=[{"container_no": "ABCD1234", "tare_weight": "2200"}],
+        )
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.container_details[0]["gross_weight"] is None
+        assert got.container_details[0]["net_weight"] is None
+
+        # Simulate them being set some other way (outside this form).
+        container.export_invoice_repo.db.execute(
+            "UPDATE export_invoice_container_details SET gross_weight = ?, net_weight = ? "
+            "WHERE export_invoice_id = ?", ("5000", "2800", inv.id))
+
+        # An unrelated edit through the service - the form always resubmits
+        # every current 11B row's editable fields (container_no/tare_weight
+        # etc.), but never gross/net weight, since they aren't form fields.
+        updated = container.export_invoice_service.update(
+            seed.admin, inv.id,
+            {"consignee_name": "NEW NAME", "invoice_date": "2026-02-20",
+             "export_invoice_number": inv.export_invoice_number,
+             "containers": [{"container_type": "20FT FCL", "container_count": "1"}],
+             "container_details_list": [{"container_no": "ABCD1234", "tare_weight": "2200"}]},
+            [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}],
+        )
+        assert updated.container_details[0]["gross_weight"] == "5000"
+        assert updated.container_details[0]["net_weight"] == "2800"
+        assert updated.container_details[0]["tare_weight"] == "2200"
 
     def test_11b_tare_weight_round_trips(self, container, seed):
         inv = make_export(
