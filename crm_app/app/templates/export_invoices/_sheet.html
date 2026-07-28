@@ -240,8 +240,7 @@
       <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td>
     </tr>
     <tr>
-      <td class="ei-charge-label">IGST</td>
-      <td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td>
+      <td class="ei-charge-label">IGST</td><td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) }}</td>
     </tr>
   </table>
   <table>
