@@ -1491,6 +1491,7 @@ class ExportInvoice:
     permission_expiry: Optional[str] = None
     manufacturer_name: Optional[str] = None
     manufacturer_address: Optional[str] = None
+    stuffing_location: Optional[str] = None  # "Stuff At" address, printed on the export packing list
     remarks: Optional[str] = None
     status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
     created_at: Optional[str] = None
@@ -1499,7 +1500,7 @@ class ExportInvoice:
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
@@ -1563,6 +1564,7 @@ class ExportInvoice:
             permission_expiry=g("permission_expiry"),
             manufacturer_name=g("manufacturer_name"),
             manufacturer_address=g("manufacturer_address"),
+            stuffing_location=g("stuffing_location"),
             remarks=g("remarks"),
             created_by=row["created_by"],
             created_at=g("created_at"),
@@ -1626,6 +1628,168 @@ class ExportInvoice:
     def top_costliest_items(self) -> List[ExportInvoiceItem]:
         """Section 09 lists the four costliest product lines (by line total)."""
         return sorted(self.items, key=lambda i: i.total_usd or 0, reverse=True)[:4]
+
+
+@dataclass
+class ExportPackingListItem:
+    """One (container x goods line) allocation on an Export Packing List:
+    `quantity_boxes` boxes of the export invoice's goods line
+    `invoice_item_sr_no` loaded into the physical container
+    `container_sr_no`. Every other quantity column is derived from the boxes
+    (see ExportPackingListService), and the container identity is snapshotted
+    off the invoice's section-11B row so a later 11B re-order can't silently
+    rewrite an already-printed sheet."""
+    id: Optional[int]
+    export_packing_list_id: Optional[int]
+    sr_no: int
+    product_name: str
+    container_sr_no: int = 1
+    container_no: Optional[str] = None
+    seal_no: Optional[str] = None
+    rfid_seal_no: Optional[str] = None
+    invoice_item_sr_no: Optional[int] = None
+    product_id: Optional[int] = None
+    group_label: Optional[str] = None
+    hsn_code: Optional[str] = None
+    pallets: Optional[float] = None
+    quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
+    quantity_value: float = 0
+    unit: str = "SQM"
+    net_weight_kg: Optional[float] = None
+    gross_weight_kg: Optional[float] = None
+
+    @property
+    def group_key(self) -> tuple:
+        """What the printed sheet groups on - a heading row is emitted every
+        time this changes from the previous printed row."""
+        return ((self.group_label or "").strip().upper(), (self.hsn_code or "").strip())
+
+    @property
+    def group_heading(self) -> str:
+        label, hsn = self.group_key
+        if label and hsn:
+            return f"{label} - HSNC {hsn}"
+        return label or (f"HSNC {hsn}" if hsn else "")
+
+    @staticmethod
+    def from_row(row) -> "ExportPackingListItem":
+        return ExportPackingListItem(
+            id=row["id"],
+            export_packing_list_id=row["export_packing_list_id"],
+            sr_no=row["sr_no"],
+            container_sr_no=row["container_sr_no"],
+            container_no=row["container_no"],
+            seal_no=row["seal_no"],
+            rfid_seal_no=row["rfid_seal_no"],
+            invoice_item_sr_no=row["invoice_item_sr_no"],
+            product_id=row["product_id"],
+            product_name=row["product_name"],
+            group_label=row["group_label"],
+            hsn_code=row["hsn_code"],
+            pallets=row["pallets"],
+            quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"],
+            quantity_value=row["quantity_value"],
+            unit=row["unit"],
+            net_weight_kg=row["net_weight_kg"],
+            gross_weight_kg=row["gross_weight_kg"],
+        )
+
+
+@dataclass
+class ExportPackingList:
+    """The EXPORT PACKING LIST that accompanies an Export Invoice - exactly
+    one per invoice, generated automatically whenever that invoice is saved
+    and never created or edited on its own. It owns nothing but the
+    container allocation: the whole printed header (consigner, consignee,
+    ports, bank, declarations, EPCG, self-sealing block) comes from
+    `invoice`, which the repository joins in."""
+    id: Optional[int]
+    company_id: int
+    export_invoice_id: int
+    packing_list_number: str
+    packing_list_date: str
+    created_by: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    items: List[ExportPackingListItem] = field(default_factory=list)
+    invoice: Optional[ExportInvoice] = None  # the parent, loaded by get_by_id
+    export_invoice_number: Optional[str] = None  # carried by list queries, which don't load the parent
+
+    @staticmethod
+    def from_row(row) -> "ExportPackingList":
+        keys = row.keys()
+        return ExportPackingList(
+            id=row["id"],
+            company_id=row["company_id"],
+            export_invoice_id=row["export_invoice_id"],
+            packing_list_number=row["packing_list_number"],
+            packing_list_date=row["packing_list_date"],
+            created_by=row["created_by"],
+            created_at=row["created_at"] if "created_at" in keys else None,
+            updated_at=row["updated_at"] if "updated_at" in keys else None,
+            created_by_name=row["created_by_name"] if "created_by_name" in keys else None,
+            export_invoice_number=row["export_invoice_number"] if "export_invoice_number" in keys else None,
+        )
+
+    # ---- totals (the sheet's bottom row) --------------------------------
+    @property
+    def total_pallets(self) -> float:
+        return sum(i.pallets or 0 for i in self.items)
+
+    @property
+    def total_boxes(self) -> float:
+        return sum(i.quantity_boxes or 0 for i in self.items)
+
+    @property
+    def total_quantity(self) -> float:
+        return sum(i.quantity_value or 0 for i in self.items)
+
+    @property
+    def total_net_weight(self) -> float:
+        return sum(i.net_weight_kg or 0 for i in self.items)
+
+    @property
+    def total_gross_weight(self) -> float:
+        return sum(i.gross_weight_kg or 0 for i in self.items)
+
+    @property
+    def container_count(self) -> int:
+        return len({i.container_sr_no for i in self.items})
+
+    @property
+    def printed_containers(self) -> List[dict]:
+        """The sheet's body, ready to render: one entry per physical
+        container, each holding the flat run of rows printed beside its
+        (rowspan-ed) Container No / Seal No / RFID cells.
+
+        Rows are a mix of {'kind': 'group'} headings and {'kind': 'item'}
+        allocations. A heading is emitted whenever the HSN group changes from
+        the PREVIOUS PRINTED ROW - tracked across container boundaries, not
+        reset per container - so a group that carries on into the next
+        container isn't re-announced, exactly as on the paper form."""
+        containers: List[dict] = []
+        current = None
+        last_group = None
+        for item in self.items:
+            key = (item.container_sr_no, item.container_no or "", item.seal_no or "", item.rfid_seal_no or "")
+            if current is None or current["key"] != key:
+                current = {
+                    "key": key, "container_sr_no": item.container_sr_no, "container_no": item.container_no,
+                    "seal_no": item.seal_no, "rfid_seal_no": item.rfid_seal_no, "rows": [],
+                }
+                containers.append(current)
+            if item.group_key != last_group:
+                last_group = item.group_key
+                heading = item.group_heading
+                if heading:
+                    current["rows"].append({"kind": "group", "heading": heading})
+            current["rows"].append({"kind": "item", "item": item})
+        for c in containers:
+            c["rowspan"] = len(c["rows"])
+        return containers
 
 
 @dataclass

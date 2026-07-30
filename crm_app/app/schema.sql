@@ -773,6 +773,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     permission_expiry           TEXT,
     manufacturer_name           TEXT,
     manufacturer_address        TEXT,
+    stuffing_location           TEXT,          -- "Stuff At" address, printed on the export packing list
     remarks                     TEXT,
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -818,8 +819,9 @@ CREATE TABLE IF NOT EXISTS export_invoice_containers (
     container_count       INTEGER NOT NULL DEFAULT 0
 );
 
--- Page-2 section 11B: one row per PHYSICAL container. Tare/Gross weight are
--- printed columns left blank, so they are not captured here.
+-- Page-2 section 11B: one row per PHYSICAL container. gross_weight/net_weight
+-- have no form input (unlike tare_weight) - they only ever hold whatever is
+-- already stored on the row, e.g. set by a later process outside this form.
 CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
@@ -828,7 +830,10 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     container_no          TEXT,
     line_seal_no          TEXT,
     rfid_seal_no          TEXT,
-    vehicle_no            TEXT
+    vehicle_no            TEXT,
+    tare_weight           TEXT,
+    gross_weight          TEXT,
+    net_weight            TEXT
 );
 
 -- Purchase Details: supplier GSTIN + invoice-no rows imported from the
@@ -839,6 +844,67 @@ CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
     sr_no                 INTEGER NOT NULL,
     supplier_gstin        TEXT,
     supplier_invoice_no   TEXT
+);
+
+-- ============================================================
+-- EXPORT PACKING LISTS  (header + allocation lines, number generated as
+-- EXPPL{YYYYMMDD}{seq-of-that-day} per company. The customs-facing EXPORT
+-- PACKING LIST that always accompanies an Export Invoice - exactly one per
+-- export invoice, generated automatically whenever that invoice is saved,
+-- never created or edited on its own. Its whole header (consigner,
+-- consignee, ports, bank, declarations, EPCG, self-sealing block) is read
+-- live off the parent export invoice; the only thing it stores is HOW the
+-- invoice's goods were split across the physical containers.
+--
+-- One row per (container, goods line) allocation: the container identity is
+-- SNAPSHOTTED from the invoice's own section-11B container rows (so the
+-- printed sheet stays stable even if 11B is later re-ordered), and the
+-- quantity columns are all derived from `quantity_boxes` - the number of
+-- boxes of that goods line loaded into that container. The invariant the
+-- service enforces is that, per goods line, the boxes allocated across all
+-- containers add up to EXACTLY the boxes on the export invoice: no box
+-- double-loaded, none left behind.
+--
+-- `group_label` is the HSN heading the printed sheet groups rows under
+-- (e.g. "CERAMIC GLAZED VITRIFIED TILES" above the 69072100 lines). It is
+-- derived automatically from the line's catalog product (its category, else
+-- the product name) and snapshotted here; the sheet emits a heading row
+-- whenever (group_label, hsn_code) changes from the previous printed row,
+-- which is what produces the grouped-by-HSN layout.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS export_packing_lists (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id               INTEGER NOT NULL REFERENCES tenants(id),
+    export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    packing_list_number      TEXT NOT NULL,
+    packing_list_date        TEXT NOT NULL,
+    created_by               INTEGER NOT NULL REFERENCES users(id),
+    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (export_invoice_id),
+    UNIQUE (company_id, packing_list_number)
+);
+
+CREATE TABLE IF NOT EXISTS export_packing_list_items (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_packing_list_id    INTEGER NOT NULL REFERENCES export_packing_lists(id) ON DELETE CASCADE,
+    sr_no                     INTEGER NOT NULL,
+    container_sr_no           INTEGER NOT NULL DEFAULT 1,  -- which section-11B container row this sits in
+    container_no              TEXT,                        -- snapshot of that 11B row
+    seal_no                   TEXT,
+    rfid_seal_no              TEXT,
+    invoice_item_sr_no        INTEGER,                     -- which export_invoice_items.sr_no was split
+    product_id                INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name              TEXT NOT NULL,
+    group_label               TEXT,                        -- HSN heading this row prints under
+    hsn_code                  TEXT,
+    pallets                   REAL,
+    quantity_boxes            REAL,
+    quantity_unit             TEXT NOT NULL DEFAULT 'PCS',
+    quantity_value            REAL NOT NULL DEFAULT 0,
+    unit                      TEXT NOT NULL DEFAULT 'SQM',
+    net_weight_kg             REAL,
+    gross_weight_kg           REAL
 );
 
 -- ============================================================
@@ -975,6 +1041,9 @@ CREATE INDEX IF NOT EXISTS idx_export_invoice_links_proforma ON export_invoice_p
 CREATE INDEX IF NOT EXISTS idx_export_invoice_containers_invoice ON export_invoice_containers(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_container_details_invoice ON export_invoice_container_details(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_purchase_details_invoice ON export_invoice_purchase_details(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_packing_lists_company ON export_packing_lists(company_id);
+CREATE INDEX IF NOT EXISTS idx_export_packing_lists_invoice ON export_packing_lists(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_packing_list_items_list ON export_packing_list_items(export_packing_list_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_company ON packing_lists(company_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_created_by ON packing_lists(created_by);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_date ON packing_lists(packing_list_date);

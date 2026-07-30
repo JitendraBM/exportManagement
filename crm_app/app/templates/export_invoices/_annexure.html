@@ -183,17 +183,18 @@
     </tr>
   </table>
 
-  <!-- 11B: one row per physical container. Booking No./Vehicle No./Tare
-       Weight are captured on the form but no longer shown on this printed
-       sheet. Gross/Net weight are display-only (no editing field) - they
-       only ever show whatever value is already on the row's stored data. -->
+  <!-- 11B: one row per physical container. Gross/Net weight are display-only
+       (no editing field) - they only ever show whatever value is already on
+       the row's stored data. -->
   <table>
-    <colgroup><col style="width:8%"><col style="width:28%"><col style="width:24%"><col style="width:20%"><col style="width:10%"><col style="width:10%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:20%"><col style="width:16%"><col style="width:16%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:10%"></colgroup>
     <tr>
       <td class="ei-a-c ei-a-lbl">SR</td>
       <td class="ei-a-c ei-a-lbl">Container No.</td>
       <td class="ei-a-c ei-a-lbl">Line Seal No.</td>
       <td class="ei-a-c ei-a-lbl">RFID Seal No.</td>
+      <td class="ei-a-c ei-a-lbl">Vehicle No.</td>
+      <td class="ei-a-c ei-a-lbl">Tare Weight</td>
       <td class="ei-a-c ei-a-lbl">Gross Weight</td>
       <td class="ei-a-c ei-a-lbl">Net Weight</td>
     </tr>
@@ -203,16 +204,18 @@
       <td class="ei-a-v">{{ cd.container_no or '' }}</td>
       <td class="ei-a-v">{{ cd.line_seal_no or '' }}</td>
       <td class="ei-a-v">{{ cd.rfid_seal_no or '' }}</td>
+      <td class="ei-a-v">{{ cd.vehicle_no or '' }}</td>
+      <td class="ei-a-v">{{ cd.tare_weight or '' }}</td>
       <td class="ei-a-v">{{ cd.gross_weight or '' }}</td>
       <td class="ei-a-v">{{ cd.net_weight or '' }}</td>
     </tr>
     {% else %}
-    <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td class="ei-a-c">1</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
     {% endfor %}
     {# Blank filler cells: sized by _page_filler.html so the container table
        grows with empty rows and the annexure fills its A4 page exactly. #}
     <tr class="js-page-filler">
-      <td></td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
     </tr>
   </table>
 

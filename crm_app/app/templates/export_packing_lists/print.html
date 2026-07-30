@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ packing_list.packing_list_number }} · Export Packing List</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('export_packing_lists.list_export_packing_lists') }}" class="btn btn-ghost btn-sm">← All export packing lists</a>
+    </div>
+    <div class="flex gap-8">
+      <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 Export invoice {{ invoice.export_invoice_number }}</a>
+      <a href="{{ url_for('export_invoices.edit_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Edit split</a>
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+  </div>
+
+  <div class="sheet-note no-print">
+    This packing list is generated from export invoice
+    <strong>{{ invoice.export_invoice_number }}</strong> and has no form of its own — edit the container
+    split on that invoice and it is rebuilt on save.
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'export_packing_lists/_sheet.html' %}
+  {% include '_page_filler.html' %}
+
+</body>
+</html>

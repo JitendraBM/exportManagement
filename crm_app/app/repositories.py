@@ -23,6 +23,7 @@ from app.models import (
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
     ExportInvoice, ExportInvoiceItem,
+    ExportPackingList, ExportPackingListItem,
     PackingList, PackingListItem, DocumentVersion,
 )
 
@@ -1617,7 +1618,7 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no "
+                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1661,9 +1662,9 @@ class ExportInvoiceRepository:
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
-                manufacturer_name, manufacturer_address, remarks, created_by)
+                manufacturer_name, manufacturer_address, stuffing_location, remarks, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1682,7 +1683,7 @@ class ExportInvoiceRepository:
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
                    examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
-                   manufacturer_address = ?, remarks = ?, updated_at = datetime('now')
+                   manufacturer_address = ?, stuffing_location = ?, remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
         )
@@ -1711,7 +1712,7 @@ class ExportInvoiceRepository:
             invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
             invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
             invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
-            invoice.manufacturer_address, invoice.remarks,
+            invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
         )
 
     def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
@@ -1747,10 +1748,12 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, "
+                    "gross_weight, net_weight) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (invoice_id, i, cd.get("container_no") or None,
-                     cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None),
+                     cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
+                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))
@@ -1764,6 +1767,121 @@ class ExportInvoiceRepository:
     def delete(self, invoice_id: int) -> None:
         # Leaf document - the child tables all cascade, nothing downstream to null.
         self.db.execute("DELETE FROM export_invoices WHERE id = ?", (invoice_id,))
+
+
+class ExportPackingListRepository:
+    """Persistence for the Export Packing List: a thin header (number/date)
+    plus its allocation rows. Unlike every other document repository here it
+    has no standalone create path in practice - `upsert_for_invoice` is what
+    ExportInvoiceService calls on every save of the parent invoice, replacing
+    the allocation wholesale while keeping the number/date the list was first
+    given. The parent export invoice is loaded and attached by get_by_id,
+    because the printed sheet reads its whole header off it."""
+
+    def __init__(self, db: Database, export_invoice_repo: "ExportInvoiceRepository"):
+        self.db = db
+        self.export_invoice_repo = export_invoice_repo
+
+    def next_number(self, company_id: int, packing_list_date: str) -> str:
+        """EXPPL{YYYYMMDD}{seq}, the day-scoped sequence every generated
+        document number in this app uses."""
+        date_part = (packing_list_date or "")[:10].replace("-", "")
+        prefix = f"EXPPL{date_part}"
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS c FROM export_packing_lists WHERE company_id = ? AND packing_list_number LIKE ?",
+            (company_id, f"{prefix}%"),
+        )
+        return f"{prefix}{(row['c'] if row else 0) + 1:03d}"
+
+    def _load(self, row) -> Optional[ExportPackingList]:
+        if not row:
+            return None
+        packing_list = ExportPackingList.from_row(row)
+        packing_list.items = [
+            ExportPackingListItem.from_row(r) for r in self.db.query(
+                "SELECT * FROM export_packing_list_items WHERE export_packing_list_id = ? ORDER BY sr_no",
+                (packing_list.id,),
+            )
+        ]
+        packing_list.invoice = self.export_invoice_repo.get_by_id(packing_list.export_invoice_id)
+        if packing_list.invoice:
+            packing_list.export_invoice_number = packing_list.invoice.export_invoice_number
+        return packing_list
+
+    def get_by_id(self, packing_list_id: int) -> Optional[ExportPackingList]:
+        return self._load(self.db.query_one(
+            """SELECT epl.*, u.full_name AS created_by_name FROM export_packing_lists epl
+               JOIN users u ON u.id = epl.created_by WHERE epl.id = ?""",
+            (packing_list_id,),
+        ))
+
+    def get_for_invoice(self, export_invoice_id: int) -> Optional[ExportPackingList]:
+        return self._load(self.db.query_one(
+            """SELECT epl.*, u.full_name AS created_by_name FROM export_packing_lists epl
+               JOIN users u ON u.id = epl.created_by WHERE epl.export_invoice_id = ?""",
+            (export_invoice_id,),
+        ))
+
+    def list_all(self, company_id: int) -> List[ExportPackingList]:
+        """List view only - the parent invoice's number is joined in, but
+        neither the full invoice nor the allocation rows are loaded."""
+        rows = self.db.query(
+            """SELECT epl.*, u.full_name AS created_by_name, ei.export_invoice_number,
+                      (SELECT COUNT(DISTINCT container_sr_no) FROM export_packing_list_items
+                        WHERE export_packing_list_id = epl.id) AS container_count
+               FROM export_packing_lists epl
+               JOIN users u ON u.id = epl.created_by
+               JOIN export_invoices ei ON ei.id = epl.export_invoice_id
+               WHERE epl.company_id = ?
+               ORDER BY epl.packing_list_date DESC, epl.id DESC""",
+            (company_id,),
+        )
+        return [ExportPackingList.from_row(r) for r in rows]
+
+    def upsert_for_invoice(self, packing_list: ExportPackingList) -> ExportPackingList:
+        """Create the invoice's packing list, or replace the allocation of
+        the one it already has. The number and date are assigned once, at
+        first generation, and deliberately survive every later edit of the
+        parent invoice - the paperwork already went out under that number."""
+        existing = self.db.query_one(
+            "SELECT id FROM export_packing_lists WHERE export_invoice_id = ?", (packing_list.export_invoice_id,)
+        )
+        if existing:
+            packing_list_id = existing["id"]
+            self.db.execute(
+                "UPDATE export_packing_lists SET updated_at = datetime('now') WHERE id = ?", (packing_list_id,)
+            )
+        else:
+            packing_list_id = self.db.execute(
+                """INSERT INTO export_packing_lists
+                   (company_id, export_invoice_id, packing_list_number, packing_list_date, created_by)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (packing_list.company_id, packing_list.export_invoice_id, packing_list.packing_list_number,
+                 packing_list.packing_list_date, packing_list.created_by),
+            )
+        self._replace_items(packing_list_id, packing_list.items)
+        return self.get_by_id(packing_list_id)
+
+    def _replace_items(self, packing_list_id: int, items: List[ExportPackingListItem]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM export_packing_list_items WHERE export_packing_list_id = ?", (packing_list_id,))
+            for i, item in enumerate(items, start=1):
+                conn.execute(
+                    """INSERT INTO export_packing_list_items
+                       (export_packing_list_id, sr_no, container_sr_no, container_no, seal_no, rfid_seal_no,
+                        invoice_item_sr_no, product_id, product_name, group_label, hsn_code, pallets,
+                        quantity_boxes, quantity_unit, quantity_value, unit, net_weight_kg, gross_weight_kg)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (packing_list_id, i, item.container_sr_no, item.container_no, item.seal_no, item.rfid_seal_no,
+                     item.invoice_item_sr_no, item.product_id, item.product_name, item.group_label, item.hsn_code,
+                     item.pallets, item.quantity_boxes, item.quantity_unit, item.quantity_value, item.unit,
+                     item.net_weight_kg, item.gross_weight_kg),
+                )
+
+    def delete_for_invoice(self, export_invoice_id: int) -> None:
+        """Only needed for an explicit "regenerate from scratch" - deleting
+        the parent invoice already cascades to both tables."""
+        self.db.execute("DELETE FROM export_packing_lists WHERE export_invoice_id = ?", (export_invoice_id,))
 
 
 class PurchaseOrderRepository:

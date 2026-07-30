@@ -60,8 +60,8 @@
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
       <div class="field">
-        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(up to 16 digits)</span></label>
-        <input type="text" id="export_invoice_number" name="export_invoice_number" required inputmode="numeric" pattern="\d{1,16}" maxlength="16"
+        <label for="export_invoice_number">Export invoice no.<span class="required-mark">*</span> <span class="text-soft text-sm">(max 16 characters)</span></label>
+        <input type="text" id="export_invoice_number" name="export_invoice_number" required maxlength="16"
                value="{{ data.export_invoice_number | default('', true) }}">
       </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
@@ -101,6 +101,8 @@
                   data-issuing-authority="{{ p.issuing_authority or '' }}"
                   data-issuing-authority-address="{{ p.issuing_authority_address or '' }}"
                   data-date-of-issue="{{ p.date_of_issue or '' }}"
+                  data-stuffing-place-name="{{ p.stuffing_place_name or '' }}"
+                  data-place-of-stuffing="{{ p.place_of_stuffing or '' }}"
                   data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
             {{ p.permission_number }}{% if p.place_of_stuffing %} — {{ p.place_of_stuffing }}{% endif %}
           </option>
@@ -128,6 +130,10 @@
       <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
       <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
+    <div class="field">
+      <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list)</span></label>
+      <textarea id="stuffing_location" name="stuffing_location" rows="2">{{ data.stuffing_location | default('', true) }}</textarea>
+    </div>
   </div>
 
   <div class="card">
@@ -145,7 +151,7 @@
   <div class="card">
     <div class="card-header"><h3>Buyer order no. &amp; date</h3></div>
     <div class="form-row">
-      <div class="field"><label for="buyer_order_no">Order no.</label><input type="text" id="buyer_order_no" name="buyer_order_no" value="{{ data.buyer_order_no | default('', true) }}"></div>
+      <div class="field"><label for="buyer_order_no">Order no.</label><textarea id="buyer_order_no" name="buyer_order_no" rows="3">{{ data.buyer_order_no | default('', true) }}</textarea></div>
       <div class="field"><label for="buyer_order_date">Order date</label><input type="date" id="buyer_order_date" name="buyer_order_date" value="{{ (data.buyer_order_date | default('', true))[:10] }}"></div>
     </div>
   </div>
@@ -194,7 +200,7 @@
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th></th></tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
           {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
@@ -205,6 +211,7 @@
             <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
             <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
             <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
+            <td><input type="text" name="cd_tare_weight[]" value="{{ cd.tare_weight or '' }}"></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
@@ -304,9 +311,13 @@
         <tbody id="items-body">
           {% set rows = form_items if form_items is not none else (invoice.items if invoice else []) %}
           {% for row in rows %}
+          {% set meta = (product_meta_map.get(row.product_id | int, {}) if row.product_id else {}) %}
           <tr class="item-row" data-alt-qty=""
               data-pallet-types="{{ (pallet_types_map.get(row.product_id | int, []) if row.product_id else []) | tojson | forceescape }}"
-              data-igst="{{ row.igst_percent | default('', true) }}">
+              data-igst="{{ row.igst_percent | default('', true) }}"
+              data-net-weight="{{ meta.get('net_weight_kg') or '' }}"
+              data-gross-weight="{{ meta.get('gross_weight_kg') or '' }}"
+              data-group-label="{{ meta.get('group_label') or '' }}">
             <td class="js-sr">{{ loop.index }}</td>
             <td>
               <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
@@ -347,6 +358,36 @@
       <div></div>
       <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
     </div>
+  </div>
+
+  {# ---- Export packing list: the container split ---------------------------
+     The Export Packing List is generated from this invoice, so its only real
+     input lives here: how many boxes of each goods line above went into each
+     physical container from the 11B table. Everything else on the row is
+     derived (see below), the containers are imported from 11B rather than
+     re-typed, and the HSN grouping the printed sheet uses is worked out
+     server-side from each line's catalog product. #}
+  <div class="card">
+    <div class="card-header">
+      <h3>Export packing list — container split</h3>
+      <div class="flex gap-8">
+        <button type="button" class="btn btn-ghost btn-sm" id="alloc-rebuild-btn">↻ Rebuild from containers</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="alloc-fill-btn">⤓ Put everything in container 1</button>
+      </div>
+    </div>
+    <p class="hint">
+      Containers come from the <strong>Container details (11B)</strong> table above — fill that in first.
+      Type only the <strong>Boxes</strong>; Plts, quantity and the net/gross weights are calculated from
+      them (pro-rata off the product line, weights from the catalog product) and can still be overtyped.
+      Every box on the invoice has to end up in exactly one container.
+    </p>
+
+    <div id="alloc-balance" class="table-wrap" style="margin-bottom:14px;"></div>
+    <div id="alloc-containers"></div>
+
+    {# Rows to restore: whatever was submitted, else this invoice's saved
+       packing list. Empty means "seed the default split in JS". #}
+    <script type="application/json" id="alloc-initial">{{ (form_allocations or []) | tojson }}</script>
   </div>
 
   <div class="card">
@@ -590,6 +631,7 @@
       <td><input type="text" name="cd_line_seal_no[]"></td>
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
       <td><input type="text" name="cd_vehicle_no[]"></td>
+      <td><input type="text" name="cd_tare_weight[]"></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
@@ -632,6 +674,8 @@
     document.getElementById('permission_expiry').value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
     document.getElementById('issuing_authority').value = opt.dataset.issuingAuthority || '';
     document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
+    const stuffAt = [opt.dataset.stuffingPlaceName, opt.dataset.placeOfStuffing].filter(Boolean).join(', ');
+    if (stuffAt) document.getElementById('stuffing_location').value = stuffAt;
   });
 
   // ---- product picker --------------------------------------------------
@@ -679,17 +723,287 @@
     setUnitValue(activeRow.querySelector('.js-unit'), p.alt_quantity_unit);
     activeRow.dataset.altQty = parseFloat(p.alternate_quantity) || '';
     activeRow.dataset.igst = (p.igst_percent ?? '') === '' ? '' : p.igst_percent;
+    // Per-box weights and the HSN heading drive the export packing list's
+    // container split, which reads them straight off this row.
+    activeRow.dataset.netWeight = p.net_weight_kg ?? '';
+    activeRow.dataset.grossWeight = p.gross_weight_kg ?? '';
+    activeRow.dataset.groupLabel = (p.category_name || p.name || '').toUpperCase();
     activeRow.dataset.palletTypes = JSON.stringify(p.pallet_types || []);
     populatePalletOptions(activeRow, p.pallet_types || [], false);
     recalcRowPallets(activeRow);
     recalcRowQty(activeRow);
     recalcTotals();
+    // Picking a product changes the HSN group, the per-box weights and the
+    // boxes to account for - let the container split below pick that up.
+    itemsBody.dispatchEvent(new Event('change', { bubbles: true }));
     overlay.hidden = true;
   }
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
   recalcTotals();
+})();
+</script>
+
+<script>
+// ---- Export packing list: the container split ------------------------------
+// The packing list has no form of its own, so this block IS its input. It
+// reads the two tables above it live - the goods lines and the 11B container
+// rows - and captures nothing but "N boxes of goods line X went into
+// container C". Everything else on a row is derived from N and shown
+// read-only or pre-filled, and the running balance makes it visible when a
+// line is over- or under-allocated (which the server refuses either way).
+(function () {
+  const itemsBody = document.getElementById('items-body');
+  const cdBody = document.getElementById('cd-body');
+  const wrap = document.getElementById('alloc-containers');
+  const balanceEl = document.getElementById('alloc-balance');
+  const form = document.getElementById('invoice-form');
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const fmt = (n) => (n % 1 === 0 ? String(n) : n.toFixed(2));
+
+  // The goods lines, keyed by their position in the products table - the
+  // same index the server maps back onto the submitted item rows. Blank rows
+  // are filtered out AFTER indexing, so the numbering never shifts.
+  function goodsLines() {
+    return Array.from(itemsBody.querySelectorAll('.item-row')).map((tr, index) => ({
+      index,
+      name: (tr.querySelector('.js-product-name').value || '').trim(),
+      boxes: parseFloat(tr.querySelector('.js-boxes').value) || 0,
+      pallets: parseFloat(tr.querySelector('.js-pallets').value) || 0,
+      qty: parseFloat(tr.querySelector('.js-qty').value) || 0,
+      unit: tr.querySelector('.js-unit').value || 'SQM',
+      hsn: tr.querySelector('.js-hsn').value || '',
+      net: parseFloat(tr.dataset.netWeight) || 0,
+      gross: parseFloat(tr.dataset.grossWeight) || 0,
+      group: tr.dataset.groupLabel || '',
+    })).filter((line) => line.name);
+  }
+
+  // The physical containers, in the SAME index space the server stores:
+  // wholly blank 11B rows are dropped there, so they are dropped here too,
+  // or a blank row in the middle would shift every container number.
+  function containers() {
+    const rows = Array.from(cdBody.querySelectorAll('.cd-row')).map((tr) => ({
+      no: (tr.querySelector('[name="cd_container_no[]"]').value || '').trim(),
+      seal: (tr.querySelector('[name="cd_line_seal_no[]"]').value || '').trim(),
+      rfid: (tr.querySelector('[name="cd_rfid_seal_no[]"]').value || '').trim(),
+      vehicle: (tr.querySelector('[name="cd_vehicle_no[]"]').value || '').trim(),
+      tare: (tr.querySelector('[name="cd_tare_weight[]"]').value || '').trim(),
+    })).filter((c) => c.no || c.seal || c.rfid || c.vehicle || c.tare);
+    if (!rows.length) rows.push({ no: '', seal: '', rfid: '', vehicle: '', tare: '' });
+    return rows.map((c, index) => ({ ...c, index }));
+  }
+
+  function readState() {
+    return Array.from(wrap.querySelectorAll('.alloc-row')).map((tr) => ({
+      container_index: parseInt(tr.closest('.alloc-container').dataset.containerIndex, 10) || 0,
+      invoice_item_index: parseInt(tr.querySelector('.js-alloc-item').value, 10),
+      quantity_boxes: tr.querySelector('.js-alloc-boxes').value,
+      pallets: tr.querySelector('.js-alloc-pallets').value,
+      net_weight_kg: tr.querySelector('.js-alloc-net').value,
+      gross_weight_kg: tr.querySelector('.js-alloc-gross').value,
+    }));
+  }
+
+  function defaultState(lines) {
+    return lines.map((line) => ({
+      container_index: 0, invoice_item_index: line.index,
+      quantity_boxes: line.boxes || '', pallets: '', net_weight_kg: '', gross_weight_kg: '',
+    }));
+  }
+
+  function rowTemplate(row, lines) {
+    const tr = document.createElement('tr');
+    tr.className = 'alloc-row';
+    const options = lines.map((l) =>
+      `<option value="${l.index}" ${l.index === row.invoice_item_index ? 'selected' : ''}>${esc(l.name)}</option>`
+    ).join('');
+    tr.innerHTML = `
+      <td>
+        <input type="hidden" name="alloc_container_index[]" class="js-alloc-container">
+        <input type="hidden" name="alloc_group_label[]" class="js-alloc-group-input">
+        <select name="alloc_invoice_item_index[]" class="js-alloc-item">${options}</select>
+      </td>
+      <td class="text-sm js-alloc-group">—</td>
+      <td><input type="number" step="0.01" min="0" name="alloc_boxes[]" class="js-alloc-boxes" value="${esc(row.quantity_boxes)}"></td>
+      <td><input type="number" step="0.01" min="0" name="alloc_pallets[]" class="js-alloc-pallets" value="${esc(row.pallets)}"></td>
+      <td class="text-sm js-alloc-qty">—</td>
+      <td><input type="number" step="0.01" min="0" name="alloc_net_weight[]" class="js-alloc-net" value="${esc(row.net_weight_kg)}"></td>
+      <td><input type="number" step="0.01" min="0" name="alloc_gross_weight[]" class="js-alloc-gross" value="${esc(row.gross_weight_kg)}"></td>
+      <td><button type="button" class="btn-link-danger js-alloc-remove">Remove</button></td>`;
+    return tr;
+  }
+
+  // `force` is what a change to Boxes does: recompute every derived column
+  // from the new box count, discarding an earlier hand-typed override.
+  // Without it (a re-render) the stored values are left alone.
+  function recalcRow(tr, lines, force) {
+    const line = lines.find((l) => l.index === parseInt(tr.querySelector('.js-alloc-item').value, 10));
+    tr.querySelector('.js-alloc-container').value =
+      tr.closest('.alloc-container').dataset.containerIndex;
+    if (!line) return;
+    tr.querySelector('.js-alloc-group').textContent =
+      [line.group, line.hsn ? 'HSNC ' + line.hsn : ''].filter(Boolean).join(' · ') || '—';
+    tr.querySelector('.js-alloc-group-input').value = line.group;
+
+    const boxes = parseFloat(tr.querySelector('.js-alloc-boxes').value) || 0;
+    // Quantity and pallets pro-rata off the goods line itself, so the parts
+    // always add back up to the whole; weights off the catalog product.
+    const qty = line.boxes ? round2(boxes * line.qty / line.boxes) : 0;
+    tr.querySelector('.js-alloc-qty').textContent = qty ? `${fmt(qty)} ${line.unit}` : '—';
+    if (force) {
+      const pallets = line.boxes ? round2(boxes * line.pallets / line.boxes) : 0;
+      tr.querySelector('.js-alloc-pallets').value = pallets || '';
+      tr.querySelector('.js-alloc-net').value = line.net ? round2(boxes * line.net) : '';
+      tr.querySelector('.js-alloc-gross').value = line.gross ? round2(boxes * line.gross) : '';
+    }
+  }
+
+  function render(state) {
+    const lines = goodsLines();
+    const conts = containers();
+    const valid = new Set(lines.map((l) => l.index));
+    const rows = state
+      .filter((r) => valid.has(r.invoice_item_index))
+      // A row whose container has since been deleted falls back onto the last one.
+      .map((r) => ({ ...r, container_index: Math.min(Math.max(r.container_index, 0), conts.length - 1) }));
+
+    wrap.innerHTML = '';
+    if (!lines.length) {
+      wrap.innerHTML = '<div class="empty-state">Add a product line above first.</div>';
+      updateBalance();
+      return;
+    }
+    conts.forEach((c) => {
+      const label = [c.no, c.seal, c.rfid].filter(Boolean).join(' · ') || 'not identified yet';
+      const section = document.createElement('div');
+      section.className = 'alloc-container';
+      section.dataset.containerIndex = c.index;
+      section.style.marginBottom = '18px';
+      section.innerHTML = `
+        <h4 style="margin-bottom:6px;">Container ${c.index + 1}
+          <span class="text-soft text-sm">— ${esc(label)}</span></h4>
+        <div class="table-wrap"><table class="ledger"><thead><tr>
+          <th style="min-width:200px;">Product line</th><th>HSN group</th><th>Boxes</th>
+          <th>Plts</th><th>Qty</th><th>Net (KG)</th><th>Gross (KG)</th><th></th>
+        </tr></thead><tbody class="alloc-body"></tbody></table></div>
+        <button type="button" class="btn btn-ghost btn-sm js-alloc-add">+ Add product to this container</button>`;
+      wrap.appendChild(section);
+      const body = section.querySelector('.alloc-body');
+      rows.filter((r) => r.container_index === c.index)
+          .forEach((r) => body.appendChild(rowTemplate(r, lines)));
+    });
+    wrap.querySelectorAll('.alloc-row').forEach((tr) => recalcRow(tr, lines, false));
+    updateBalance();
+  }
+
+  // The whole point of the split: per goods line, what is on the invoice,
+  // what has been loaded, and what is still loose.
+  function updateBalance() {
+    const lines = goodsLines();
+    const rows = readState();
+    const body = lines.map((line) => {
+      const allocated = rows
+        .filter((r) => r.invoice_item_index === line.index)
+        .reduce((sum, r) => sum + (parseFloat(r.quantity_boxes) || 0), 0);
+      const remaining = round2(line.boxes - allocated);
+      const state = !line.boxes ? 'text-soft'
+        : remaining > 0.001 ? 'text-warn'
+        : remaining < -0.001 ? 'text-danger' : 'text-success';
+      const note = !line.boxes ? 'no box count — goes in one container whole'
+        : remaining > 0.001 ? `${fmt(remaining)} still unassigned`
+        : remaining < -0.001 ? `${fmt(-remaining)} over` : 'balanced';
+      return `<tr><td>${esc(line.name)}</td>
+        <td class="num">${line.boxes ? fmt(line.boxes) : '—'}</td>
+        <td class="num">${fmt(round2(allocated))}</td>
+        <td class="${state}">${note}</td></tr>`;
+    }).join('');
+    balanceEl.innerHTML = `<table class="ledger"><thead><tr>
+      <th>Product line</th><th class="num">Boxes on invoice</th>
+      <th class="num">Boxes in containers</th><th>Status</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function unbalancedLines() {
+    const rows = readState();
+    return goodsLines().filter((line) => {
+      if (!line.boxes) return false;
+      const allocated = rows
+        .filter((r) => r.invoice_item_index === line.index)
+        .reduce((sum, r) => sum + (parseFloat(r.quantity_boxes) || 0), 0);
+      return Math.abs(line.boxes - allocated) > 0.001;
+    });
+  }
+
+  // ---- events --------------------------------------------------
+  wrap.addEventListener('click', (e) => {
+    if (e.target.classList.contains('js-alloc-remove')) {
+      e.target.closest('.alloc-row').remove();
+      updateBalance();
+    } else if (e.target.classList.contains('js-alloc-add')) {
+      const section = e.target.closest('.alloc-container');
+      const lines = goodsLines();
+      if (!lines.length) return;
+      const tr = rowTemplate({
+        container_index: parseInt(section.dataset.containerIndex, 10),
+        invoice_item_index: lines[0].index, quantity_boxes: '',
+        pallets: '', net_weight_kg: '', gross_weight_kg: '',
+      }, lines);
+      section.querySelector('.alloc-body').appendChild(tr);
+      recalcRow(tr, lines, false);
+      updateBalance();
+    }
+  });
+  wrap.addEventListener('input', (e) => {
+    const tr = e.target.closest('.alloc-row');
+    if (!tr) return;
+    if (e.target.classList.contains('js-alloc-boxes')) recalcRow(tr, goodsLines(), true);
+    updateBalance();
+  });
+  wrap.addEventListener('change', (e) => {
+    const tr = e.target.closest('.alloc-row');
+    if (tr && e.target.classList.contains('js-alloc-item')) {
+      recalcRow(tr, goodsLines(), true);
+      updateBalance();
+    }
+  });
+
+  // Editing the goods lines changes what has to be accounted for, so keep
+  // the running balance (and each row's derived HSN group) honest without
+  // throwing away the split the user has already typed.
+  function refreshFromGoods() {
+    const lines = goodsLines();
+    wrap.querySelectorAll('.alloc-row').forEach((tr) => recalcRow(tr, lines, false));
+    updateBalance();
+  }
+  itemsBody.addEventListener('input', refreshFromGoods);
+  itemsBody.addEventListener('change', refreshFromGoods);
+
+  document.getElementById('alloc-rebuild-btn').addEventListener('click', () => render(readState()));
+  document.getElementById('alloc-fill-btn').addEventListener('click', () => {
+    if (!confirm('Replace the current split with everything in container 1?')) return;
+    render(defaultState(goodsLines()));
+  });
+
+  form.addEventListener('submit', (e) => {
+    const bad = unbalancedLines();
+    if (!bad.length) return;
+    e.preventDefault();
+    alert('Every box on the invoice has to be in exactly one container.\n\nStill out of balance:\n' +
+          bad.map((l) => '• ' + l.name).join('\n'));
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // Restore the submitted (or saved) split; a brand new invoice starts with
+  // everything in container 1, which is what makes the packing list
+  // "generated by default" - saving always produces a printable one.
+  let initial = [];
+  try { initial = JSON.parse(document.getElementById('alloc-initial').textContent) || []; } catch (err) {}
+  render(initial.length ? initial : defaultState(goodsLines()));
 })();
 </script>
 
