@@ -1,11 +1,15 @@
 {# Export Invoice page 2: the SELF SEALING OF CONTAINERS FOR EXPORT
    examination report annexure. Always generated. Section 05 (examination
-   date) defaults to the creation date; 08B is a free textbox; section 09
+   date) defaults to the creation date; 08B is a free textbox; section 09A
    lists the four costliest product lines and repeats the front page's
-   FOB/CNF; Booking No. prints directly above the 11B table; section 11B has
-   one row per physical container (Tare Weight is a printed column left
-   blank); section 13's top cell is the fixed claim text, its bottom cell the
-   imported EPCG info (or "-"). #}
+   FOB/CNF; 09B totals Plts/Boxes across every goods line plus the container-
+   type breakdown; 09C is the consignee abroad; 10A/10B/10C are fixed
+   answers (every shipment here is examined & self-sealed, no sample drawn);
+   11A (non-containerised cargo seal nos) is always N/A since every shipment
+   here goes by container; the Container Details type/count breakdown from
+   the front page repeats directly above 11B; section 11B has one row per
+   physical container; section 13's top cell is the fixed claim text, its
+   bottom cell the imported EPCG info (or "-"). #}
 <style>
   .ei-annexure { background: #fff; color: #000; width: 205mm; margin: 24px auto 48px; padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25); font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.2; }
   .ei-annexure .ei-a-title { border: 1px solid #000; text-align: center; font-size: 12px; font-weight: bold; padding: 3px 0; }
@@ -64,12 +68,12 @@
     </tr>
   </table>
 
-  <!-- 09: particulars of export invoice - top 4 costliest product lines,
+  <!-- 09A: particulars of export invoice - top 4 costliest product lines,
        plus the same FOB/CNF as the front page. -->
   <table>
     <colgroup><col style="width:3%"><col style="width:22%"><col style="width:45%"><col style="width:15%"><col style="width:15%"></colgroup>
     <tr>
-      <td class="ei-a-c" rowspan="6">09</td>
+      <td class="ei-a-c" rowspan="6">09A</td>
       <td class="ei-a-lbl" rowspan="6">Particulars Of Export Invoice</td>
       <td class="ei-a-lbl">Invoice No &amp; Date</td>
       <td class="ei-a-v" colspan="2">{{ invoice.export_invoice_number }} — {{ admy(invoice.invoice_date) }}</td>
@@ -91,6 +95,34 @@
     </tr>
   </table>
 
+  {# 09B: Total No. Of Packages - container-type breakdown plus Plts/Boxes
+     totals across every goods line (same accumulation idiom as the front
+     sheet's TOTAL row). #}
+  {% set ns09b = namespace(plts=0, boxes=0) %}
+  {% for item in invoice.items %}
+    {% set ns09b.plts = ns09b.plts + (item.pallets or 0) %}
+    {% set ns09b.boxes = ns09b.boxes + (item.quantity_boxes or 0) %}
+  {% endfor %}
+  <table>
+    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:37%"><col style="width:19%"><col style="width:19%"></colgroup>
+    <tr>
+      <td class="ei-a-c">09B</td>
+      <td class="ei-a-lbl">Total No. Of Packages</td>
+      <td class="ei-a-v">
+        {% for c in invoice.containers %}{{ c.container_count }} X {{ c.container_type }}<br>{% else %}-{% endfor %}
+      </td>
+      <td class="ei-a-lbl">Plts</td>
+      <td class="ei-a-v">{{ '{:,.0f}'.format(ns09b.plts) if ns09b.plts else '-' }}</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c"></td>
+      <td class="ei-a-lbl"></td>
+      <td class="ei-a-v"></td>
+      <td class="ei-a-lbl">Boxes</td>
+      <td class="ei-a-v">{{ '{:,.0f}'.format(ns09b.boxes) if ns09b.boxes else '-' }}</td>
+    </tr>
+  </table>
+
   <table>
     <colgroup><col style="width:3%"><col style="width:22%"><col style="width:75%"></colgroup>
     <tr>
@@ -100,13 +132,54 @@
     </tr>
   </table>
 
-  <!-- Booking No.: printed as its own boxed row directly above the 11B
-       container table. -->
+  <!-- 10A/10B/10C: fixed answers matching the physical form - every self-
+       sealed export is examined & fully described (10A: Yes), and no sample
+       is drawn for a self-sealed container shipment (10B: No, 10C: N/A). -->
+  <table>
+    <colgroup><col style="width:3%"><col style="width:67%"><col style="width:30%"></colgroup>
+    <tr>
+      <td class="ei-a-c">10A</td>
+      <td class="ei-a-lbl">Is The Description Of The Goods, The Quantity And Their Value As Per Particulars Furnished In The Export Invoice?</td>
+      <td class="ei-a-v">YES</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c">10B</td>
+      <td class="ei-a-lbl">Whether Sample Is Drawn For Being Forwarded To Port Of Export?</td>
+      <td class="ei-a-v">NO</td>
+    </tr>
+    <tr>
+      <td class="ei-a-c">10C</td>
+      <td class="ei-a-lbl">If Yes, The Number Of The Seal Of The Package Containing The Sample</td>
+      <td class="ei-a-v">N/A</td>
+    </tr>
+  </table>
+
+  <!-- 11A: Central Excise/Customs Seal Nos, for NON-containerised cargo -
+       always N/A here since every shipment on this form goes by container
+       (11B below). -->
+  <table>
+    <colgroup><col style="width:3%"><col style="width:34%"><col style="width:31.5%"><col style="width:31.5%"></colgroup>
+    <tr>
+      <td class="ei-a-c" rowspan="2">11A</td>
+      <td class="ei-a-lbl" rowspan="2">Central Excise/Customs Seal Nos [For Non-Containerised Cargo]</td>
+      <td class="ei-a-lbl">No Of Packages</td>
+      <td class="ei-a-lbl">Seal No</td>
+    </tr>
+    <tr>
+      <td class="ei-a-v">N/A</td>
+      <td class="ei-a-v">N/A</td>
+    </tr>
+  </table>
+
+  <!-- Container Details: the same type/count breakdown shown on the front
+       page, repeated here directly above the 11B seal table. -->
   <table>
     <colgroup><col style="width:22%"><col style="width:78%"></colgroup>
     <tr>
-      <td class="ei-a-lbl">BOOKING NO</td>
-      <td class="ei-a-v">{{ invoice.booking_no or '-' }}</td>
+      <td class="ei-a-lbl">Container Details</td>
+      <td class="ei-a-v">
+        {% for c in invoice.containers %}{{ c.container_count }} &nbsp;X&nbsp; {{ c.container_type }}<br>{% else %}-{% endfor %}
+      </td>
     </tr>
   </table>
 
