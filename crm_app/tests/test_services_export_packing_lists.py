@@ -227,6 +227,24 @@ class TestDerivedFigures:
             "SEGU3227471", "UFL331095", "WIND02531142",
         )
 
+    def test_container_totals_sum_per_container_for_the_export_invoices_11b_table(self, container, seed):
+        product = make_product(container, seed, "GVT 600X1200", "69072100", alt_qty="1.44", net=26.5, gross=27.0)
+        invoice = make_export(
+            container, seed, [item_for(product, 100, pallets=20)],
+            allocations=[alloc(0, 0, 60), alloc(1, 0, 40)],
+        )
+        totals = packing_list_for(container, seed, invoice).container_totals
+        # container 1 (index 0 -> sr_no 1): 60 boxes, 12 plts, 60*26.5/27.0 KG
+        assert totals[1]["quantity_boxes"] == pytest.approx(60)
+        assert totals[1]["pallets"] == pytest.approx(12)
+        assert totals[1]["net_weight_kg"] == pytest.approx(1590)
+        assert totals[1]["gross_weight_kg"] == pytest.approx(1620)
+        # container 2 (index 1 -> sr_no 2): 40 boxes, 8 plts, 40*26.5/27.0 KG
+        assert totals[2]["quantity_boxes"] == pytest.approx(40)
+        assert totals[2]["pallets"] == pytest.approx(8)
+        assert totals[2]["net_weight_kg"] == pytest.approx(1060)
+        assert totals[2]["gross_weight_kg"] == pytest.approx(1080)
+
 
 # ==========================================================================
 # Automatic HSN grouping

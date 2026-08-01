@@ -46,7 +46,10 @@
         <div class="field"><label for="pan_no">PAN No.</label><input type="text" id="pan_no" name="pan_no" value="{{ company.pan_no | default('', true) }}"></div>
         <div class="field"><label for="iec">IEC</label><input type="text" id="iec" name="iec" value="{{ company.iec | default('', true) }}"></div>
       </div>
-      <div class="field"><label for="bin_no">BIN</label><input type="text" id="bin_no" name="bin_no" value="{{ company.bin | default('', true) }}"></div>
+      <div class="form-row">
+        <div class="field"><label for="bin_no">BIN</label><input type="text" id="bin_no" name="bin_no" value="{{ company.bin | default('', true) }}"></div>
+        <div class="field"><label for="branch_code">Branch code <span class="text-soft text-sm">(IEC branch code, section 2B on the Export Invoice)</span></label><input type="text" id="branch_code" name="branch_code" value="{{ company.branch_code | default('', true) }}"></div>
+      </div>
     </fieldset>
 
     <fieldset>
