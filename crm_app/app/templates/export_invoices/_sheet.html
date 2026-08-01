@@ -2,8 +2,11 @@
    format). Expects `invoice` and `company` in context. Container Details
    extends up into the cell that used to be empty above Port Of Discharge;
    the tax line prints IGST or CGST/SGST as an AMOUNT (no percentage); the
-   Export Ref. No box lists the referenced proforma invoices; the Purchase
-   Details block spills into extra columns past four supplier invoices. #}
+   Export Ref. No box lists the referenced proforma invoices; Net/Gross
+   Weight are typed invoice-level totals (no per-container weight data to
+   sum on this branch); the Purchase Details block spills into extra columns
+   past four supplier invoices and repeats a LUT/IGST Details summary box
+   beside it. #}
 <style>
   .ei-sheet {
     background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
@@ -134,6 +137,7 @@
         {% if invoice.bank_account_number %}<br><span class="ei-val">A/C NO : {{ invoice.bank_account_number }}</span>{% endif %}
         {% if invoice.bank_swift_code %}<br><span class="ei-val">SWIFT : {{ invoice.bank_swift_code|upper }}</span>{% endif %}
         {% if invoice.bank_ifsc_code %}<br><span class="ei-val">IFSC : {{ invoice.bank_ifsc_code|upper }}</span>{% endif %}
+        {% if invoice.bank_branch %}<br><span class="ei-val">BRANCH : {{ invoice.bank_branch|upper }}</span>{% endif %}
       </td>
     </tr>
     <tr>
@@ -225,13 +229,15 @@
   <table>
     <colgroup><col style="width:8%"><col style="width:44%"><col style="width:28%"><col style="width:20%"></colgroup>
     <tr>
-      <td class="ei-label ei-mid" rowspan="8">Amount<br>In Word</td>
-      <td class="ei-val ei-mid ei-left" rowspan="8">{{ invoice.invoice_value_usd | amount_in_words }}</td>
+      <td class="ei-label ei-mid" rowspan="10">Amount<br>In Word</td>
+      <td class="ei-val ei-mid ei-left" rowspan="10">{{ invoice.invoice_value_usd | amount_in_words }}</td>
       <td class="ei-charge-label">CNF VALUE</td>
       <td class="ei-val ei-right">{{ usd(invoice.cnf_value) }}</td>
     </tr>
+    <tr><td class="ei-charge-label">CERTIFICATION</td><td class="ei-val ei-right">{{ usd(invoice.certification) }}</td></tr>
     <tr><td class="ei-charge-label">SEA FREIGHT</td><td class="ei-val ei-right">{{ usd(invoice.sea_freight) }}</td></tr>
     <tr><td class="ei-charge-label">INSURANCE</td><td class="ei-val ei-right">{{ usd(invoice.insurance) }}</td></tr>
+    <tr><td class="ei-charge-label">OTHER CHARGES</td><td class="ei-val ei-right">{{ usd(invoice.other_charges) }}</td></tr>
     <tr><td class="ei-charge-label">DISCOUNT</td><td class="ei-val ei-right">{{ usd(invoice.discount_amount) }}</td></tr>
     <tr><td class="ei-charge-label">FOB VALUE</td><td class="ei-val ei-right">{{ usd(invoice.fob_value) }}</td></tr>
     <tr><td class="ei-charge-label ei-val">INVOICE VALUE USD</td><td class="ei-val ei-right">{{ usd(invoice.invoice_value_usd) }}</td></tr>
@@ -244,6 +250,19 @@
       <td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td>
     </tr>
   </table>
+
+  <!-- Net/Gross weight totals: typed once at invoice level (no per-container
+       weight data on this branch to sum instead). -->
+  <table>
+    <colgroup><col style="width:26%"><col style="width:24%"><col style="width:26%"><col style="width:24%"></colgroup>
+    <tr>
+      <td class="ei-charge-label">NET WEIGHT</td>
+      <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.total_net_weight_kg) if invoice.total_net_weight_kg else '-' }}</td>
+      <td class="ei-charge-label">GROSS WEIGHT</td>
+      <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.total_gross_weight_kg) if invoice.total_gross_weight_kg else '-' }}</td>
+    </tr>
+  </table>
+
   <table>
     <colgroup><col style="width:52%"><col style="width:28%"><col style="width:20%"></colgroup>
     <tr>
@@ -252,21 +271,58 @@
     </tr>
   </table>
 
-  <!-- Purchase details: supplier GSTIN / invoice no, spilling into extra
-       columns past the first four (per request). -->
+  <!-- Purchase details: supplier GSTIN / invoice no / qty / taxable amount /
+       CGST / SGST, spilling into extra columns past the first four (per
+       request), plus a repeated LUT/IGST Details summary box beside it (the
+       same figures already shown above, re-displayed here to match the
+       reference layout). -->
   {% if invoice.purchase_details %}
   <table>
+    <colgroup><col style="width:20px"><col style="width:14%"><col></colgroup>
     <tr>
-      <td class="ei-side" rowspan="2" style="width:20px;">PURCHASE DETAILS</td>
-      <td class="ei-label" style="width:14%;">SUPPLIER GSTIN</td>
+      <td class="ei-side" rowspan="6" style="width:20px;">PURCHASE DETAILS</td>
+      <td class="ei-label">SUPPLIER GSTIN</td>
       {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_gstin or '-' }}</td>{% endfor %}
     </tr>
     <tr>
       <td class="ei-label">SUPPLIER INVOICE NO</td>
       {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_invoice_no or '-' }}</td>{% endfor %}
     </tr>
+    <tr>
+      <td class="ei-label">SUPPLIER INVOICE QTY</td>
+      {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_invoice_qty or '-' }}</td>{% endfor %}
+    </tr>
+    <tr>
+      <td class="ei-label">SUPPLIER TAXABLE AMOUNT</td>
+      {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_taxable_amount or '-' }}</td>{% endfor %}
+    </tr>
+    <tr>
+      <td class="ei-label">SUPPLIER CGST AMOUNT</td>
+      {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_cgst_amount or '-' }}</td>{% endfor %}
+    </tr>
+    <tr>
+      <td class="ei-label">SUPPLIER SGST AMOUNT</td>
+      {% for pd in invoice.purchase_details %}<td class="ei-val">{{ pd.supplier_sgst_amount or '-' }}</td>{% endfor %}
+    </tr>
+  </table>
+  <table>
+    <colgroup><col style="width:30%"><col style="width:70%"></colgroup>
+    <tr><td class="ei-label" rowspan="4" style="vertical-align:middle;">LUT / IGST DETAILS</td>
+        <td class="ei-val">INVOICE VALUE USD : {{ usd(invoice.invoice_value_usd) }}</td></tr>
+    <tr><td class="ei-val">EXCHANGE RATE : {{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
+    <tr><td class="ei-val">INVOICE VALUE INR : {{ inr(invoice.invoice_value_inr) }}</td></tr>
+    <tr><td class="ei-val">IGST : {{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td></tr>
   </table>
   {% endif %}
+
+  <!-- Remarks -->
+  <table>
+    <colgroup><col style="width:8%"><col style="width:92%"></colgroup>
+    <tr>
+      <td class="ei-charge-label">REMARKS</td>
+      <td class="ei-val">{{ invoice.remarks or '-' }}</td>
+    </tr>
+  </table>
 
   <!-- Declaration + signatures -->
   <table>

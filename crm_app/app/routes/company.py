@@ -121,6 +121,7 @@ def settings():
                 pan_no=request.form.get("pan_no", ""),
                 iec=request.form.get("iec", ""),
                 bin_no=request.form.get("bin_no", ""),
+                branch_code=request.form.get("branch_code", ""),
                 contact_details=_extract_contact_details(request.form),
                 contact_persons=_extract_contact_persons(request.form),
                 bank_details=_extract_bank_details(request.form),

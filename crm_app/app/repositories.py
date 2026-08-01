@@ -728,22 +728,23 @@ class CompanyRepository:
         return company
 
     def upsert(self, company_id: int, company_name: str, address: str, gstin: str,
-               pan_no: str, iec: str, bin_no: str, self_sealing_declaration: str = None) -> int:
+               pan_no: str, iec: str, bin_no: str, self_sealing_declaration: str = None,
+               branch_code: str = None) -> int:
         """Returns the `our_company.id` row (not the tenant's company_id) -
         callers need it to scope the four detail-table replace_* calls."""
         existing = self.db.query_one("SELECT id FROM our_company WHERE company_id = ?", (company_id,))
         if existing:
             self.db.execute(
                 """UPDATE our_company SET company_name = ?, address = ?, gstin = ?, pan_no = ?, iec = ?, bin = ?,
-                                           self_sealing_declaration = ?,
+                                           self_sealing_declaration = ?, branch_code = ?,
                                            updated_at = datetime('now') WHERE company_id = ?""",
-                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, company_id),
+                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code, company_id),
             )
             return existing["id"]
         return self.db.execute(
-            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration),
+            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration, branch_code) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code),
         )
 
     def set_logo(self, our_company_id: int, logo_path: Optional[str]) -> None:
@@ -1618,13 +1619,15 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight "
+                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight, "
+                "excise_seal_no, plts, boxes "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
         invoice.purchase_details = [
             dict(r) for r in self.db.query(
-                "SELECT supplier_gstin, supplier_invoice_no FROM export_invoice_purchase_details "
+                "SELECT supplier_gstin, supplier_invoice_no, supplier_invoice_qty, supplier_taxable_amount, "
+                "supplier_cgst_amount, supplier_sgst_amount FROM export_invoice_purchase_details "
                 "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1662,9 +1665,10 @@ class ExportInvoiceRepository:
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
-                manufacturer_name, manufacturer_address, stuffing_location, remarks, created_by)
+                manufacturer_name, manufacturer_address, stuffing_location, remarks,
+                total_net_weight_kg, total_gross_weight_kg, c_no, c_date, shipping_bill_no, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1683,7 +1687,9 @@ class ExportInvoiceRepository:
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
                    examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
-                   manufacturer_address = ?, stuffing_location = ?, remarks = ?, updated_at = datetime('now')
+                   manufacturer_address = ?, stuffing_location = ?, remarks = ?,
+                   total_net_weight_kg = ?, total_gross_weight_kg = ?, c_no = ?, c_date = ?, shipping_bill_no = ?,
+                   updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
         )
@@ -1713,6 +1719,8 @@ class ExportInvoiceRepository:
             invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
             invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
+            invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
+            invoice.c_no, invoice.c_date, invoice.shipping_bill_no,
         )
 
     def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
@@ -1749,19 +1757,24 @@ class ExportInvoiceRepository:
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
                     "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, "
-                    "gross_weight, net_weight) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "gross_weight, net_weight, excise_seal_no, plts, boxes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (invoice_id, i, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
-                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None),
+                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None,
+                     cd.get("excise_seal_no") or None, cd.get("plts") or None, cd.get("boxes") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))
             for i, pd in enumerate(invoice.purchase_details, start=1):
                 conn.execute(
-                    "INSERT INTO export_invoice_purchase_details (export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no) "
-                    "VALUES (?, ?, ?, ?)",
-                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None),
+                    "INSERT INTO export_invoice_purchase_details "
+                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no, supplier_invoice_qty, "
+                    "supplier_taxable_amount, supplier_cgst_amount, supplier_sgst_amount) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None,
+                     pd.get("supplier_invoice_qty") or None, pd.get("supplier_taxable_amount") or None,
+                     pd.get("supplier_cgst_amount") or None, pd.get("supplier_sgst_amount") or None),
                 )
 
     def delete(self, invoice_id: int) -> None:

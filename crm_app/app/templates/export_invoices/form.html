@@ -49,6 +49,10 @@
       <div class="form-row purchase-detail-row">
         <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
         <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
+        <div class="field"><label>Supplier invoice qty</label><input type="text" name="pd_supplier_invoice_qty[]" value="{{ pd.supplier_invoice_qty or '' }}"></div>
+        <div class="field"><label>Supplier taxable amount</label><input type="text" name="pd_supplier_taxable_amount[]" value="{{ pd.supplier_taxable_amount or '' }}"></div>
+        <div class="field"><label>Supplier CGST amount</label><input type="text" name="pd_supplier_cgst_amount[]" value="{{ pd.supplier_cgst_amount or '' }}"></div>
+        <div class="field"><label>Supplier SGST amount</label><input type="text" name="pd_supplier_sgst_amount[]" value="{{ pd.supplier_sgst_amount or '' }}"></div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
       </div>
       {% endfor %}
@@ -91,6 +95,11 @@
         <input type="number" step="0.0001" id="exchange_rate" name="exchange_rate" value="{{ data.exchange_rate | default('', true) }}" {{ '' if can_edit_rate else 'disabled' }}>
         {% if not can_edit_rate %}<div class="text-sm text-soft">Set already — only an admin can change it.</div>{% endif %}
       </div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="c_no">C No. <span class="text-soft text-sm">(annexure header)</span></label><input type="text" id="c_no" name="c_no" value="{{ data.c_no | default('', true) }}"></div>
+      <div class="field"><label for="c_date">C date</label><input type="date" id="c_date" name="c_date" value="{{ (data.c_date | default('', true))[:10] }}"></div>
+      <div class="field"><label for="shipping_bill_no">Shipping bill no.</label><input type="text" id="shipping_bill_no" name="shipping_bill_no" value="{{ data.shipping_bill_no | default('', true) }}"></div>
     </div>
     <div class="field">
       <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — prefills the Permit Details section below from Our Company permits)</span></label>
@@ -200,7 +209,7 @@
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight</th><th></th></tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight</th><th>Excise seal no.</th><th>Plts</th><th>Boxes</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
           {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
@@ -212,6 +221,9 @@
             <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
             <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
             <td><input type="text" name="cd_tare_weight[]" value="{{ cd.tare_weight or '' }}"></td>
+            <td><input type="text" name="cd_excise_seal_no[]" value="{{ cd.excise_seal_no or '' }}"></td>
+            <td><input type="text" name="cd_plts[]" value="{{ cd.plts or '' }}"></td>
+            <td><input type="text" name="cd_boxes[]" value="{{ cd.boxes or '' }}"></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
@@ -353,6 +365,10 @@
       <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="max-width:180px;"><label for="total_net_weight_kg">Total net weight (KG)</label><input type="number" step="0.01" id="total_net_weight_kg" name="total_net_weight_kg" value="{{ data.total_net_weight_kg | default('', true) }}"></div>
+      <div class="field" style="max-width:180px;"><label for="total_gross_weight_kg">Total gross weight (KG)</label><input type="number" step="0.01" id="total_gross_weight_kg" name="total_gross_weight_kg" value="{{ data.total_gross_weight_kg | default('', true) }}"></div>
     </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
@@ -614,6 +630,10 @@
     div.innerHTML = `
       <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]"></div>
       <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]"></div>
+      <div class="field"><label>Supplier invoice qty</label><input type="text" name="pd_supplier_invoice_qty[]"></div>
+      <div class="field"><label>Supplier taxable amount</label><input type="text" name="pd_supplier_taxable_amount[]"></div>
+      <div class="field"><label>Supplier CGST amount</label><input type="text" name="pd_supplier_cgst_amount[]"></div>
+      <div class="field"><label>Supplier SGST amount</label><input type="text" name="pd_supplier_sgst_amount[]"></div>
       <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
     wrap.appendChild(div);
   });
@@ -632,6 +652,9 @@
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
       <td><input type="text" name="cd_vehicle_no[]"></td>
       <td><input type="text" name="cd_tare_weight[]"></td>
+      <td><input type="text" name="cd_excise_seal_no[]"></td>
+      <td><input type="text" name="cd_plts[]"></td>
+      <td><input type="text" name="cd_boxes[]"></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
