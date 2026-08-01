@@ -386,6 +386,7 @@ class OurCompany:
     pan_no: Optional[str]
     iec: Optional[str]
     bin: Optional[str] = None
+    branch_code: Optional[str] = None  # IEC branch code, printed on the Export Invoice annexure (section 2B)
     address: Optional[str] = None
     logo_path: Optional[str] = None  # relative to static/, shown in the app sidebar and on generated documents
     self_sealing_declaration: Optional[str] = None  # printed on the Export Invoice's declaration block
@@ -406,6 +407,7 @@ class OurCompany:
             pan_no=row["pan_no"],
             iec=row["iec"],
             bin=row["bin"] if "bin" in row.keys() else None,
+            branch_code=row["branch_code"] if "branch_code" in row.keys() else None,
             address=row["address"] if "address" in row.keys() else None,
             logo_path=row["logo_path"] if "logo_path" in row.keys() else None,
             self_sealing_declaration=row["self_sealing_declaration"] if "self_sealing_declaration" in row.keys() else None,
@@ -1495,6 +1497,11 @@ class ExportInvoice:
     manufacturer_address: Optional[str] = None
     stuffing_location: Optional[str] = None  # "Stuff At" address, printed on the export packing list
     remarks: Optional[str] = None
+    total_net_weight_kg: Optional[float] = None  # front-page weight totals, typed not summed from containers
+    total_gross_weight_kg: Optional[float] = None
+    c_no: Optional[str] = None  # annexure header row above the examination report title
+    c_date: Optional[str] = None
+    shipping_bill_no: Optional[str] = None
     status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1502,8 +1509,8 @@ class ExportInvoice:
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight}]
-    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight, excise_seal_no, plts, boxes}]
+    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_invoice_qty, supplier_taxable_amount, supplier_cgst_amount, supplier_sgst_amount}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -1568,6 +1575,11 @@ class ExportInvoice:
             manufacturer_address=g("manufacturer_address"),
             stuffing_location=g("stuffing_location"),
             remarks=g("remarks"),
+            total_net_weight_kg=g("total_net_weight_kg"),
+            total_gross_weight_kg=g("total_gross_weight_kg"),
+            c_no=g("c_no"),
+            c_date=g("c_date"),
+            shipping_bill_no=g("shipping_bill_no"),
             created_by=row["created_by"],
             created_at=g("created_at"),
             updated_at=g("updated_at"),
@@ -1760,6 +1772,25 @@ class ExportPackingList:
     @property
     def container_count(self) -> int:
         return len({i.container_sr_no for i in self.items})
+
+    @property
+    def container_totals(self) -> dict:
+        """container_sr_no -> {net_weight_kg, gross_weight_kg, pallets,
+        quantity_boxes} summed across every goods line loaded into that
+        physical container. Lets the Export Invoice's own 11B table show
+        each container's actual weight/pallets/boxes (from what was typed
+        into the packing list's container split) instead of separately
+        hand-typed figures."""
+        totals: dict = {}
+        for i in self.items:
+            t = totals.setdefault(i.container_sr_no, {
+                "net_weight_kg": 0.0, "gross_weight_kg": 0.0, "pallets": 0.0, "quantity_boxes": 0.0,
+            })
+            t["net_weight_kg"] += i.net_weight_kg or 0
+            t["gross_weight_kg"] += i.gross_weight_kg or 0
+            t["pallets"] += i.pallets or 0
+            t["quantity_boxes"] += i.quantity_boxes or 0
+        return totals
 
     @property
     def printed_containers(self) -> List[dict]:

@@ -41,6 +41,7 @@ _HEADER_FIELDS = [
     "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
+    "total_net_weight_kg", "total_gross_weight_kg", "c_no", "c_date", "shipping_bill_no",
 ]
 
 
@@ -101,9 +102,11 @@ def _extract_container_details(form) -> list:
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
     tares = form.getlist("cd_tare_weight[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares))
-    tares = form.getlist("cd_tare_weight[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares))
+    excise_seals = form.getlist("cd_excise_seal_no[]")
+    plts = form.getlist("cd_plts[]")
+    boxes = form.getlist("cd_boxes[]")
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares),
+            len(excise_seals), len(plts), len(boxes))
     rows = []
     for i in range(n):
         rows.append({
@@ -112,6 +115,9 @@ def _extract_container_details(form) -> list:
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
             "tare_weight": tares[i] if i < len(tares) else "",
+            "excise_seal_no": excise_seals[i] if i < len(excise_seals) else "",
+            "plts": plts[i] if i < len(plts) else "",
+            "boxes": boxes[i] if i < len(boxes) else "",
         })
     return rows
 
@@ -119,11 +125,20 @@ def _extract_container_details(form) -> list:
 def _extract_purchase_details(form) -> list:
     gstins = form.getlist("pd_supplier_gstin[]")
     inv_nos = form.getlist("pd_supplier_invoice_no[]")
+    qtys = form.getlist("pd_supplier_invoice_qty[]")
+    taxables = form.getlist("pd_supplier_taxable_amount[]")
+    cgsts = form.getlist("pd_supplier_cgst_amount[]")
+    sgsts = form.getlist("pd_supplier_sgst_amount[]")
+    n = max(len(gstins), len(inv_nos), len(qtys), len(taxables), len(cgsts), len(sgsts))
     rows = []
-    for i in range(max(len(gstins), len(inv_nos))):
+    for i in range(n):
         rows.append({
             "supplier_gstin": gstins[i] if i < len(gstins) else "",
             "supplier_invoice_no": inv_nos[i] if i < len(inv_nos) else "",
+            "supplier_invoice_qty": qtys[i] if i < len(qtys) else "",
+            "supplier_taxable_amount": taxables[i] if i < len(taxables) else "",
+            "supplier_cgst_amount": cgsts[i] if i < len(cgsts) else "",
+            "supplier_sgst_amount": sgsts[i] if i < len(sgsts) else "",
         })
     return rows
 
@@ -311,7 +326,8 @@ def view_export_invoice(export_invoice_id):
     except NotFoundError:
         abort(404)
     company = container.company_service.get(g.user.company_id)
-    return render_template("export_invoices/print.html", invoice=invoice, company=company)
+    packing_list = container.export_packing_list_service.get_for_invoice(export_invoice_id, g.user.company_id)
+    return render_template("export_invoices/print.html", invoice=invoice, company=company, packing_list=packing_list)
 
 
 @export_invoices_bp.route("/<int:export_invoice_id>/edit", methods=["GET", "POST"])
@@ -405,6 +421,12 @@ def view_export_invoice_version(export_invoice_id, version_number):
     except NotFoundError:
         abort(404)
     company = container.company_service.get(g.user.company_id)
+    # The packing list isn't versioned separately (it's regenerated from the
+    # invoice's current container split), so a historical invoice view still
+    # shows whatever the packing list currently is - same as the front
+    # sheet's other non-versioned live lookups (e.g. company profile above).
+    packing_list = container.export_packing_list_service.get_for_invoice(export_invoice_id, g.user.company_id)
     return render_template(
-        "export_invoices/print.html", invoice=historical_invoice, company=company, historical_version=version,
+        "export_invoices/print.html", invoice=historical_invoice, company=company,
+        historical_version=version, packing_list=packing_list,
     )

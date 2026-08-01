@@ -64,6 +64,11 @@ class TestCompanySave:
         assert profile.company_name == "Acme Exports"
         assert profile.gstin == "24AAAAA0000A1Z5"
 
+    def test_branch_code_round_trip(self, container, seed):
+        save_company(container, seed.admin, branch_code="0007")
+        profile = container.company_service.get(seed.company_id)
+        assert profile.branch_code == "0007"
+
     def test_saved_child_lists_round_trip(self, container, seed):
         save_company(container, seed.admin)
         profile = container.company_service.get(seed.company_id)

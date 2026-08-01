@@ -738,7 +738,7 @@ class CompanyService:
     def save(self, current_user: User, company_name: str, address: str, gstin: str, pan_no: str, iec: str,
               bin_no: str, contact_details: list, contact_persons: list, bank_details: list, lut_details: list,
               rcmc_details: list, logo_file=None, remove_logo: bool = False,
-              self_sealing_declaration: str = "") -> None:
+              self_sealing_declaration: str = "", branch_code: str = "") -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can edit our company's profile.")
         if not company_name or not company_name.strip():
@@ -782,6 +782,7 @@ class CompanyService:
         our_company_id = self.company_repo.upsert(
             current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no,
             (self_sealing_declaration or "").strip() or None,
+            (branch_code or "").strip() or None,
         )
         self.company_repo.replace_contact_details(our_company_id, valid_details)
         self.company_repo.replace_contact_persons(our_company_id, valid_persons)
@@ -3105,6 +3106,11 @@ class ExportInvoiceService:
             manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
             stuffing_location=(fields.get("stuffing_location") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
+            total_net_weight_kg=_float("total_net_weight_kg", None),
+            total_gross_weight_kg=_float("total_gross_weight_kg", None),
+            c_no=(fields.get("c_no") or "").strip() or None,
+            c_date=(fields.get("c_date") or "").strip() or None,
+            shipping_bill_no=(fields.get("shipping_bill_no") or "").strip() or None,
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
@@ -3148,13 +3154,15 @@ class ExportInvoiceService:
 
     @staticmethod
     def _clean_container_details(raw) -> List[dict]:
-        # gross_weight/net_weight have no form field (unlike tare_weight) -
-        # they default to None here and update() carries the stored values
-        # forward by row position so an edit doesn't wipe them.
+        # gross_weight/net_weight have no form field (unlike tare_weight and
+        # the other typed fields below) - they default to None here and
+        # update() carries the stored values forward by row position so an
+        # edit doesn't wipe them.
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight")}
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight",
+                                "excise_seal_no", "plts", "boxes")}
             values["gross_weight"] = None
             values["net_weight"] = None
             if any(values.values()):
@@ -3165,11 +3173,11 @@ class ExportInvoiceService:
     def _clean_purchase_details(raw) -> List[dict]:
         rows = []
         for r in raw or []:
-            gstin = (r.get("supplier_gstin") or "").strip()
-            inv_no = (r.get("supplier_invoice_no") or "").strip()
-            if not gstin and not inv_no:
-                continue
-            rows.append({"supplier_gstin": gstin or None, "supplier_invoice_no": inv_no or None})
+            values = {k: (r.get(k) or "").strip() or None
+                      for k in ("supplier_gstin", "supplier_invoice_no", "supplier_invoice_qty",
+                                "supplier_taxable_amount", "supplier_cgst_amount", "supplier_sgst_amount")}
+            if any(values.values()):
+                rows.append(values)
         return rows
 
     # ---- shipping bill PDF storage --------------------------------------------------

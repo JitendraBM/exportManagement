@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS our_company (
     pan_no          TEXT,
     iec             TEXT,
     bin             TEXT,
+    branch_code     TEXT,       -- IEC branch code, printed on the Export Invoice annexure (section 2B)
     logo_path       TEXT,       -- company logo, relative to static/ (shown in the app sidebar and on generated documents)
     self_sealing_declaration TEXT,  -- standard self-sealing declaration text, printed on the Export Invoice
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -776,6 +777,11 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     manufacturer_address        TEXT,
     stuffing_location           TEXT,          -- "Stuff At" address, printed on the export packing list
     remarks                     TEXT,
+    total_net_weight_kg         REAL,          -- invoice-level totals printed on the front page (typed, not summed from containers)
+    total_gross_weight_kg       REAL,
+    c_no                        TEXT,          -- annexure header: "C No." / "Date" / "Shipping Bill No" row above the examination report title
+    c_date                      TEXT,
+    shipping_bill_no            TEXT,
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -834,17 +840,24 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     vehicle_no            TEXT,
     tare_weight           TEXT,
     gross_weight          TEXT,
-    net_weight            TEXT
+    net_weight            TEXT,
+    excise_seal_no        TEXT,
+    plts                  TEXT,
+    boxes                 TEXT
 );
 
 -- Purchase Details: supplier GSTIN + invoice-no rows imported from the
 -- exemption purchases in the chain, editable, and spilling past 4 in print.
 CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    export_invoice_id     INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
-    sr_no                 INTEGER NOT NULL,
-    supplier_gstin        TEXT,
-    supplier_invoice_no   TEXT
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                    INTEGER NOT NULL,
+    supplier_gstin           TEXT,
+    supplier_invoice_no      TEXT,
+    supplier_invoice_qty     TEXT,
+    supplier_taxable_amount  TEXT,
+    supplier_cgst_amount     TEXT,
+    supplier_sgst_amount     TEXT
 );
 
 -- ============================================================

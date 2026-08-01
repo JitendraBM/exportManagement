@@ -385,10 +385,43 @@ class TestExportChildLists:
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.purchase_details[0]["supplier_invoice_no"] == "GSTT/4987"
 
+    def test_purchase_details_qty_and_amount_columns_round_trip(self, container, seed):
+        inv = make_export(container, seed, purchase_details=[
+            {"supplier_gstin": "24ABVFA1170D1ZO", "supplier_invoice_no": "GSTT/4987",
+             "supplier_invoice_qty": "9377", "supplier_taxable_amount": "13146.80",
+             "supplier_cgst_amount": "0", "supplier_sgst_amount": "0"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        pd = got.purchase_details[0]
+        assert pd["supplier_invoice_qty"] == "9377"
+        assert pd["supplier_taxable_amount"] == "13146.80"
+        assert pd["supplier_cgst_amount"] == "0"
+        assert pd["supplier_sgst_amount"] == "0"
+
+    def test_11b_excise_seal_plts_boxes_round_trip(self, container, seed):
+        inv = make_export(container, seed, container_details_list=[
+            {"container_no": "BLJU2253726", "excise_seal_no": "WIND02432727", "plts": "24", "boxes": "1919"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        cd = got.container_details[0]
+        assert cd["excise_seal_no"] == "WIND02432727"
+        assert cd["plts"] == "24"
+        assert cd["boxes"] == "1919"
+
     def test_booking_no_round_trip(self, container, seed):
         inv = make_export(container, seed, booking_no="BKG/12345")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.booking_no == "BKG/12345"
+
+    def test_weight_totals_and_c_no_shipping_bill_round_trip(self, container, seed):
+        inv = make_export(
+            container, seed, total_net_weight_kg="244019.00", total_gross_weight_kg="248099.00",
+            c_no="C-100", c_date="2026-02-20", shipping_bill_no="SB-9001",
+        )
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.total_net_weight_kg == 244019.00
+        assert got.total_gross_weight_kg == 248099.00
+        assert got.c_no == "C-100"
+        assert got.c_date == "2026-02-20"
+        assert got.shipping_bill_no == "SB-9001"
 
 
 # ==========================================================================
