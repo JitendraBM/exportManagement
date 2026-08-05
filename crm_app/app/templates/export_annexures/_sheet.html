@@ -274,7 +274,7 @@
     <tr>
       <td class="eia-sign" rowspan="2">
         <span class="eia-lbl">Self Sealing Declaration</span><br>
-        {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '')|replace('\n','<br>')|safe }}
+        {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n','<br>')|safe }}
       </td>
       <td style="text-align:right; vertical-align:top;">
         <div class="eia-lbl">For {{ company.company_name|upper if company else '' }}</div>
