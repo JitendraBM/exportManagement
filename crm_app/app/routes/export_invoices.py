@@ -42,6 +42,7 @@ _HEADER_FIELDS = [
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
     "total_net_weight_kg", "total_gross_weight_kg", "c_no", "c_date", "shipping_bill_no",
+    "shipping_bill_date", "stuffing_start_time", "stuffing_completion_time",
 ]
 
 
@@ -326,8 +327,7 @@ def view_export_invoice(export_invoice_id):
     except NotFoundError:
         abort(404)
     company = container.company_service.get(g.user.company_id)
-    packing_list = container.export_packing_list_service.get_for_invoice(export_invoice_id, g.user.company_id)
-    return render_template("export_invoices/print.html", invoice=invoice, company=company, packing_list=packing_list)
+    return render_template("export_invoices/print.html", invoice=invoice, company=company)
 
 
 @export_invoices_bp.route("/<int:export_invoice_id>/edit", methods=["GET", "POST"])
@@ -421,12 +421,7 @@ def view_export_invoice_version(export_invoice_id, version_number):
     except NotFoundError:
         abort(404)
     company = container.company_service.get(g.user.company_id)
-    # The packing list isn't versioned separately (it's regenerated from the
-    # invoice's current container split), so a historical invoice view still
-    # shows whatever the packing list currently is - same as the front
-    # sheet's other non-versioned live lookups (e.g. company profile above).
-    packing_list = container.export_packing_list_service.get_for_invoice(export_invoice_id, g.user.company_id)
     return render_template(
         "export_invoices/print.html", invoice=historical_invoice, company=company,
-        historical_version=version, packing_list=packing_list,
+        historical_version=version,
     )

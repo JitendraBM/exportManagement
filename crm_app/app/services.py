@@ -3111,6 +3111,9 @@ class ExportInvoiceService:
             c_no=(fields.get("c_no") or "").strip() or None,
             c_date=(fields.get("c_date") or "").strip() or None,
             shipping_bill_no=(fields.get("shipping_bill_no") or "").strip() or None,
+            shipping_bill_date=(fields.get("shipping_bill_date") or "").strip() or None,
+            stuffing_start_time=(fields.get("stuffing_start_time") or "").strip() or None,
+            stuffing_completion_time=(fields.get("stuffing_completion_time") or "").strip() or None,
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)

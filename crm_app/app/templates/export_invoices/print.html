@@ -10,7 +10,6 @@
       @page { size: A4 portrait; margin: 6mm; }
       body { background: #fff !important; }
       .no-print { display: none !important; }
-      .ei-annexure { page-break-before: always; }
     }
   </style>
 </head>
@@ -30,6 +29,7 @@
     <div class="flex gap-8">
       {% if not historical_version %}
       <a href="{{ url_for('export_packing_lists.view_for_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Export packing list</a>
+      <a href="{{ url_for('export_annexures.view_annexure', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📋 Annexure-C</a>
       {% if invoice.shipping_bill_pdf_path %}
       <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank" class="btn btn-ghost btn-sm">📎 Shipping bill</a>
       {% endif %}
@@ -56,7 +56,6 @@
   {% endwith %}
 
   {% include 'export_invoices/_sheet.html' %}
-  {% include 'export_invoices/_annexure.html' %}
   {% include '_page_filler.html' %}
 
   <script>

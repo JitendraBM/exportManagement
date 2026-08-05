@@ -14,6 +14,7 @@ just "how do I represent myself", not "how do I persist myself".
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, List
 
 
@@ -1500,6 +1501,9 @@ class ExportInvoice:
     c_no: Optional[str] = None  # annexure header row above the examination report title
     c_date: Optional[str] = None
     shipping_bill_no: Optional[str] = None
+    shipping_bill_date: Optional[str] = None  # Annexure-C header: Shipping Bill Date
+    stuffing_start_time: Optional[str] = None  # Annexure-C section 05: Time Of Stuffing
+    stuffing_completion_time: Optional[str] = None
     status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1578,6 +1582,9 @@ class ExportInvoice:
             c_no=g("c_no"),
             c_date=g("c_date"),
             shipping_bill_no=g("shipping_bill_no"),
+            shipping_bill_date=g("shipping_bill_date"),
+            stuffing_start_time=g("stuffing_start_time"),
+            stuffing_completion_time=g("stuffing_completion_time"),
             created_by=row["created_by"],
             created_at=g("created_at"),
             updated_at=g("updated_at"),
@@ -1631,6 +1638,24 @@ class ExportInvoice:
     @property
     def loading_type_label(self) -> str:
         return dict(EXPORT_LOADING_TYPES).get(self.loading_type, self.loading_type)
+
+    @property
+    def stuffing_time_taken(self) -> Optional[str]:
+        """Annexure-C section 05's 'Time Taken For Stuffing' - the difference
+        between the typed start/completion times, computed rather than
+        stored so the two can never drift apart. None (printed as '-') if
+        either side is missing or not a parseable HH:MM."""
+        if not self.stuffing_start_time or not self.stuffing_completion_time:
+            return None
+        try:
+            start = datetime.strptime(self.stuffing_start_time, "%H:%M")
+            end = datetime.strptime(self.stuffing_completion_time, "%H:%M")
+        except ValueError:
+            return None
+        delta_minutes = int((end - start).total_seconds() // 60)
+        if delta_minutes < 0:
+            delta_minutes += 24 * 60
+        return f"{delta_minutes // 60:02d}:{delta_minutes % 60:02d}"
 
     @property
     def total_containers(self) -> int:
@@ -1798,6 +1823,33 @@ class ExportPackingList:
         for c in containers:
             c["rowspan"] = len(c["rows"])
         return containers
+
+    @property
+    def container_rows(self) -> List[dict]:
+        """One row per physical container - container_no/seal_no/rfid_seal_no
+        (snapshotted identity, from that container's first item) alongside
+        its pallets/quantity_boxes/gross_weight_kg (summed across every goods
+        line loaded into it, via `container_totals`). Feeds the Export
+        Invoice's standalone Annexure-C container table (section 11), whose
+        columns are exactly these six."""
+        totals = self.container_totals
+        rows: List[dict] = []
+        seen = set()
+        for item in self.items:
+            if item.container_sr_no in seen:
+                continue
+            seen.add(item.container_sr_no)
+            t = totals.get(item.container_sr_no, {})
+            rows.append({
+                "sr_no": item.container_sr_no,
+                "container_no": item.container_no,
+                "seal_no": item.seal_no,
+                "rfid_seal_no": item.rfid_seal_no,
+                "pallets": t.get("pallets", 0.0),
+                "quantity_boxes": t.get("quantity_boxes", 0.0),
+                "gross_weight_kg": t.get("gross_weight_kg", 0.0),
+            })
+        return rows
 
 
 @dataclass

@@ -781,6 +781,9 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     c_no                        TEXT,          -- annexure header: "C No." / "Date" / "Shipping Bill No" row above the examination report title
     c_date                      TEXT,
     shipping_bill_no            TEXT,
+    shipping_bill_date          TEXT,          -- Annexure-C header: Shipping Bill Date
+    stuffing_start_time         TEXT,          -- Annexure-C section 05: Time Of Stuffing
+    stuffing_completion_time    TEXT,
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),

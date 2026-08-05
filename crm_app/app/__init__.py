@@ -236,6 +236,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.purchase_invoices import purchase_invoices_bp
     from app.routes.export_invoices import export_invoices_bp
     from app.routes.export_packing_lists import export_packing_lists_bp
+    from app.routes.export_annexures import export_annexures_bp
     from app.routes.packing_lists import packing_lists_bp
     from app.routes.profile import profile_bp
     from app.routes.backup import backup_bp
@@ -261,6 +262,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(purchase_invoices_bp)
     app.register_blueprint(export_invoices_bp)
     app.register_blueprint(export_packing_lists_bp)
+    app.register_blueprint(export_annexures_bp)
     app.register_blueprint(packing_lists_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(backup_bp)

@@ -100,6 +100,7 @@
       <div class="field"><label for="c_no">C No. <span class="text-soft text-sm">(annexure header)</span></label><input type="text" id="c_no" name="c_no" value="{{ data.c_no | default('', true) }}"></div>
       <div class="field"><label for="c_date">C date</label><input type="date" id="c_date" name="c_date" value="{{ (data.c_date | default('', true))[:10] }}"></div>
       <div class="field"><label for="shipping_bill_no">Shipping bill no.</label><input type="text" id="shipping_bill_no" name="shipping_bill_no" value="{{ data.shipping_bill_no | default('', true) }}"></div>
+      <div class="field"><label for="shipping_bill_date">Shipping bill date</label><input type="date" id="shipping_bill_date" name="shipping_bill_date" value="{{ (data.shipping_bill_date | default('', true))[:10] }}"></div>
     </div>
     <div class="field">
       <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — prefills the Permit Details section below from Our Company permits)</span></label>
@@ -127,6 +128,10 @@
       <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
     </div>
     <div class="form-row">
+      <div class="field"><label for="stuffing_start_time">Time of stuffing — starting <span class="text-soft text-sm">(annexure-C)</span></label><input type="time" id="stuffing_start_time" name="stuffing_start_time" value="{{ data.stuffing_start_time | default('', true) }}"></div>
+      <div class="field"><label for="stuffing_completion_time">Time of stuffing — completion</label><input type="time" id="stuffing_completion_time" name="stuffing_completion_time" value="{{ data.stuffing_completion_time | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
       <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
     </div>
     <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
@@ -140,7 +145,7 @@
       <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
     </div>
     <div class="field">
-      <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list)</span></label>
+      <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list and as the Annexure-C's Factory/Place of Stuffing)</span></label>
       <textarea id="stuffing_location" name="stuffing_location" rows="2">{{ data.stuffing_location | default('', true) }}</textarea>
     </div>
   </div>
