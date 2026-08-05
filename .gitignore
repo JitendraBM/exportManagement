@@ -5,5 +5,7 @@ crm_app/instance/*.db
 crm_app/instance/backups/
 crm_app/.venv/
 crm_app/venv/
+crm_app/tests_venv/
 crm_app/app/static/uploads/
 logs/
+crm_app/discord bot/

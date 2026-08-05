@@ -246,6 +246,10 @@
       <td class="ei-val ei-right">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td>
     </tr>
     <tr>
+      {# "Supply meant for" is either With Payment of IGST (the summed
+         per-product tax) or, under LUT, zero-rated - igst_amount_inr
+         already resolves the amount to 0, but a zero-rated supply prints
+         as NIL rather than 0.00 (same as the totals block below). #}
       <td class="ei-charge-label">IGST</td>
       <td class="ei-val ei-right">{{ inr(invoice.igst_amount_inr) if invoice.tax_mode != 'lut' else 'NIL' }}</td>
     </tr>

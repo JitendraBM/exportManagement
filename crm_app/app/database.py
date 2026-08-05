@@ -1081,7 +1081,12 @@ class Database:
             # container table). Any server whose export_invoices table was
             # first created before schema.sql grew these columns never got
             # them - CREATE TABLE IF NOT EXISTS is a no-op on an existing
-            # table, so this closes that gap explicitly.
+            # table, so this closes that gap explicitly. Once the columns are
+            # in place, any rows still sitting in the short-lived v21
+            # export_invoice_buyer_orders table are folded into them (first
+            # order per invoice wins, since one EI now carries a single buyer
+            # order) and that table is dropped - separately guarded on the
+            # table's existence so this is safe to re-run.
             existing = {r["name"] for r in conn.execute("PRAGMA table_info(export_invoices)")}
             if existing:
                 if "buyer_order_no" not in existing:
@@ -1090,6 +1095,25 @@ class Database:
                     conn.execute("ALTER TABLE export_invoices ADD COLUMN buyer_order_date TEXT")
                 if "booking_no" not in existing:
                     conn.execute("ALTER TABLE export_invoices ADD COLUMN booking_no TEXT")
+
+                old_table = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='export_invoice_buyer_orders'"
+                ).fetchone()
+                if old_table:
+                    rows = conn.execute(
+                        "SELECT export_invoice_id, order_no, order_date FROM export_invoice_buyer_orders "
+                        "ORDER BY export_invoice_id, sr_no"
+                    ).fetchall()
+                    seen = set()
+                    for r in rows:
+                        if r["export_invoice_id"] in seen:
+                            continue
+                        seen.add(r["export_invoice_id"])
+                        conn.execute(
+                            "UPDATE export_invoices SET buyer_order_no = ?, buyer_order_date = ? WHERE id = ?",
+                            (r["order_no"], r["order_date"], r["export_invoice_id"]),
+                        )
+                    conn.execute("DROP TABLE export_invoice_buyer_orders")
 
             # v27: export_invoice_container_details gains tare_weight - the
             # 11B container table's Tare Weight column was print-only

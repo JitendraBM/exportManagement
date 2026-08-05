@@ -110,7 +110,7 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
-        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo)
+        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo, self.design_repo)
         self.permit_service = PermitService(
             self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,

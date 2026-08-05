@@ -433,6 +433,9 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .breadcrumb-trail { font-size: .84rem; color: var(--color-text-soft); margin-bottom: 16px; }
 .breadcrumb-trail .crumb-sep { margin: 0 6px; }
 
+.catalog-search { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.catalog-search input[type="text"] { max-width: 320px; flex: 1 1 auto; }
+
 .folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
 .folder-tile {
   border: 1px solid var(--color-line);

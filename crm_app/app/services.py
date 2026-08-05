@@ -1155,6 +1155,20 @@ class ProductService:
         return (self.category_repo.list_children(company_id, category_id),
                 self.product_repo.list_in_category(company_id, category_id))
 
+    def search_catalog(self, company_id: int, query: str) -> dict:
+        """Products and designs matching `query` by name, flattened across
+        every category/sub category - used by the search bar on the
+        Products and Inventory catalog roots instead of folder navigation.
+        Blank query returns nothing (the caller falls back to the normal
+        browse view)."""
+        query = (query or "").strip()
+        if not query:
+            return {"products": [], "designs": []}
+        return {
+            "products": self.product_repo.search(company_id, query),
+            "designs": self.design_repo.search(company_id, query),
+        }
+
     def get_product(self, product_id: int, company_id: int) -> Product:
         product = self.product_repo.get_by_id(product_id)
         if not product or product.company_id != company_id:
@@ -1489,9 +1503,11 @@ class InventoryService:
     currently equals the purchased totals; the shape below already leaves
     room to subtract sales once they exist."""
 
-    def __init__(self, product_service: "ProductService", packing_list_repo: PackingListRepository):
+    def __init__(self, product_service: "ProductService", packing_list_repo: PackingListRepository,
+                 design_repo: DesignRepository):
         self.products = product_service
         self.packing_list_repo = packing_list_repo
+        self.design_repo = design_repo
 
     def _stock_from_bought(self, bought: dict) -> dict:
         """Turn a {boxes, pcs, quantity} purchased total into a stock figure.
@@ -1514,6 +1530,22 @@ class InventoryService:
         return self.stock_by_design(company_id).get(
             design_id, {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None}
         )
+
+    def in_stock_designs(self, company_id: int) -> List[dict]:
+        """Every design with nonzero current stock, newest-purchase concerns
+        aside - just design + product name + stock, for the "in stock right
+        now" summary at the top of the Inventory catalog root. One batched
+        design lookup, no per-design queries."""
+        totals = self.packing_list_repo.bought_totals_by_design(company_id)
+        if not totals:
+            return []
+        rows = self.design_repo.list_by_ids_with_product(list(totals.keys()))
+        in_stock = []
+        for row in rows:
+            stock = self._stock_from_bought(totals.get(row["id"], {}))
+            if stock["boxes"] or stock["pcs"] or stock["quantity"]:
+                in_stock.append({**row, "stock": stock})
+        return in_stock
 
     def purchase_sale_history(self, company_id: int, design_id: int) -> List[dict]:
         """The design's Purchase/Sale history, newest first. Every row is a

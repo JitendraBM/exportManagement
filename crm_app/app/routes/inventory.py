@@ -13,7 +13,7 @@ from the purchase-order packing lists, so it's maintained through the
 Documents pipeline, not typed in here).
 """
 
-from flask import Blueprint, render_template, current_app, g, abort
+from flask import Blueprint, render_template, current_app, g, abort, request
 
 from app.exceptions import NotFoundError
 from app.utils import login_required
@@ -40,8 +40,18 @@ def list_inventory(category_id=None):
     except NotFoundError:
         abort(404)
     breadcrumb = products_service.category_breadcrumb(g.user.company_id, category_id)
+    in_stock = container.inventory_service.in_stock_designs(g.user.company_id) if category_id is None else []
+    query = request.args.get("q", "")
+    search_results = products_service.search_catalog(g.user.company_id, query)
+    if search_results["designs"]:
+        stock_by_design = container.inventory_service.stock_by_design(g.user.company_id)
+        for design in search_results["designs"]:
+            design["stock"] = stock_by_design.get(
+                design["id"], {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None}
+            )
     return render_template("inventory/list.html", categories=subcategories, products=products,
-                           current_category=current_category, breadcrumb=breadcrumb)
+                           current_category=current_category, breadcrumb=breadcrumb, in_stock=in_stock,
+                           query=query, search_results=search_results)
 
 
 # ============================================================
