@@ -308,20 +308,33 @@
     </tr>
   </table>
 
-  <!-- ============ PURCHASE DETAILS | LUT IGST DETAILS ============ -->
+  <!-- ============ PURCHASE DETAILS (0.1% GST) | LUT IGST DETAILS ============ -->
+  {% set pd_list = invoice.purchase_details %}
+  {% set pd_count = pd_list|length %}
+  {% set pd_rows = ((pd_count + 1) // 2) %}
+  {% set pd_rows = pd_rows if pd_rows >= 3 else 3 %}
   <table>
-    <colgroup><col style="width:14%"><col style="width:44%"><col style="width:42%"></colgroup>
+    <colgroup><col style="width:58%"><col style="width:42%"></colgroup>
     <tr class="ei-nest">
-      <td class="ei-lbl ei-mid" style="padding:1px 4px;">Purchase Details of 0.1% GST</td>
       <td>
         <table>
-          <colgroup><col style="width:42%"><col style="width:58%"></colgroup>
-          {% for pd in invoice.purchase_details %}
-          <tr><td class="ei-lbl">SUPPLIER GSTIN</td><td>{{ pd.supplier_gstin or '' }}</td></tr>
-          <tr><td class="ei-lbl">SUPPLIER INVOICE NO</td><td>{{ pd.supplier_invoice_no or '' }}</td></tr>
-          {% else %}
-          <tr><td class="ei-lbl">SUPPLIER GSTIN</td><td></td></tr>
-          <tr><td class="ei-lbl">SUPPLIER INVOICE NO</td><td></td></tr>
+          <colgroup><col style="width:25%"><col style="width:25%"><col style="width:25%"><col style="width:25%"></colgroup>
+          <tr><td colspan="4" class="ei-lbl ei-c">Purchase Details of  0.1% GST</td></tr>
+          <tr>
+            <td class="ei-lbl ei-c">SUPPLIER GSTIN</td>
+            <td class="ei-lbl ei-c">INVOICE NO</td>
+            <td class="ei-lbl ei-c">SUPPLIER GSTIN</td>
+            <td class="ei-lbl ei-c">INVOICE NO</td>
+          </tr>
+          {% for i in range(pd_rows) %}
+          {% set pd_l = pd_list[i * 2] if i * 2 < pd_count else None %}
+          {% set pd_r = pd_list[i * 2 + 1] if i * 2 + 1 < pd_count else None %}
+          <tr>
+            <td>{{ pd_l.supplier_gstin or '' if pd_l else '' }}</td>
+            <td>{{ pd_l.supplier_invoice_no or '' if pd_l else '' }}</td>
+            <td>{{ pd_r.supplier_gstin or '' if pd_r else '' }}</td>
+            <td>{{ pd_r.supplier_invoice_no or '' if pd_r else '' }}</td>
+          </tr>
           {% endfor %}
         </table>
       </td>
