@@ -272,24 +272,24 @@
   <table>
     <colgroup><col style="width:60%"><col style="width:40%"></colgroup>
     <tr>
-      <td class="eia-sign" rowspan="2">
+      <td class="eia-sign">
         <span class="eia-lbl">Self Sealing Declaration</span><br>
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n','<br>')|safe }}
       </td>
-      <td style="text-align:right; vertical-align:top;">
-        <div class="eia-lbl">For {{ company.company_name|upper if company else '' }}</div>
-      </td>
-    </tr>
-    <tr>
-      <td style="text-align:right; vertical-align:bottom;">
-        <div class="eia-lbl">Authorised Signatury</div>
-        {% if invoice.authorised_person_name %}
-        <div>
-          {{ invoice.authorised_person_name }}
-          {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif -%}
-          {%- if company %} of {{ company.company_name|upper }}{% endif -%}
+      <td class="eia-sign" style="text-align:right; padding:0;">
+        <div style="display:flex; flex-direction:column; justify-content:space-between; height:100%; padding:2px 4px;">
+          <div class="eia-lbl">For {{ company.company_name|upper if company else '' }}</div>
+          <div>
+            <div class="eia-lbl">Authorised Signatury</div>
+            {% if invoice.authorised_person_name %}
+            <div>
+              {{ invoice.authorised_person_name }}
+              {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif -%}
+              {%- if company %} of {{ company.company_name|upper }}{% endif -%}
+            </div>
+            {% endif %}
+          </div>
         </div>
-        {% endif %}
       </td>
     </tr>
   </table>
