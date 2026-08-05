@@ -247,8 +247,13 @@
         <div class="epl-lbl">For {{ company.company_name|upper if company else '' }}</div>
         <div style="margin-top:34px;">
           <div class="epl-lbl">Authorised Signatury</div>
-          {% if invoice.authorised_person_designation %}<div>{{ invoice.authorised_person_designation }}</div>{% endif %}
-          {% if invoice.authorised_person_name %}<div class="epl-lbl">{{ invoice.authorised_person_name }}</div>{% endif %}
+          {% if invoice.authorised_person_name %}
+          <div class="epl-lbl">
+            {{ invoice.authorised_person_name }}
+            {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif %}
+            {%- if company %} of {{ company.company_name|upper }}{% endif %}
+          </div>
+          {% endif %}
         </div>
       </td>
     </tr>
