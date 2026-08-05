@@ -406,6 +406,26 @@ class TestExportPackingListRoutes:
         invoice = self._create_export_invoice(client, container, admin, company_id)
         assert client.get(f"/export-invoices/{invoice.id}/edit").status_code == 200
 
+    def test_pi_prefill_api_returns_only_the_pi_derived_fields(self, admin_ctx):
+        """The form's "Load from selected PIs" button applies this JSON in
+        place instead of reloading, so whatever the user typed in fields the
+        PIs have no say over survives a (re-)load."""
+        client, container, admin, company_id = admin_ctx
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-01-01",
+                    "buyer_order_no": "EXP/001", "sea_freight": "100"},
+            [{"product_name": "GVT 600X1200", "quantity_value": "144", "price_usd": "5.92"}])
+        resp = client.get(f"/export-invoices/api/prefill?proforma_invoice_ids={proforma.id}")
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["fields"]["consignee_name"] == "ROBUST INTERNATIONAL"
+        assert payload["fields"]["buyer_order_no"] == "EXP/001"
+        assert payload["fields"]["sea_freight"] == 100
+        assert [i["product_name"] for i in payload["items"]] == ["GVT 600X1200"]
+        # Fields no PI decides are simply absent - the form leaves them alone.
+        for key in ("export_invoice_number", "permission_no", "stuffing_location", "booking_no"):
+            assert key not in payload["fields"]
+
     def test_export_invoice_print_page_renders(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)

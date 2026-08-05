@@ -17,7 +17,7 @@ upload (same idiom as purchase_invoices.py).
 
 from datetime import date
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort, jsonify
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.services import pallet_alt_quantity
@@ -308,6 +308,50 @@ def new_export_invoice():
         purchase_details = built["purchase_details"]
     return _render_form(None, prefill, form_items, containers=containers,
                         container_details=container_details, purchase_details=purchase_details)
+
+
+@export_invoices_bp.route("/api/prefill")
+@login_required
+def export_invoice_prefill():
+    """The same prefill as `?proforma_invoice_ids=`, as JSON.
+
+    The form's "Load goods & details from selected PIs" button uses this
+    instead of reloading the page, so it can overwrite only the fields the
+    proforma invoices actually decide and leave everything else the user has
+    already typed (invoice number, permit details, containers, 11B, ...)
+    untouched."""
+    raw_ids = request.args.get("proforma_invoice_ids") or request.args.get("proforma_invoice_id") or ""
+    proforma_ids = [p for p in raw_ids.split(",") if p.strip()]
+    built = current_app.container.export_invoice_service.build_prefill_from_proformas(
+        proforma_ids, g.user.company_id
+    )
+    pallet_types_map, product_meta_map = _product_maps(built["items"])
+
+    def iso(value):
+        return str(value)[:10] if value else ""
+
+    items = []
+    for item in built["items"]:
+        try:
+            product_id = int(item["product_id"]) if item.get("product_id") else None
+        except (TypeError, ValueError):
+            product_id = None
+        meta = product_meta_map.get(product_id, {})
+        items.append({
+            **{k: ("" if v is None else v) for k, v in item.items()},
+            # The catalog extras the rendered rows carry as data- attributes,
+            # so a loaded row behaves like a freshly picked product.
+            "pallet_types": pallet_types_map.get(product_id, []),
+            "net_weight_kg": meta.get("net_weight_kg") or "",
+            "gross_weight_kg": meta.get("gross_weight_kg") or "",
+            "group_label": meta.get("group_label") or "",
+        })
+
+    fields = dict(built["fields"])
+    for key in ("buyer_order_date", "epcg_date"):
+        fields[key] = iso(fields.get(key))
+    fields = {k: ("" if v is None else v) for k, v in fields.items()}
+    return jsonify({"fields": fields, "items": items, "purchase_details": built["purchase_details"]})
 
 
 @export_invoices_bp.route("/<int:export_invoice_id>")

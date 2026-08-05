@@ -38,7 +38,7 @@
       <p class="hint">One export invoice covers a single buyer — ticking a PI narrows the list above to that same buyer's other PIs; untick all to pick a different buyer.</p>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load goods &amp; details from selected PIs</button>
-    <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. It reloads the page, so do it before typing anything you want to keep.</p>
+    <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. Only the fields that come from the PIs are replaced &mdash; anything else you've already typed (invoice no., permit details, containers) is kept, so re-loading after a wrong pick is safe.</p>
   </div>
 
   <div class="card">
@@ -116,7 +116,7 @@
       </div>
       <div class="field">
         <div class="flex-between">
-          <label for="exchange_rate" style="margin-bottom:0;">Exchange rate ({{ chosen_currency }} → INR)</label>
+          <label for="exchange_rate" style="margin-bottom:0;">Exchange rate (<span class="js-currency-label">{{ chosen_currency }}</span> → INR)</label>
           <a href="https://foservices.icegate.gov.in/#/services/viewExchangeRate" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Check exchange rate</a>
         </div>
         <input type="number" step="0.0001" id="exchange_rate" name="exchange_rate" value="{{ data.exchange_rate | default('', true) }}" {{ '' if can_edit_rate else 'disabled' }}>
@@ -340,9 +340,9 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price ({{ chosen_currency }})</th>
+            <th>Price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th>IGST %</th>
-            <th class="num">Total ({{ chosen_currency }})</th>
+            <th class="num">Total (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th></th>
           </tr>
         </thead>
@@ -387,11 +387,11 @@
     <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
     <div class="form-row" style="margin-top:14px;">
       {# Hidden (and forced to 0) while the nature of contract is FOB - see js-fob-charge below. #}
-      <div class="field js-fob-charge" style="max-width:150px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field js-fob-charge" style="max-width:150px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+      <div class="field js-fob-charge" style="max-width:150px;"><label for="sea_freight">Sea freight (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field js-fob-charge" style="max-width:150px;"><label for="insurance">Insurance (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
     <div class="form-row">
       <div class="field" style="max-width:180px;"><label for="total_net_weight_kg">Total net weight (KG)</label><input type="number" step="0.01" id="total_net_weight_kg" name="total_net_weight_kg" value="{{ data.total_net_weight_kg | default('', true) }}"></div>
@@ -640,10 +640,119 @@
   }
 
   // ---- reference-PI loader --------------------------------------------------
-  document.getElementById('load-from-pis-btn').addEventListener('click', () => {
+  // Loading fetches the prefill and applies it in place instead of reloading
+  // the page, so it only touches what the selected PIs actually decide: the
+  // goods lines, the imported supplier rows, and the header fields copied off
+  // the PI. Everything a PI has no say over - invoice number, permit details,
+  // containers, 11B, shipping bill, weights - keeps whatever was typed, so
+  // picking the wrong PI and re-loading costs only the PI-linked fields.
+
+  // Fields copied straight off the PIs: a value that comes back non-empty
+  // replaces what's there; an empty one leaves the field alone rather than
+  // wiping a typed value the PI simply has nothing to say about.
+  const PI_FIELDS = [
+    'lead_id', 'consignee_name', 'consignee_address', 'notify_name', 'notify_address',
+    'country_of_origin', 'country_of_destination', 'port_of_loading', 'port_of_discharge',
+    'final_destination', 'nature_of_contract', 'payment_terms', 'currency_code',
+    'buyer_order_no', 'buyer_order_date', 'remarks',
+    'bank_name', 'bank_account_number', 'bank_ifsc_code', 'bank_swift_code', 'bank_branch', 'bank_address',
+    'epcg_number', 'epcg_date',
+  ];
+  // Charges are summed across the selected PIs, so 0 is a real answer and is
+  // written back even though it is "empty".
+  const PI_CHARGE_FIELDS = ['sea_freight', 'insurance', 'certification', 'other_charges', 'discount_amount'];
+  // Company defaults the prefill carries along - only filled in when blank,
+  // never overwriting an edit.
+  const PI_DEFAULT_FIELDS = ['export_under', 'self_sealing_declaration'];
+
+  function setFieldValue(name, value) {
+    const el = document.querySelector(`[name="${name}"]`) || document.getElementById(name);
+    if (!el) return;
+    if (el.tagName === 'SELECT' && !Array.from(el.options).some((o) => o.value === value)) {
+      el.appendChild(new Option(value, value));
+    }
+    el.value = value;
+  }
+
+  function refreshCurrencyLabels() {
+    const code = document.getElementById('currency_code').value || '';
+    document.querySelectorAll('.js-currency-label').forEach((el) => { el.textContent = code; });
+  }
+  document.getElementById('currency_code').addEventListener('change', refreshCurrencyLabels);
+
+  function buildLoadedRow(item) {
+    const tr = rowTemplate();
+    tr.dataset.igst = (item.igst_percent ?? '') === '' ? '' : item.igst_percent;
+    tr.dataset.netWeight = item.net_weight_kg ?? '';
+    tr.dataset.grossWeight = item.gross_weight_kg ?? '';
+    tr.dataset.groupLabel = item.group_label || '';
+    tr.dataset.palletTypes = JSON.stringify(item.pallet_types || []);
+    tr.querySelector('.js-product-id').value = item.product_id || '';
+    tr.querySelector('.js-product-name').value = item.product_name || '';
+    tr.querySelector('.js-surface').value = item.surface || '';
+    tr.querySelector('.js-hsn').value = item.hsn_code || '';
+    tr.querySelector('.js-boxes').value = item.quantity_boxes || '';
+    tr.querySelector('.js-pallets').value = item.pallets || '';
+    tr.querySelector('.js-qty').value = item.quantity_value || '';
+    setUnitValue(tr.querySelector('.js-unit'), item.unit);
+    tr.querySelector('.js-price').value = item.price_usd || '';
+    return tr;
+  }
+
+  function applyPrefill(data) {
+    PI_FIELDS.forEach((name) => {
+      const value = data.fields[name];
+      if (value !== '' && value !== null && value !== undefined) setFieldValue(name, value);
+    });
+    PI_CHARGE_FIELDS.forEach((name) => setFieldValue(name, data.fields[name] ?? 0));
+    PI_DEFAULT_FIELDS.forEach((name) => {
+      const el = document.getElementById(name);
+      if (el && !el.value.trim() && data.fields[name]) el.value = data.fields[name];
+    });
+    refreshCurrencyLabels();
+    applyFobCharges();
+
+    // Goods lines and the imported supplier rows come wholly from the PIs.
+    itemsBody.innerHTML = '';
+    (data.items || []).forEach((item) => {
+      const tr = buildLoadedRow(item);
+      itemsBody.appendChild(tr);
+      initRowPalletSelection(tr);
+    });
+    renumber();
+    recalcTotals();
+
+    const pdWrap = document.getElementById('purchase-detail-rows');
+    pdWrap.innerHTML = '';
+    (data.purchase_details || []).forEach((pd) => {
+      const div = document.createElement('div');
+      div.className = 'form-row purchase-detail-row';
+      div.innerHTML = `
+        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]"></div>
+        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
+      div.querySelector('[name="pd_supplier_gstin[]"]').value = pd.supplier_gstin || '';
+      div.querySelector('[name="pd_supplier_invoice_no[]"]').value = pd.supplier_invoice_no || '';
+      pdWrap.appendChild(div);
+    });
+
+    // The goods lines were replaced wholesale, so the container split below
+    // has to start over from them (its own listener only refreshes figures).
+    itemsBody.dispatchEvent(new CustomEvent('goods-replaced', { bubbles: true }));
+  }
+
+  const loadBtn = document.getElementById('load-from-pis-btn');
+  loadBtn.addEventListener('click', () => {
     const ids = Array.from(document.querySelectorAll('.js-pi-check:checked')).map((c) => c.value).filter(Boolean);
     if (!ids.length) { alert('Tick at least one proforma invoice first.'); return; }
-    window.location = '{{ url_for("export_invoices.new_export_invoice") }}?proforma_invoice_ids=' + encodeURIComponent(ids.join(','));
+    const label = loadBtn.textContent;
+    loadBtn.disabled = true;
+    loadBtn.textContent = 'Loading…';
+    fetch('{{ url_for("export_invoices.export_invoice_prefill") }}?proforma_invoice_ids=' + encodeURIComponent(ids.join(',')))
+      .then((r) => { if (!r.ok) throw new Error('failed'); return r.json(); })
+      .then(applyPrefill)
+      .catch(() => alert("Couldn't load the details from those proforma invoices. Please try again."))
+      .finally(() => { loadBtn.disabled = false; loadBtn.textContent = label; });
   });
 
   // ---- repeatable list helpers (containers / purchase details / 11B) ----
@@ -1046,6 +1155,9 @@
   }
   itemsBody.addEventListener('input', refreshFromGoods);
   itemsBody.addEventListener('change', refreshFromGoods);
+  // Loading from the reference PIs replaces the goods lines outright, so the
+  // old split refers to rows that no longer exist - start it over.
+  itemsBody.addEventListener('goods-replaced', () => render(defaultState(goodsLines())));
 
   document.getElementById('alloc-rebuild-btn').addEventListener('click', () => render(readState()));
   document.getElementById('alloc-fill-btn').addEventListener('click', () => {
