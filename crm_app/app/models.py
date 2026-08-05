@@ -1671,19 +1671,6 @@ class ExportPackingListItem:
     net_weight_kg: Optional[float] = None
     gross_weight_kg: Optional[float] = None
 
-    @property
-    def group_key(self) -> tuple:
-        """What the printed sheet groups on - a heading row is emitted every
-        time this changes from the previous printed row."""
-        return ((self.group_label or "").strip().upper(), (self.hsn_code or "").strip())
-
-    @property
-    def group_heading(self) -> str:
-        label, hsn = self.group_key
-        if label and hsn:
-            return f"{label} - HSNC {hsn}"
-        return label or (f"HSNC {hsn}" if hsn else "")
-
     @staticmethod
     def from_row(row) -> "ExportPackingListItem":
         return ExportPackingListItem(
@@ -1793,17 +1780,12 @@ class ExportPackingList:
     @property
     def printed_containers(self) -> List[dict]:
         """The sheet's body, ready to render: one entry per physical
-        container, each holding the flat run of rows printed beside its
-        (rowspan-ed) Container No / Seal No / RFID cells.
-
-        Rows are a mix of {'kind': 'group'} headings and {'kind': 'item'}
-        allocations. A heading is emitted whenever the HSN group changes from
-        the PREVIOUS PRINTED ROW - tracked across container boundaries, not
-        reset per container - so a group that carries on into the next
-        container isn't re-announced, exactly as on the paper form."""
+        container, each holding the flat run of item rows printed beside its
+        (rowspan-ed) Container No / Seal No / RFID cells. Each row carries its
+        own product name and HSN code, so designs are listed individually
+        rather than banded under a shared group heading."""
         containers: List[dict] = []
         current = None
-        last_group = None
         for item in self.items:
             key = (item.container_sr_no, item.container_no or "", item.seal_no or "", item.rfid_seal_no or "")
             if current is None or current["key"] != key:
@@ -1812,11 +1794,6 @@ class ExportPackingList:
                     "seal_no": item.seal_no, "rfid_seal_no": item.rfid_seal_no, "rows": [],
                 }
                 containers.append(current)
-            if item.group_key != last_group:
-                last_group = item.group_key
-                heading = item.group_heading
-                if heading:
-                    current["rows"].append({"kind": "group", "heading": heading})
             current["rows"].append({"kind": "item", "item": item})
         for c in containers:
             c["rowspan"] = len(c["rows"])

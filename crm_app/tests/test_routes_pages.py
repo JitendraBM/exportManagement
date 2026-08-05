@@ -393,7 +393,7 @@ class TestExportPackingListRoutes:
         assert resp.status_code == 200
         assert b"PACKING LIST" in resp.data
         assert b"BLJU2253726" in resp.data
-        assert b"GLAZED VITRIFIED TILES - HSNC 69072100" in resp.data
+        assert b"69072100" in resp.data
         assert b"ALIVE GRANITO LLP, MORBI" in resp.data
 
     def test_tare_weight_prints_in_the_annexures_11b_table(self, admin_ctx):

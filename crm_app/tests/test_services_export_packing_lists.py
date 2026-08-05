@@ -256,16 +256,15 @@ class TestHsnGrouping:
         invoice = make_export(container, seed, [item_for(product, 100)])
         item = packing_list_for(container, seed, invoice).items[0]
         assert item.group_label == "GLAZED VIRTIFIED TILES"
-        assert item.group_heading == "GLAZED VIRTIFIED TILES - HSNC 69072100"
 
     def test_group_label_falls_back_to_the_product_name_without_a_category(self, container, seed):
         product = make_product(container, seed, "Tiles Adhesive", "38245090")
         invoice = make_export(container, seed, [item_for(product, 100)])
         assert packing_list_for(container, seed, invoice).items[0].group_label == "TILES ADHESIVE"
 
-    def test_rows_of_one_group_are_pulled_together_inside_a_container(self, container, seed):
-        """The user can enter the split in any order; the sheet still gets
-        one heading per HSN group, so the rows are re-ordered on save."""
+    def test_rows_keep_their_entered_order_within_a_container(self, container, seed):
+        """Designs are no longer grouped or re-sorted by product/HSN - the
+        sheet prints rows in the order they were allocated."""
         tiles = container.product_service.create_category(seed.admin, "TILES")
         a = make_product(container, seed, "GVT 600X1200", "69072100", category_id=tiles.id)
         glue = make_product(container, seed, "ADHESIVE", "38245090")
@@ -276,32 +275,25 @@ class TestHsnGrouping:
         )
         packing_list = packing_list_for(container, seed, invoice)
         assert [i.product_name for i in packing_list.items] == [
-            "GVT 600X1200", "GVT 300X600", "ADHESIVE",
+            "GVT 600X1200", "ADHESIVE", "GVT 300X600",
         ]
         rows = packing_list.printed_containers[0]["rows"]
-        assert [r["heading"] for r in rows if r["kind"] == "group"] == [
-            "TILES - HSNC 69072100", "ADHESIVE - HSNC 38245090",
-        ]
+        assert all(r["kind"] == "item" for r in rows)
 
-    def test_a_group_carried_into_the_next_container_is_not_re_announced(self, container, seed):
+    def test_containers_are_kept_in_order_but_not_re_grouped(self, container, seed):
         tiles = container.product_service.create_category(seed.admin, "TILES")
         a = make_product(container, seed, "GVT 600X1200", "69072100", category_id=tiles.id)
         glue = make_product(container, seed, "ADHESIVE", "38245090")
         invoice = make_export(
             container, seed, [item_for(a, 100), item_for(glue, 20)],
-            # Tiles spill over into container 2, where the glue also sits.
             allocations=[alloc(0, 0, 60), alloc(1, 1, 20), alloc(1, 0, 40)],
         )
         packing_list = packing_list_for(container, seed, invoice)
         printed = packing_list.printed_containers
         assert len(printed) == 2
-        # Container 2 resumes with the tiles (no second TILES heading), then
-        # announces the adhesive.
-        assert [r.get("heading") for r in printed[1]["rows"] if r["kind"] == "group"] == [
-            "ADHESIVE - HSNC 38245090",
+        assert [r["item"].product_name for r in printed[1]["rows"]] == [
+            "ADHESIVE", "GVT 600X1200",
         ]
-        assert printed[1]["rows"][0]["kind"] == "item"
-        assert printed[1]["rows"][0]["item"].product_name == "GVT 600X1200"
 
     def test_container_cells_span_the_whole_run_of_rows(self, container, seed):
         tiles = container.product_service.create_category(seed.admin, "TILES")
@@ -312,8 +304,7 @@ class TestHsnGrouping:
             allocations=[alloc(0, 0, 10), alloc(0, 1, 20)],
         )
         printed = packing_list_for(container, seed, invoice).printed_containers
-        # 2 headings + 2 item rows.
-        assert printed[0]["rowspan"] == 4
+        assert printed[0]["rowspan"] == 2
 
 
 # ==========================================================================

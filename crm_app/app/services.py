@@ -3481,7 +3481,7 @@ class ExportPackingListService:
                 quantity_value=quantity_value, unit=item.unit,
                 net_weight_kg=net, gross_weight_kg=gross,
             ))
-        return self._ordered_by_group(built)
+        return self._ordered_by_container(built)
 
     @staticmethod
     def _override(raw, default=None):
@@ -3573,30 +3573,11 @@ class ExportPackingListService:
                 )
 
     @staticmethod
-    def _ordered_by_group(built: List[ExportPackingListItem]) -> List[ExportPackingListItem]:
-        """Print order, so the HSN headings come out right without the user
-        having to sort anything: containers in order, rows of one HSN group
-        together inside each container, and - where a group carries on from
-        the container before - that group first, so the sheet prints one
-        heading for the run instead of re-announcing it."""
-        by_container = {}
-        for item in built:
-            by_container.setdefault(item.container_sr_no, []).append(item)
-
-        ordered = []
-        last_group = None
-        for container_sr_no in sorted(by_container):
-            groups = {}
-            for item in by_container[container_sr_no]:
-                groups.setdefault(item.group_key, []).append(item)
-            keys = list(groups)  # dicts keep insertion order: first appearance wins
-            if last_group in groups:
-                keys.remove(last_group)
-                keys.insert(0, last_group)
-            for key in keys:
-                ordered.extend(groups[key])
-            if keys:
-                last_group = keys[-1]
+    def _ordered_by_container(built: List[ExportPackingListItem]) -> List[ExportPackingListItem]:
+        """Print order: containers in order, rows within a container kept in
+        the order they were entered/allocated - designs are no longer grouped
+        or re-sorted by product/HSN."""
+        ordered = sorted(built, key=lambda item: item.container_sr_no)
         for i, item in enumerate(ordered, start=1):
             item.sr_no = i
         return ordered
