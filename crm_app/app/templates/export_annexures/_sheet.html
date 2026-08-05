@@ -4,31 +4,49 @@
    context - every field here is read live off those three, nothing is
    stored by this document itself.
 
+   Laid out to match the customs form exactly: same box numbering, same band
+   order, and the same two-column container grid whose unused half is struck
+   through with a diagonal cross so no container line can be added after
+   signing.
+
    Same banded-table technique as export_invoices/_sheet.html: each band is
    its own <table> pulled up by -1px so its top border collapses onto the
-   band above. Section 09's "Total No. Of Packages" mini-table and the
-   section-11 container table use the .eia-nest / plain-table conventions
-   already established there. #}
+   band above. Section 09's "Total No. Of Packages" mini-table uses the
+   .eia-nesthost convention already established there. #}
 <style>
   .eia-sheet {
     background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
     padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
-    font-family: Arial, Helvetica, sans-serif; font-size: 8.5px; line-height: 1.3;
+    font-family: Arial, Helvetica, sans-serif; font-size: 8px; line-height: 1.3;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .eia-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
-  .eia-sheet td { border: 1px solid #000; padding: 2px 4px; vertical-align: top; word-wrap: break-word; }
+  .eia-sheet td { border: 1px solid #000; padding: 2px 4px; vertical-align: middle; word-wrap: break-word; }
   .eia-nesthost { padding: 0; }
   .eia-nesthost table { margin-top: 0; }
   .eia-nesthost table td { border: none; border-bottom: 1px solid #000; }
   .eia-nesthost table td + td { border-left: 1px solid #000; }
   .eia-nesthost table tr:last-child td { border-bottom: none; }
-  .eia-title-l { text-align: center; font-weight: bold; font-size: 11px; vertical-align: middle; }
-  .eia-title-r { text-align: center; font-weight: bold; font-size: 11px; vertical-align: middle; }
+  .eia-title { text-align: center; font-weight: bold; font-size: 11px; }
   .eia-c { text-align: center; }
-  .eia-lbl { font-weight: bold; }
-  .eia-v { }
-  .eia-mid { vertical-align: middle; }
-  .eia-sign { height: 46px; }
+  .eia-lbl { }
+  .eia-v { font-weight: bold; }
+  .eia-hl { background: #ffff00; }
+  .eia-top { vertical-align: top; }
+  .eia-num { text-align: center; font-weight: bold; white-space: nowrap; }
+  .eia-head { text-align: center; font-weight: bold; }
+  .eia-crow td { font-size: 7px; font-weight: bold; padding: 1px 3px; }
+  .eia-chead td { font-size: 6.5px; font-weight: bold; text-align: center; padding: 1px 2px; }
+  /* The struck-out void the form leaves where container lines could still be
+     written in. Drawn as gradients rather than an <svg> so it sizes itself to
+     whatever height the rowspan / page filler ends up giving the cell. */
+  .eia-x {
+    background-image:
+      linear-gradient(to top right, transparent calc(50% - 0.5px), #000 calc(50% - 0.5px), #000 calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+      linear-gradient(to bottom right, transparent calc(50% - 0.5px), #000 calc(50% - 0.5px), #000 calc(50% + 0.5px), transparent calc(50% + 0.5px));
+    background-size: 100% 100%; background-repeat: no-repeat;
+  }
+  .eia-sign { height: 46px; vertical-align: top; }
   @media print { .eia-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
 
@@ -47,48 +65,59 @@
 {% set total_quantity = packing_list.total_quantity if packing_list else 0 %}
 {% set total_gross = packing_list.total_gross_weight if packing_list else 0 %}
 
+{# The container grid is two columns of lines read top-to-bottom, left column
+   first. The form's own column is 20 lines tall, so anything up to 20
+   containers stays in the left column exactly as the printed form does; a
+   longer list splits evenly so neither column runs away from the other. #}
+{% set col_len = 20 if container_rows|length <= 20 else ((container_rows|length + 1) // 2) %}
+{% set left_rows = container_rows[:col_len] %}
+{% set right_rows = container_rows[col_len:] %}
+{# One line past the left column's last container: the struck-out void the
+   form leaves under the list, and the row the page filler stretches. #}
+{% set grid_len = left_rows|length + 1 %}
+
 <div class="eia-sheet js-page-sheet">
   <table>
     <colgroup><col style="width:15%"><col style="width:85%"></colgroup>
     <tr>
-      <td class="eia-title-l">ANNEXURE-C</td>
-      <td class="eia-title-r">EXAMINATION REPORT FOR SELF SEALED CONTAINER FOR EXPORT</td>
+      <td class="eia-title">ANNEXURE-C</td>
+      <td class="eia-title">EXAMINATION REPORT FOR SELF SEALED CONTAINER FOR EXPORT</td>
     </tr>
   </table>
 
   <table>
-    <colgroup><col style="width:15%"><col style="width:35%"><col style="width:15%"><col style="width:35%"></colgroup>
+    <colgroup><col style="width:26%"><col style="width:24%"><col style="width:26%"><col style="width:24%"></colgroup>
     <tr>
-      <td class="eia-lbl">Shipping Bill No</td>
-      <td class="eia-v">{{ invoice.shipping_bill_no or '-' }}</td>
-      <td class="eia-lbl">Shipping Bill Date</td>
-      <td class="eia-v">{{ dmy(invoice.shipping_bill_date) }}</td>
+      <td class="eia-head">Shipping Bill No</td>
+      <td class="eia-v eia-c eia-hl">{{ invoice.shipping_bill_no or '-' }}</td>
+      <td class="eia-head">Shipping Bill Date</td>
+      <td class="eia-v eia-c eia-hl">{{ dmy(invoice.shipping_bill_date) }}</td>
     </tr>
   </table>
 
   <!-- 01 / 2A-2D: exporter identity -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:20%"><col style="width:40%"><col style="width:5%"><col style="width:12%"><col style="width:20%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:22%"><col style="width:44%"><col style="width:4%"><col style="width:12%"><col style="width:14%"></colgroup>
     <tr>
-      <td class="eia-c" rowspan="4">01</td>
+      <td class="eia-num" rowspan="4">01</td>
       <td class="eia-lbl" rowspan="4">Name &amp; Address of Exporter</td>
       <td class="eia-v" rowspan="4">{{ company.company_name|upper if company else '' }}<br>{{ (company.address or '')|upper|replace('\n','<br>')|safe if company else '' }}</td>
-      <td class="eia-c">2A</td>
+      <td class="eia-num">2A</td>
       <td class="eia-lbl">IEC</td>
       <td class="eia-v">{{ company.iec if company and company.iec else '-' }}</td>
     </tr>
     <tr>
-      <td class="eia-c">2B</td>
+      <td class="eia-num">2B</td>
       <td class="eia-lbl">Branch Code</td>
       <td class="eia-v">{{ company.branch_code if company and company.branch_code else '-' }}</td>
     </tr>
     <tr>
-      <td class="eia-c">2C</td>
+      <td class="eia-num">2C</td>
       <td class="eia-lbl">BIN</td>
       <td class="eia-v">{{ company.bin if company and company.bin else '-' }}</td>
     </tr>
     <tr>
-      <td class="eia-c">2D</td>
+      <td class="eia-num">2D</td>
       <td class="eia-lbl">GSTIN</td>
       <td class="eia-v">{{ company.gstin if company and company.gstin else '-' }}</td>
     </tr>
@@ -96,55 +125,43 @@
 
   <!-- 03: factory/place of stuffing -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:37%"><col style="width:60%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:22%"><col style="width:74%"></colgroup>
     <tr>
-      <td class="eia-c">03</td>
+      <td class="eia-num">03</td>
       <td class="eia-lbl">Factory/Place of stuffing (Full Address)</td>
       <td class="eia-v">{{ (invoice.stuffing_location or '-')|upper|replace('\n','<br>')|safe }}</td>
     </tr>
   </table>
 
-  <!-- 04/05: examination date + time of stuffing -->
+  <!-- 04 / 06: examination date + cargo description -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:17%"><col style="width:17%"><col style="width:3%"><col style="width:17%"><col style="width:20%"><col style="width:23%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:22%"><col style="width:30%"><col style="width:4%"><col style="width:20%"><col style="width:20%"></colgroup>
     <tr>
-      <td class="eia-c" rowspan="3">04</td>
-      <td class="eia-lbl" rowspan="3">Date Of Examination</td>
-      <td class="eia-v" rowspan="3">{{ dmy(invoice.examination_date) }}</td>
-      <td class="eia-c" rowspan="3">05</td>
-      <td class="eia-lbl" rowspan="3">Time Of Stuffing</td>
-      <td class="eia-lbl">Starting Time</td>
-      <td class="eia-v">{{ invoice.stuffing_start_time or '-' }}</td>
-    </tr>
-    <tr>
-      <td class="eia-lbl">Completion Time</td>
-      <td class="eia-v">{{ invoice.stuffing_completion_time or '-' }}</td>
-    </tr>
-    <tr>
-      <td class="eia-lbl">Time Taken For Stuffing</td>
-      <td class="eia-v">{{ invoice.stuffing_time_taken or '-' }}</td>
+      <td class="eia-num">04</td>
+      <td class="eia-lbl">Date Of Examination</td>
+      <td class="eia-v eia-c">{{ dmy(invoice.examination_date) }}</td>
+      <td class="eia-num">06</td>
+      <td class="eia-lbl eia-c">Description of cargo with Quantity</td>
+      <td class="eia-v eia-c">Same as provided in Invoice</td>
     </tr>
   </table>
 
-  <!-- 06/07: cargo description + destination -->
+  <!-- 07: country of final destination -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:22%"><col style="width:35%"><col style="width:3%"><col style="width:17%"><col style="width:20%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:22%"><col style="width:74%"></colgroup>
     <tr>
-      <td class="eia-c">06</td>
-      <td class="eia-lbl">Description of cargo with Quantity</td>
-      <td class="eia-v">Same as provided in Invoice</td>
-      <td class="eia-c">07</td>
-      <td class="eia-lbl">Country of Final Destination</td>
+      <td class="eia-num">07</td>
+      <td class="eia-lbl eia-c">Country of Final Destination</td>
       <td class="eia-v">{{ (invoice.final_destination or '-')|upper }}</td>
     </tr>
   </table>
 
   <!-- 08: authorised signatory -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:37%"><col style="width:60%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:22%"><col style="width:74%"></colgroup>
     <tr>
-      <td class="eia-c">08</td>
-      <td class="eia-lbl">Name &amp; Designation of the Authorized Signatory</td>
+      <td class="eia-num">08</td>
+      <td class="eia-lbl eia-c">Name &amp; Designation of of The Authorized Signatory</td>
       <td class="eia-v">
         {{ invoice.authorised_person_name or '' }}
         {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif -%}
@@ -155,26 +172,30 @@
 
   <!-- 09: particulars of export invoice + consignee -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:17%"><col style="width:20%"><col style="width:20%"><col style="width:17%"><col style="width:23%"></colgroup>
+    <tr><td class="eia-head">Particulars Of Export Invoice</td></tr>
+  </table>
+  <table>
+    <colgroup><col style="width:4%"><col style="width:18%"><col style="width:17%"><col style="width:16%"><col style="width:17%"><col style="width:28%"></colgroup>
     <tr>
-      <td class="eia-c" rowspan="3">09</td>
-      <td class="eia-lbl" rowspan="3">Particulars Of Export Invoice</td>
+      <td class="eia-num" rowspan="3">09</td>
       <td class="eia-lbl">GST Invoice No &amp; Date</td>
-      <td class="eia-v">{{ invoice.export_invoice_number }} — {{ dmy(invoice.invoice_date) }}</td>
-      <td class="eia-lbl" rowspan="3">Name And Address Of The Consignee Abroad</td>
-      <td class="eia-v" rowspan="3">{{ (invoice.consignee_name or '-')|upper }}{% if invoice.consignee_address %}<br>{{ invoice.consignee_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
+      <td class="eia-v eia-c">{{ invoice.export_invoice_number }}</td>
+      <td class="eia-v eia-c">{{ dmy(invoice.invoice_date) }}</td>
+      <td class="eia-lbl eia-top" rowspan="3">Name And Address Of The Consignee Abroad</td>
+      <td class="eia-v eia-top" rowspan="3">{{ (invoice.consignee_name or '-')|upper }}{% if invoice.consignee_address %}<br>{{ invoice.consignee_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
     </tr>
     <tr>
       <td class="eia-lbl">Export Invoice No &amp; Date</td>
-      <td class="eia-v">{{ invoice.export_invoice_number }} — {{ dmy(invoice.invoice_date) }}</td>
+      <td class="eia-v eia-c">{{ invoice.export_invoice_number }}</td>
+      <td class="eia-v eia-c">{{ dmy(invoice.invoice_date) }}</td>
     </tr>
     <tr>
       <td class="eia-lbl">Total No. Of Packages</td>
-      <td class="eia-nesthost">
+      <td class="eia-nesthost" colspan="2">
         <table>
           <colgroup><col style="width:34%"><col style="width:33%"><col style="width:33%"></colgroup>
-          <tr><td class="eia-c eia-lbl">Packing</td><td class="eia-c eia-lbl">Qty</td><td class="eia-c eia-lbl">Alt. Qty</td></tr>
-          <tr><td class="eia-c">{{ n0(total_pallets) }}</td><td class="eia-c">{{ n0(total_boxes) }}</td><td class="eia-c">{{ n2(total_quantity) }}</td></tr>
+          <tr><td class="eia-c eia-v">{{ n0(total_pallets) }}</td><td class="eia-c eia-v">{{ n0(total_boxes) }}</td><td class="eia-c eia-v">{{ n2(total_quantity) }}</td></tr>
+          <tr><td class="eia-c eia-head">Packing</td><td class="eia-c eia-head">Qty</td><td class="eia-c eia-head">Alt. Qty</td></tr>
         </table>
       </td>
     </tr>
@@ -182,74 +203,86 @@
 
   <!-- 10: fixed confirmation -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:82%"><col style="width:15%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:86%"><col style="width:10%"></colgroup>
     <tr>
-      <td class="eia-c">10</td>
+      <td class="eia-num">10</td>
       <td class="eia-lbl">Is The Description Of The Goods, The Quantity And Their Value As Per Particulars Furnished In The Export Invoice/GST Invoice.</td>
       <td class="eia-v eia-c">YES</td>
     </tr>
   </table>
 
-  <!-- 11: container particulars -->
+  <!-- 11: container particulars, two columns with the unused half struck out -->
   <table>
-    <tr><td class="eia-lbl">11 &nbsp; Container Particulars</td></tr>
+    <colgroup><col style="width:4%"><col style="width:96%"></colgroup>
+    <tr><td class="eia-num">11</td><td class="eia-lbl">Container Particulars</td></tr>
   </table>
   <table>
     <colgroup>
-      <col style="width:6%"><col style="width:20%"><col style="width:20%"><col style="width:20%">
-      <col style="width:12%"><col style="width:11%"><col style="width:11%">
+      <col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:5%"><col style="width:6%"><col style="width:11%">
+      <col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:5%"><col style="width:6%"><col style="width:11%">
     </colgroup>
-    <tr>
-      <td class="eia-c eia-lbl">SR</td>
-      <td class="eia-c eia-lbl">Container No</td>
-      <td class="eia-c eia-lbl">Lince Seal No</td>
-      <td class="eia-c eia-lbl">RFID Seal No</td>
-      <td class="eia-c eia-lbl">Packing</td>
-      <td class="eia-c eia-lbl">Qty</td>
-      <td class="eia-c eia-lbl">Gross Weight(KG)</td>
+    <tr class="eia-chead">
+      {% for _ in range(2) %}
+      <td>Container No</td><td>Lince Seal No</td><td>RFID Seal No</td><td>Packing</td><td>Qty</td><td>Gross Weight(KG)</td>
+      {% endfor %}
     </tr>
-    {% for c in container_rows %}
-    <tr>
-      <td class="eia-c">{{ loop.index }}</td>
-      <td class="eia-v">{{ c.container_no or '' }}</td>
-      <td class="eia-v">{{ c.seal_no or '' }}</td>
-      <td class="eia-v">{{ c.rfid_seal_no or '' }}</td>
-      <td class="eia-c">{{ n0(c.pallets) }}</td>
-      <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
-      <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
+    {# The row where the left column runs out is the first with no data on
+       either side (the left column is never the shorter one), so it is the
+       row _page_filler.html can stretch: growing the cross cell that starts
+       here grows every row it spans, and the sheet fills its A4 page however
+       few containers there are. #}
+    {% for i in range(grid_len) %}
+    <tr class="eia-crow {% if i == left_rows|length %}js-page-filler{% endif %}">
+      {% if i < left_rows|length %}
+        {% set c = left_rows[i] %}
+        <td class="eia-c">{{ c.container_no or '' }}</td>
+        <td class="eia-c">{{ c.seal_no or '' }}</td>
+        <td class="eia-c">{{ c.rfid_seal_no or '' }}</td>
+        <td class="eia-c">{{ n0(c.pallets) }}</td>
+        <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
+        <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
+      {% elif i == left_rows|length %}
+        <td class="eia-x" colspan="6" rowspan="{{ grid_len - left_rows|length }}"></td>
+      {% endif %}
+      {% if i < right_rows|length %}
+        {% set c = right_rows[i] %}
+        <td class="eia-c">{{ c.container_no or '' }}</td>
+        <td class="eia-c">{{ c.seal_no or '' }}</td>
+        <td class="eia-c">{{ c.rfid_seal_no or '' }}</td>
+        <td class="eia-c">{{ n0(c.pallets) }}</td>
+        <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
+        <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
+      {% elif i == right_rows|length %}
+        <td class="eia-x" colspan="6" rowspan="{{ grid_len - right_rows|length }}"></td>
+      {% endif %}
     </tr>
-    {% else %}
-    <tr><td class="eia-c">1</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
     {% endfor %}
-    {# Blank filler: sized by _page_filler.html so the container table grows
-       with empty rows and the sheet fills its A4 page, echoing the
-       reference form's blank void beneath a short container list. #}
-    <tr class="js-page-filler">
-      <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-    </tr>
-    <tr>
-      <td class="eia-v eia-lbl" colspan="4" style="text-align:right;">Total</td>
-      <td class="eia-c eia-lbl">{{ n0(total_pallets) }}</td>
-      <td class="eia-c eia-lbl">{{ n0(total_boxes) }}</td>
-      <td class="eia-c eia-lbl">{{ n2(total_gross) }}</td>
+    <tr class="eia-crow">
+      <td colspan="6" class="eia-x"></td>
+      <td colspan="3" class="eia-head">Total</td>
+      <td class="eia-c">{{ n0(total_pallets) }}</td>
+      <td class="eia-c">{{ n0(total_boxes) }}</td>
+      <td class="eia-c">{{ n2(total_gross) }}</td>
     </tr>
   </table>
 
   <!-- 12A/12B/12C: permission -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:32%"><col style="width:30%"><col style="width:5%"><col style="width:30%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:20%"><col style="width:26%"><col style="width:14%"><col style="width:5%"><col style="width:14%"><col style="width:17%"></colgroup>
     <tr>
-      <td class="eia-c">12A</td>
+      <td class="eia-num">12A</td>
       <td class="eia-lbl">Permission No &amp; Date</td>
-      <td class="eia-v">{{ invoice.permission_no or '-' }}{% if invoice.permission_date %} &nbsp; {{ dmy(invoice.permission_date) }}{% endif %}</td>
-      <td class="eia-lbl">12B</td>
-      <td class="eia-lbl">Expiry Date &nbsp; <span class="eia-v">{{ dmy(invoice.permission_expiry) }}</span></td>
+      <td class="eia-v">{{ invoice.permission_no or '-' }}</td>
+      <td class="eia-v eia-c">{{ dmy(invoice.permission_date) }}</td>
+      <td class="eia-num">12B</td>
+      <td class="eia-lbl">Expiry Date</td>
+      <td class="eia-v eia-c">{{ dmy(invoice.permission_expiry) }}</td>
     </tr>
   </table>
   <table>
-    <colgroup><col style="width:3%"><col style="width:32%"><col style="width:65%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:20%"><col style="width:76%"></colgroup>
     <tr>
-      <td class="eia-c">12C</td>
+      <td class="eia-num">12C</td>
       <td class="eia-lbl">Issuing Authority &amp; Address</td>
       <td class="eia-v">{{ (invoice.issuing_authority or '-')|upper }}{% if invoice.issuing_authority_address %}<br>{{ invoice.issuing_authority_address|upper|replace('\n','<br>')|safe }}{% endif %}</td>
     </tr>
@@ -257,9 +290,9 @@
 
   <!-- 13: claim scheme + EPCG -->
   <table>
-    <colgroup><col style="width:3%"><col style="width:32%"><col style="width:65%"></colgroup>
+    <colgroup><col style="width:4%"><col style="width:44%"><col style="width:52%"></colgroup>
     <tr>
-      <td class="eia-c" rowspan="2">13</td>
+      <td class="eia-num" rowspan="2">13</td>
       <td class="eia-lbl" rowspan="2">Examined the goods covered under this as above particulars of export scheme</td>
       <td class="eia-v">{{ ((company.government_schemes if company else '') or '-')|replace('\n','<br>')|safe }}</td>
     </tr>
@@ -270,19 +303,17 @@
 
   <!-- Self Sealing Declaration + signature -->
   <table>
-    <colgroup><col style="width:60%"><col style="width:40%"></colgroup>
+    <colgroup><col style="width:14%"><col style="width:56%"><col style="width:30%"></colgroup>
     <tr>
-      <td class="eia-sign">
-        <span class="eia-lbl">Self Sealing Declaration</span><br>
-        {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n','<br>')|safe }}
-      </td>
+      <td class="eia-sign eia-head">Self Sealing Declaration</td>
+      <td class="eia-sign eia-v">{{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n','<br>')|safe }}</td>
       <td class="eia-sign" style="text-align:right; padding:0;" rowspan="2">
         <div style="display:flex; flex-direction:column; justify-content:space-between; height:100%; padding:2px 4px;">
-          <div class="eia-lbl">For {{ company.company_name|upper if company else '' }}</div>
+          <div class="eia-v">For {{ company.company_name|upper if company else '' }}</div>
           <div>
-            <div class="eia-lbl">Authorised Signatury</div>
+            <div class="eia-v">Authorised Signatury</div>
             {% if invoice.authorised_person_name %}
-            <div>
+            <div class="eia-v">
               {{ invoice.authorised_person_name }}
               {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif -%}
               {%- if company %} of {{ company.company_name|upper }}{% endif -%}
@@ -293,7 +324,7 @@
       </td>
     </tr>
     <tr>
-      <td class="eia-lbl">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</td>
+      <td class="eia-head" colspan="2">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</td>
     </tr>
   </table>
 </div>

@@ -779,11 +779,13 @@ class CompanyService:
                 raise ValidationError("Every RCMC row needs a registration number, registration date, and valid-until date.")
 
         existing = self.company_repo.get(current_user.company_id)
+        # Blank submissions keep the previously stored value instead of clearing it -
+        # these are long-lived defaults typed once and reused, not fields meant to be erased by an empty save.
         our_company_id = self.company_repo.upsert(
             current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no,
-            (self_sealing_declaration or "").strip() or None,
-            (branch_code or "").strip() or None,
-            (government_schemes or "").strip() or None,
+            (self_sealing_declaration or "").strip() or (existing.self_sealing_declaration if existing else None),
+            (branch_code or "").strip() or (existing.branch_code if existing else None),
+            (government_schemes or "").strip() or (existing.government_schemes if existing else None),
         )
         self.company_repo.replace_contact_details(our_company_id, valid_details)
         self.company_repo.replace_contact_persons(our_company_id, valid_persons)

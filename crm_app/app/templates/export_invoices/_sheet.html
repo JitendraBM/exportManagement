@@ -57,6 +57,13 @@
   .ei-items tbody td { vertical-align: top; }
   .ei-goods { font-weight: bold; }
   .ei-tot td { font-weight: bold; }
+  /* Total Invoice Value - the one figure the reader looks for, so it gets a
+     shaded band and heavier rules to lift it out of the charges ladder. The
+     rules are on the money columns only; the Export Under / weight cells
+     beside it are rowspanned and must not be cut across. */
+  .ei-tiv td:last-child, .ei-tiv td:nth-last-child(2) {
+    background: #eee; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000;
+  }
   .ei-sign { height: 46px; }
   @media print { .ei-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
@@ -240,10 +247,52 @@
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
 
-      <!-- Totals block: export scheme text (left) | quantity + weight totals
-           (middle, under their own columns) | money (right) -->
-      <tr class="ei-tot">
-        <td colspan="3" rowspan="6" style="font-weight:normal;">
+      {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
+      {% set order_gross_weight = (packing_list.total_gross_weight if packing_list and packing_list.items else None) or invoice.total_gross_weight_kg %}
+
+      {# Totals block: export scheme text (left) | quantity + weight totals
+         (middle, under their own columns) | money (right).
+
+         All three share the items table's column grid - the money ladder is
+         NOT its own nested table. Two side-by-side nested tables would lay
+         out independently, so their rows could never line up: the left box
+         would end short and leave a gap beside the taller money box. Keeping
+         one grid means one row = one line across the whole band.
+
+         The money side drives the row count (it's the longest), so it's built
+         as a list here and the left-hand cells rowspan down to meet it.
+
+         FOB = goods value with freight/insurance/charges stripped back out,
+         i.e. the items subtotal. NOT invoice.fob_value - that property is an
+         alias for invoice_value_usd, so it would print the grand total twice.
+
+         Certification isn't on the reference sheet, which has no such charge -
+         print it only when it carries money, so a typical invoice matches the
+         reference exactly and a charged one never hides the amount. #}
+      {% set money = [] %}
+      {% set _ = money.append(('CIF Invoice Value', invoice.invoice_value_usd, false)) %}
+      {% set _ = money.append(('Discount', invoice.discount_amount, false)) %}
+      {% set _ = money.append(('Total Invoice Value', invoice.invoice_value_usd - invoice.discount_amount, true)) %}
+      {% if invoice.certification %}
+      {% set _ = money.append(('Certification', invoice.certification, false)) %}
+      {% endif %}
+      {% set _ = money.append(('Insurance', invoice.insurance, false)) %}
+      {% set _ = money.append(('Sea Freight', invoice.sea_freight, false)) %}
+      {% set _ = money.append(('Other Charges', invoice.other_charges, false)) %}
+      {% set _ = money.append(('FOB Value', invoice.subtotal_usd, false)) %}
+
+      {# Rows 0-1 carry the quantity totals and their column labels; the rest
+         are split evenly between Net and Gross Weight so the two read as one
+         pair rather than a thin row above a tall one. An odd remainder goes
+         to Gross, which sits at the bottom and closes the column flush. #}
+      {% set weight_rows = money|length - 2 %}
+      {% set net_rows = weight_rows // 2 %}
+      {% set gross_rows = weight_rows - net_rows %}
+
+      {% for label, value, is_total in money %}
+      <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
+        {% if loop.first %}
+        <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
           <span class="ei-lbl">Export Under</span><br>
           {% if invoice.export_under %}{{ invoice.export_under|upper }}<br>{% endif %}
           SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
@@ -252,53 +301,21 @@
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="ei-cnum">{{ '{:,.2f}'.format(ns.qty) }}</td>
-        <td colspan="2" class="ei-r">Total Invoice Value</td>
-        <td class="ei-num">{{ usd(invoice.invoice_value_usd) }}</td>
-      </tr>
-      <tr class="ei-tot">
+        {% elif loop.index0 == 1 %}
         <td class="ei-c">Packing</td>
         <td class="ei-c">Qty</td>
         <td class="ei-c">Alt. Qty</td>
-        <td colspan="2" class="ei-r">Discount</td>
-        <td class="ei-num">{{ usd(invoice.discount_amount) }}</td>
+        {% elif loop.index0 == 2 %}
+        <td colspan="2" rowspan="{{ net_rows }}" class="ei-mid">Net Weight</td>
+        <td rowspan="{{ net_rows }}" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
+        {% elif loop.index0 == 2 + net_rows %}
+        <td colspan="2" rowspan="{{ gross_rows }}" class="ei-mid">Gross Weight</td>
+        <td rowspan="{{ gross_rows }}" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
+        {% endif %}
+        <td colspan="2" class="ei-r">{{ label }}</td>
+        <td class="ei-num">{{ usd(value) }}</td>
       </tr>
-      {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
-      {% set order_gross_weight = (packing_list.total_gross_weight if packing_list and packing_list.items else None) or invoice.total_gross_weight_kg %}
-      <tr class="ei-tot">
-        <td colspan="2" rowspan="2" class="ei-mid">Net Weight</td>
-        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
-        <td colspan="2" class="ei-r">Insurance</td>
-        <td class="ei-num">{{ usd(invoice.insurance) }}</td>
-      </tr>
-      <tr class="ei-tot">
-        <td colspan="2" class="ei-r">Sea Freight</td>
-        <td class="ei-num">{{ usd(invoice.sea_freight) }}</td>
-      </tr>
-      <tr class="ei-tot">
-        <td colspan="2" rowspan="2" class="ei-mid">Gross Weight</td>
-        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
-        <td colspan="2" class="ei-r">Other Charges</td>
-        <td class="ei-num">{{ usd(invoice.other_charges) }}</td>
-      </tr>
-      {# FOB = goods value with freight/insurance/charges stripped back out,
-         i.e. the items subtotal. NOT invoice.fob_value - that property is an
-         alias for invoice_value_usd, so it would print the grand total twice.
-         This keeps the reference's arithmetic (FOB = Total - freight -
-         insurance - other + discount) without touching any of the math. #}
-      <tr class="ei-tot">
-        <td colspan="2" class="ei-r">FOB Value</td>
-        <td class="ei-num">{{ usd(invoice.subtotal_usd) }}</td>
-      </tr>
-      {# Certification isn't on the reference sheet, which has no such charge -
-         print it only when it carries money, so a typical invoice matches the
-         reference exactly and a charged one never hides the amount. #}
-      {% if invoice.certification %}
-      <tr class="ei-tot">
-        <td colspan="6"></td>
-        <td colspan="2" class="ei-r">Certification</td>
-        <td class="ei-num">{{ usd(invoice.certification) }}</td>
-      </tr>
-      {% endif %}
+      {% endfor %}
     </tbody>
   </table>
 
