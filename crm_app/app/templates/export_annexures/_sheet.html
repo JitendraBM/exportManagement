@@ -65,16 +65,7 @@
 {% set total_quantity = packing_list.total_quantity if packing_list else 0 %}
 {% set total_gross = packing_list.total_gross_weight if packing_list else 0 %}
 
-{# The container grid is two columns of lines read top-to-bottom, left column
-   first. The form's own column is 20 lines tall, so anything up to 20
-   containers stays in the left column exactly as the printed form does; a
-   longer list splits evenly so neither column runs away from the other. #}
-{% set col_len = 20 if container_rows|length <= 20 else ((container_rows|length + 1) // 2) %}
-{% set left_rows = container_rows[:col_len] %}
-{% set right_rows = container_rows[col_len:] %}
-{# One line past the left column's last container: the struck-out void the
-   form leaves under the list, and the row the page filler stretches. #}
-{% set grid_len = left_rows|length + 1 %}
+{# The container grid is a single column of lines read top to bottom. #}
 
 <div class="eia-sheet js-page-sheet">
   <table>
@@ -211,55 +202,37 @@
     </tr>
   </table>
 
-  <!-- 11: container particulars, two columns with the unused half struck out -->
+  <!-- 11: container particulars, one column with the unused tail struck out -->
   <table>
     <colgroup><col style="width:4%"><col style="width:96%"></colgroup>
     <tr><td class="eia-num">11</td><td class="eia-lbl">Container Particulars</td></tr>
   </table>
   <table>
     <colgroup>
-      <col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:5%"><col style="width:6%"><col style="width:11%">
-      <col style="width:9%"><col style="width:9%"><col style="width:10%"><col style="width:5%"><col style="width:6%"><col style="width:11%">
+      <col style="width:6%"><col style="width:19%"><col style="width:17%"><col style="width:18%"><col style="width:9%"><col style="width:11%"><col style="width:20%">
     </colgroup>
     <tr class="eia-chead">
-      {% for _ in range(2) %}
-      <td>Container No</td><td>Lince Seal No</td><td>RFID Seal No</td><td>Packing</td><td>Qty</td><td>Gross Weight(KG)</td>
-      {% endfor %}
+      <td>Sr No</td><td>Container No</td><td>Lince Seal No</td><td>RFID Seal No</td><td>Packing</td><td>Qty</td><td>Gross Weight(KG)</td>
     </tr>
-    {# The row where the left column runs out is the first with no data on
-       either side (the left column is never the shorter one), so it is the
-       row _page_filler.html can stretch: growing the cross cell that starts
-       here grows every row it spans, and the sheet fills its A4 page however
-       few containers there are. #}
-    {% for i in range(grid_len) %}
-    <tr class="eia-crow {% if i == left_rows|length %}js-page-filler{% endif %}">
-      {% if i < left_rows|length %}
-        {% set c = left_rows[i] %}
-        <td class="eia-c">{{ c.container_no or '' }}</td>
-        <td class="eia-c">{{ c.seal_no or '' }}</td>
-        <td class="eia-c">{{ c.rfid_seal_no or '' }}</td>
-        <td class="eia-c">{{ n0(c.pallets) }}</td>
-        <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
-        <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
-      {% elif i == left_rows|length %}
-        <td class="eia-x" colspan="6" rowspan="{{ grid_len - left_rows|length }}"></td>
-      {% endif %}
-      {% if i < right_rows|length %}
-        {% set c = right_rows[i] %}
-        <td class="eia-c">{{ c.container_no or '' }}</td>
-        <td class="eia-c">{{ c.seal_no or '' }}</td>
-        <td class="eia-c">{{ c.rfid_seal_no or '' }}</td>
-        <td class="eia-c">{{ n0(c.pallets) }}</td>
-        <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
-        <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
-      {% elif i == right_rows|length %}
-        <td class="eia-x" colspan="6" rowspan="{{ grid_len - right_rows|length }}"></td>
-      {% endif %}
+    {% for c in container_rows %}
+    <tr class="eia-crow">
+      <td class="eia-c">{{ loop.index }}</td>
+      <td class="eia-c">{{ c.container_no or '' }}</td>
+      <td class="eia-c">{{ c.seal_no or '' }}</td>
+      <td class="eia-c">{{ c.rfid_seal_no or '' }}</td>
+      <td class="eia-c">{{ n0(c.pallets) }}</td>
+      <td class="eia-c">{{ n0(c.quantity_boxes) }}</td>
+      <td class="eia-c">{{ n2(c.gross_weight_kg) }}</td>
     </tr>
     {% endfor %}
+    {# The struck-out void the form leaves under the list, and the row
+       _page_filler.html stretches so the sheet fills its A4 page however few
+       containers there are. #}
+    <tr class="eia-crow js-page-filler">
+      <td class="eia-x" colspan="7"></td>
+    </tr>
     <tr class="eia-crow">
-      <td colspan="6" class="eia-x"></td>
-      <td colspan="3" class="eia-head">Total</td>
+      <td colspan="4" class="eia-head">Total</td>
       <td class="eia-c">{{ n0(total_pallets) }}</td>
       <td class="eia-c">{{ n0(total_boxes) }}</td>
       <td class="eia-c">{{ n2(total_gross) }}</td>
