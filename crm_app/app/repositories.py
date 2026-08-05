@@ -729,22 +729,24 @@ class CompanyRepository:
 
     def upsert(self, company_id: int, company_name: str, address: str, gstin: str,
                pan_no: str, iec: str, bin_no: str, self_sealing_declaration: str = None,
-               branch_code: str = None) -> int:
+               branch_code: str = None, government_schemes: str = None) -> int:
         """Returns the `our_company.id` row (not the tenant's company_id) -
         callers need it to scope the four detail-table replace_* calls."""
         existing = self.db.query_one("SELECT id FROM our_company WHERE company_id = ?", (company_id,))
         if existing:
             self.db.execute(
                 """UPDATE our_company SET company_name = ?, address = ?, gstin = ?, pan_no = ?, iec = ?, bin = ?,
-                                           self_sealing_declaration = ?, branch_code = ?,
+                                           self_sealing_declaration = ?, branch_code = ?, government_schemes = ?,
                                            updated_at = datetime('now') WHERE company_id = ?""",
-                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code, company_id),
+                (company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code,
+                 government_schemes, company_id),
             )
             return existing["id"]
         return self.db.execute(
-            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration, branch_code) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code),
+            "INSERT INTO our_company (company_id, company_name, address, gstin, pan_no, iec, bin, self_sealing_declaration, branch_code, government_schemes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (company_id, company_name, address, gstin, pan_no, iec, bin_no, self_sealing_declaration, branch_code,
+             government_schemes),
         )
 
     def set_logo(self, our_company_id: int, logo_path: Optional[str]) -> None:

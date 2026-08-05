@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS our_company (
     branch_code     TEXT,       -- IEC branch code, printed on the Export Invoice annexure (section 2B)
     logo_path       TEXT,       -- company logo, relative to static/ (shown in the app sidebar and on generated documents)
     self_sealing_declaration TEXT,  -- standard self-sealing declaration text, printed on the Export Invoice
+    government_schemes TEXT,   -- government schemes text; default for the Export Annexure's section 13 and printed as a heading on the Export Invoice
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

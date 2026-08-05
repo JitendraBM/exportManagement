@@ -130,6 +130,7 @@ def settings():
                 logo_file=request.files.get("logo_file"),
                 remove_logo=bool(request.form.get("remove_logo")),
                 self_sealing_declaration=request.form.get("self_sealing_declaration", ""),
+                government_schemes=request.form.get("government_schemes", ""),
             )
             flash("Our Company profile saved.", "success")
             return redirect(url_for("company.settings"))

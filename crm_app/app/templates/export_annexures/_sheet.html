@@ -261,7 +261,7 @@
     <tr>
       <td class="eia-c" rowspan="2">13</td>
       <td class="eia-lbl" rowspan="2">Examined the goods covered under this as above particulars of export scheme</td>
-      <td class="eia-v">WE INTEND TO CLAIM REWARDS UNDER REMISSION OF DUTIES AND TAXES ON EXPORTED PRODUCTS FROM INDIA SCHEME (RoDTEP) &amp; DBK</td>
+      <td class="eia-v">{{ ((company.government_schemes if company else '') or '-')|replace('\n','<br>')|safe }}</td>
     </tr>
     <tr>
       <td class="eia-v">{% if invoice.epcg_number %}EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} &nbsp; Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% else %}-{% endif %}</td>

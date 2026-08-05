@@ -738,7 +738,7 @@ class CompanyService:
     def save(self, current_user: User, company_name: str, address: str, gstin: str, pan_no: str, iec: str,
               bin_no: str, contact_details: list, contact_persons: list, bank_details: list, lut_details: list,
               rcmc_details: list, logo_file=None, remove_logo: bool = False,
-              self_sealing_declaration: str = "", branch_code: str = "") -> None:
+              self_sealing_declaration: str = "", branch_code: str = "", government_schemes: str = "") -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can edit our company's profile.")
         if not company_name or not company_name.strip():
@@ -783,6 +783,7 @@ class CompanyService:
             current_user.company_id, company_name.strip(), address, gstin, pan_no, iec, bin_no,
             (self_sealing_declaration or "").strip() or None,
             (branch_code or "").strip() or None,
+            (government_schemes or "").strip() or None,
         )
         self.company_repo.replace_contact_details(our_company_id, valid_details)
         self.company_repo.replace_contact_persons(our_company_id, valid_persons)

@@ -391,6 +391,7 @@ class OurCompany:
     address: Optional[str] = None
     logo_path: Optional[str] = None  # relative to static/, shown in the app sidebar and on generated documents
     self_sealing_declaration: Optional[str] = None  # printed on the Export Invoice's declaration block
+    government_schemes: Optional[str] = None  # default for the Export Annexure's section 13, and printed as a heading on the Export Invoice
     updated_at: Optional[str] = None
     contact_details: List[dict] = field(default_factory=list)  # [{type, value, is_primary}]
     contact_persons: List[dict] = field(default_factory=list)  # [{name, designation, is_primary}]
@@ -412,6 +413,7 @@ class OurCompany:
             address=row["address"] if "address" in row.keys() else None,
             logo_path=row["logo_path"] if "logo_path" in row.keys() else None,
             self_sealing_declaration=row["self_sealing_declaration"] if "self_sealing_declaration" in row.keys() else None,
+            government_schemes=row["government_schemes"] if "government_schemes" in row.keys() else None,
             updated_at=row["updated_at"],
         )
 
