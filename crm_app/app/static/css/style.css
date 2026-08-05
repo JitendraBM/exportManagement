@@ -593,13 +593,11 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .quote-items-table td.num, .quote-items-table th:nth-child(6), .quote-items-table th:nth-child(8) {
   white-space: nowrap;
 }
-/* QTY / ALT QTY carry a trailing unit; on a fixed-width column the number+unit
-   would overflow into the neighbouring cell when printed, so let the unit drop
-   onto its own line instead. */
+/* QTY / ALT QTY carry a trailing unit; kept inline right after the number, the
+   same way the Export Invoice sheet prints it. */
 .quote-items-table td.num.quote-qty-cell { white-space: normal; }
-.quote-qty-cell .quote-unit-sm { display: block; line-height: 1.2; }
 .quote-items-table tfoot td { border: 1px solid var(--color-line-dark); padding: 6px 8px; background: var(--color-paper); vertical-align: middle; text-align: left; }
-.quote-unit-sm { font-size: .82em; color: var(--color-text-soft); text-transform: uppercase; }
+.quote-unit-sm { font-size: .85em; font-weight: normal; text-transform: uppercase; }
 .quote-product-cell { vertical-align: bottom; }
 .quote-charge-row td { padding: 2px 8px; }
 .quote-total-row td { background: var(--color-paper); }
