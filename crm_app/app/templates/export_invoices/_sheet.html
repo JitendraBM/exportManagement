@@ -259,9 +259,11 @@
         <td colspan="2" class="ei-r">Discount</td>
         <td class="ei-num">{{ usd(invoice.discount_amount) }}</td>
       </tr>
+      {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
+      {% set order_gross_weight = (packing_list.total_gross_weight if packing_list and packing_list.items else None) or invoice.total_gross_weight_kg %}
       <tr class="ei-tot">
         <td colspan="2" rowspan="2" class="ei-mid">Net Weight</td>
-        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(invoice.total_net_weight_kg) if invoice.total_net_weight_kg else '-' }}</td>
+        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
         <td colspan="2" class="ei-r">Insurance</td>
         <td class="ei-num">{{ usd(invoice.insurance) }}</td>
       </tr>
@@ -271,7 +273,7 @@
       </tr>
       <tr class="ei-tot">
         <td colspan="2" rowspan="2" class="ei-mid">Gross Weight</td>
-        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(invoice.total_gross_weight_kg) if invoice.total_gross_weight_kg else '-' }}</td>
+        <td rowspan="2" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         <td colspan="2" class="ei-r">Other Charges</td>
         <td class="ei-num">{{ usd(invoice.other_charges) }}</td>
       </tr>
@@ -328,7 +330,7 @@
           <colgroup><col style="width:44%"><col style="width:12%"><col style="width:44%"></colgroup>
           <tr><td colspan="3" class="ei-lbl ei-c">LUT IGST Details</td></tr>
           <tr><td>Invoice Value</td><td class="ei-c">$</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
-          <tr><td>Exchange Rate <a href="https://foservices.icegate.gov.in/#/services/viewExchangeRate" target="_blank" rel="noopener" class="no-print" style="font-size:8px;font-weight:normal;">Check exchange rate</a></td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
+          <tr><td>Exchange Rate</td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
           <tr><td>Invoice Value INR</td><td class="ei-c">₹</td><td class="ei-num">{{ ind(invoice.invoice_value_inr) }}</td></tr>
           <tr>
             <td>IGST Amount</td><td class="ei-c">₹</td>

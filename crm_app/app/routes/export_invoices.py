@@ -327,7 +327,8 @@ def view_export_invoice(export_invoice_id):
     except NotFoundError:
         abort(404)
     company = container.company_service.get(g.user.company_id)
-    return render_template("export_invoices/print.html", invoice=invoice, company=company)
+    packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, g.user.company_id)
+    return render_template("export_invoices/print.html", invoice=invoice, company=company, packing_list=packing_list)
 
 
 @export_invoices_bp.route("/<int:export_invoice_id>/edit", methods=["GET", "POST"])
@@ -423,5 +424,5 @@ def view_export_invoice_version(export_invoice_id, version_number):
     company = container.company_service.get(g.user.company_id)
     return render_template(
         "export_invoices/print.html", invoice=historical_invoice, company=company,
-        historical_version=version,
+        historical_version=version, packing_list=None,
     )
