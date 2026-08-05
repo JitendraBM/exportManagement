@@ -328,7 +328,7 @@
           <colgroup><col style="width:44%"><col style="width:12%"><col style="width:44%"></colgroup>
           <tr><td colspan="3" class="ei-lbl ei-c">LUT IGST Details</td></tr>
           <tr><td>Invoice Value</td><td class="ei-c">$</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
-          <tr><td>Exchange Rate</td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
+          <tr><td>Exchange Rate <a href="https://foservices.icegate.gov.in/#/services/viewExchangeRate" target="_blank" rel="noopener" class="no-print" style="font-size:8px;font-weight:normal;">Check exchange rate</a></td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
           <tr><td>Invoice Value INR</td><td class="ei-c">₹</td><td class="ei-num">{{ ind(invoice.invoice_value_inr) }}</td></tr>
           <tr>
             <td>IGST Amount</td><td class="ei-c">₹</td>
