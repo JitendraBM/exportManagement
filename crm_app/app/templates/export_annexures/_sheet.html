@@ -276,7 +276,7 @@
         <span class="eia-lbl">Self Sealing Declaration</span><br>
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n','<br>')|safe }}
       </td>
-      <td class="eia-sign" style="text-align:right; padding:0;">
+      <td class="eia-sign" style="text-align:right; padding:0;" rowspan="2">
         <div style="display:flex; flex-direction:column; justify-content:space-between; height:100%; padding:2px 4px;">
           <div class="eia-lbl">For {{ company.company_name|upper if company else '' }}</div>
           <div>
@@ -292,8 +292,8 @@
         </div>
       </td>
     </tr>
-  </table>
-  <table>
-    <tr><td class="eia-c eia-lbl">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</td></tr>
+    <tr>
+      <td class="eia-lbl">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</td>
+    </tr>
   </table>
 </div>
