@@ -234,7 +234,7 @@
 
   <div class="card">
     <div class="card-header"><h3>Export under</h3></div>
-    <div class="field"><label for="export_under">Export under (declaration text)</label><textarea id="export_under" name="export_under" rows="2" placeholder="e.g. SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST (LUT NO : ...)">{{ data.export_under | default('', true) }}</textarea></div>
+    <div class="field"><label for="export_under">Export under (declaration text) <span class="text-soft text-sm">(defaults to the government schemes set under Our Company)</span></label><textarea id="export_under" name="export_under" rows="3" placeholder="e.g. WE INTEND TO CLAIM REWARDS UNDER RoDTEP &amp; DBK">{{ data.export_under | default((company.government_schemes if company else ''), true) }}</textarea></div>
     <div class="form-row">
       <div class="field"><label for="epcg_number">EPCG licence no. <span class="text-soft text-sm">(imported from purchase invoices when present)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
       <div class="field"><label for="epcg_date">EPCG date</label><input type="date" id="epcg_date" name="epcg_date" value="{{ (data.epcg_date | default('', true))[:10] }}"></div>

@@ -2915,16 +2915,11 @@ class ExportInvoiceService:
                             seen_pd.add(key)
                             purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None})
 
-        # "Export under" default text: the company's primary LUT line, which
-        # the sample prints as "SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF
-        # IGST (LUT NO : ...)". Editable afterwards.
-        export_under = None
+        # "Export under" default text: the company's government schemes, the
+        # same text the Annexure's section 13 defaults to. Editable afterwards.
+        # The LUT number is printed alongside it by the sheet, not baked in.
         company = self.company_repo.get(company_id)
-        if company and company.lut_details:
-            primary_lut = next((l for l in company.lut_details if l.get("is_primary")), company.lut_details[0])
-            lut_no = primary_lut.get("lut_number")
-            if lut_no:
-                export_under = f"SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST (LUT NO : {lut_no})"
+        export_under = (company.government_schemes if company else None) or None
 
         fields = {
             "proforma_invoice_ids": [pi.id for pi in proformas],

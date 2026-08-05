@@ -25,8 +25,10 @@ def upload(filename="shipping-bill.pdf", data=b"fake-pdf-bytes"):
     return FileStorage(stream=io.BytesIO(data), filename=filename)
 
 
-def make_company(container, seed, gstin="24AABFO8212B1ZV", declaration="DECL", lut="AD240225016083O"):
-    container.company_repo.upsert(seed.company_id, "AAYU EXIM", "MORBI", gstin, "AABFO8212B", "IEC1", declaration)
+def make_company(container, seed, gstin="24AABFO8212B1ZV", declaration="DECL", lut="AD240225016083O",
+                 government_schemes=""):
+    container.company_repo.upsert(seed.company_id, "AAYU EXIM", "MORBI", gstin, "AABFO8212B", "IEC1", declaration,
+                                  government_schemes=government_schemes or None)
     if lut:
         oc = container.company_repo.get(seed.company_id)
         container.company_repo.replace_lut_details(oc.id, [{"lut_number": lut, "financial_year": "2024-25", "is_primary": True}])
@@ -176,11 +178,11 @@ class TestExportProformaLinks:
         built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
         assert built["fields"]["nature_of_contract"] == "CNF- (Beira)"
 
-    def test_prefill_export_under_from_company_lut(self, container, seed):
-        make_company(container, seed, lut="LUT-123")
+    def test_prefill_export_under_from_company_government_schemes(self, container, seed):
+        make_company(container, seed, government_schemes="WE INTEND TO CLAIM RoDTEP & DBK")
         p1 = make_proforma(container, seed)
         built = container.export_invoice_service.build_prefill_from_proformas([p1.id], seed.company_id)
-        assert "LUT-123" in (built["fields"]["export_under"] or "")
+        assert built["fields"]["export_under"] == "WE INTEND TO CLAIM RoDTEP & DBK"
 
     def test_prefill_ignores_other_companys_pi(self, container, seed):
         other = container.tenant_repo.create("Other Co", "other")

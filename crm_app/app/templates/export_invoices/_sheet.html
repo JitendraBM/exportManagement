@@ -293,10 +293,13 @@
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
+          {# Only the (editable) export-under text and the company's current LUT
+             number belong in this cell - nothing else. #}
+          {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
+          {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else {}) or {}).get('lut_number') %}
           <span class="ei-lbl">Export Under</span><br>
-          {% if invoice.export_under %}{{ invoice.export_under|upper }}<br>{% endif %}
-          SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
-          {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
+          {% if invoice.export_under %}{{ invoice.export_under|upper|replace('\n', '<br>')|safe }}{% endif %}
+          {% if lut_no %}{% if invoice.export_under %}<br>{% endif %}LUT NO : {{ lut_no }}{% endif %}
         </td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>

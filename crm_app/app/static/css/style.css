@@ -89,7 +89,25 @@ code, .mono, .num { font-family: var(--font-mono); }
   height: 100vh;
 }
 
+/* The nav list scrolls on its own so brand + footer stay put on short screens. */
+.sidebar-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(238, 242, 245, 0.28) transparent;
+}
+.sidebar-nav::-webkit-scrollbar { width: 8px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(238, 242, 245, 0.22);
+  border-radius: 4px;
+}
+.sidebar-nav::-webkit-scrollbar-thumb:hover { background: rgba(238, 242, 245, 0.38); }
+
 .brand {
+  flex-shrink: 0;
   padding: 0 20px 18px;
   border-bottom: 1px solid rgba(238, 242, 245, 0.12);
   margin-bottom: 14px;
@@ -141,6 +159,7 @@ code, .mono, .num { font-family: var(--font-mono); }
 .nav-sublink { padding-left: 40px; font-size: .87rem; }
 
 .sidebar-footer {
+  flex-shrink: 0;
   margin-top: auto;
   padding: 14px 20px 0;
   border-top: 1px solid rgba(238, 242, 245, 0.12);
@@ -662,6 +681,7 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 @media (max-width: 800px) {
   .shell { flex-direction: column; }
   .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; overflow-x: auto; padding: 10px 0; }
+  .sidebar-nav { display: flex; overflow-x: auto; overflow-y: visible; }
   .sidebar-footer { display: none; }
   .brand { display: none; }
   .nav-section-label { display: none; }
