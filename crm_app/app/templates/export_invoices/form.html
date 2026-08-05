@@ -139,7 +139,7 @@
                   data-stuffing-place-name="{{ p.stuffing_place_name or '' }}"
                   data-place-of-stuffing="{{ p.place_of_stuffing or '' }}"
                   data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
-            {{ p.permission_number }}{% if p.place_of_stuffing %} — {{ p.place_of_stuffing }}{% endif %}
+            {{ p.permission_number }}{% if p.stuffing_place_name %} — {{ p.stuffing_place_name }}{% endif %}
           </option>
         {% endfor %}
       </select>
@@ -738,6 +738,8 @@
     document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
     const stuffAt = [opt.dataset.stuffingPlaceName, opt.dataset.placeOfStuffing].filter(Boolean).join(', ');
     if (stuffAt) document.getElementById('stuffing_location').value = stuffAt;
+    if (opt.dataset.stuffingPlaceName) document.getElementById('manufacturer_name').value = opt.dataset.stuffingPlaceName;
+    if (opt.dataset.placeOfStuffing) document.getElementById('manufacturer_address').value = opt.dataset.placeOfStuffing;
   });
 
   // ---- product picker --------------------------------------------------
