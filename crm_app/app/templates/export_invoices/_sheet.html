@@ -14,8 +14,9 @@
    Quantity columns map to our data as: Packing = pallets, Qty = boxes,
    Alt. Qty = quantity_value (the unit the line is priced in).
 
-   Money keeps the app-wide Western grouping for USD; INR uses Indian
-   grouping (see the `ind` macro) to match the reference's ledger figures. #}
+   Money in the invoice's own currency keeps the app-wide Western grouping;
+   the INR conversion uses Indian grouping (see the `ind` macro) to match the
+   reference's ledger figures. #}
 <style>
   .ei-sheet {
     background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
@@ -75,7 +76,9 @@
   {%- else -%}-{%- endif -%}
 {%- endmacro %}
 
-{% macro usd(v) -%}{%- if v %}$&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}$&nbsp;-{% endif -%}{%- endmacro %}
+{# Money in the invoice's own currency (the macro name predates the currency
+   being a picked field; the symbol follows invoice.currency_prefix). #}
+{% macro usd(v) -%}{%- if v %}{{ invoice.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ invoice.currency_prefix }}&nbsp;-{% endif -%}{%- endmacro %}
 
 {# Indian digit grouping (12,34,567.89): last three digits, then pairs. Built
    in-template so this stays a presentation concern - no new Python filter. #}
@@ -323,7 +326,7 @@
     <colgroup><col style="width:14%"><col style="width:86%"></colgroup>
     <tr>
       <td class="ei-lbl ei-mid">Invoice Value In Word</td>
-      <td class="ei-lbl ei-mid">{{ invoice.invoice_value_usd | amount_in_words }}</td>
+      <td class="ei-lbl ei-mid">{{ invoice.invoice_value_usd | amount_in_words(invoice.currency_name) }}</td>
     </tr>
   </table>
 
@@ -361,7 +364,7 @@
         <table>
           <colgroup><col style="width:44%"><col style="width:12%"><col style="width:44%"></colgroup>
           <tr><td colspan="3" class="ei-lbl ei-c">LUT IGST Details</td></tr>
-          <tr><td>Invoice Value</td><td class="ei-c">$</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
+          <tr><td>Invoice Value</td><td class="ei-c">{{ invoice.currency_prefix }}</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
           <tr><td>Exchange Rate</td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
           <tr><td>Invoice Value INR</td><td class="ei-c">₹</td><td class="ei-num">{{ ind(invoice.invoice_value_inr) }}</td></tr>
           <tr>

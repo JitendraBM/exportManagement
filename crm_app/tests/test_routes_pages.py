@@ -569,6 +569,9 @@ class TestMiscRoutes:
 
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
         assert "JPY [ ¥ ]" in sheet and "USD [ $ ]" not in sheet
+        # ...and every amount on the sheet carries that currency, not a $.
+        assert "$" not in sheet
+        assert "JPY" in sheet.split("Amount Chargeable")[-1][:400] or "¥" in sheet
         packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
         epl = client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
         assert "JPY [ ¥ ]" in epl

@@ -82,8 +82,8 @@
 
   <table class="quote-items-table">
     <colgroup>
-      <col style="width:4%"><col style="width:28%"><col style="width:12%"><col style="width:8%">
-      <col style="width:10%"><col style="width:10%"><col style="width:7%"><col style="width:21%">
+      <col style="width:4%"><col style="width:28%"><col style="width:8%"><col style="width:11%">
+      <col style="width:11%"><col style="width:10%"><col style="width:7%"><col style="width:21%">
     </colgroup>
     <thead>
       <tr>
@@ -164,6 +164,13 @@
 
   <div class="quote-footnote">Price validity: {{ quotation.price_validity_days }} days from date of quotation.</div>
 
+  {% if quotation.remarks %}
+  <div class="quote-remarks">
+    <strong>REMARKS:</strong>
+    <div>{{ quotation.remarks|replace('\n', '<br>')|safe }}</div>
+  </div>
+  {% endif %}
+
   <table class="quote-bank-table">
     <colgroup><col style="width:32%"><col style="width:40%"><col style="width:28%"></colgroup>
     <tr>
@@ -190,11 +197,4 @@
       </td>
     </tr>
   </table>
-
-  {% if quotation.remarks %}
-  <div class="quote-remarks">
-    <strong>REMARKS:</strong>
-    <div>{{ quotation.remarks|replace('\n', '<br>')|safe }}</div>
-  </div>
-  {% endif %}
 </div>
