@@ -41,6 +41,9 @@
   /* Opt out per-row for the Consigner/Consignee/Buyer labels, which sit
      directly above their address block with no rule between them. */
   .ei-nest table tr.ei-nb td { border-bottom: none; }
+  /* Heavier rule between the two SUPPLIER GSTIN / INVOICE NO pairs in the
+     Purchase Details grid, to set the pairs apart at a glance. */
+  .ei-pd-sep { border-left: 2px solid #000 !important; }
 
   .ei-lbl { font-weight: bold; }
   .ei-blk { font-weight: bold; }          /* consigner / consignee address blocks */
@@ -323,7 +326,7 @@
           <tr>
             <td class="ei-lbl ei-c">SUPPLIER GSTIN</td>
             <td class="ei-lbl ei-c">INVOICE NO</td>
-            <td class="ei-lbl ei-c">SUPPLIER GSTIN</td>
+            <td class="ei-lbl ei-c ei-pd-sep">SUPPLIER GSTIN</td>
             <td class="ei-lbl ei-c">INVOICE NO</td>
           </tr>
           {% for i in range(pd_rows) %}
@@ -332,7 +335,7 @@
           <tr>
             <td>{{ pd_l.supplier_gstin or '' if pd_l else '' }}</td>
             <td>{{ pd_l.supplier_invoice_no or '' if pd_l else '' }}</td>
-            <td>{{ pd_r.supplier_gstin or '' if pd_r else '' }}</td>
+            <td class="ei-pd-sep">{{ pd_r.supplier_gstin or '' if pd_r else '' }}</td>
             <td>{{ pd_r.supplier_invoice_no or '' if pd_r else '' }}</td>
           </tr>
           {% endfor %}
