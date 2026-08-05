@@ -57,9 +57,10 @@ def _extract_items(form) -> list:
 def _form_context():
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
+    buyers = container.buyer_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
     bank_options = company.bank_details if company else []
-    return leads, bank_options
+    return leads, buyers, bank_options
 
 
 def _alt_qty_map(items) -> dict:
@@ -138,16 +139,16 @@ def new_quotation():
             return redirect(url_for("quotations.view_quotation", quotation_id=quotation.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, bank_options = _form_context()
+            leads, buyers, bank_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
-                "quotations/form.html", quotation=None, leads=leads, bank_options=bank_options,
+                "quotations/form.html", quotation=None, leads=leads, buyers=buyers, bank_options=bank_options,
                 form_data=request.form, form_items=items, alt_qty_map=_alt_qty_map(items),
                 pallet_types_map=_pallet_types_map(items),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, bank_options = _form_context()
+    leads, buyers, bank_options = _form_context()
     prefill = None
     lead_id = request.args.get("lead_id")
     if lead_id:
@@ -160,7 +161,7 @@ def new_quotation():
         except (NotFoundError, ValueError):
             pass
     return render_template(
-        "quotations/form.html", quotation=None, leads=leads, bank_options=bank_options,
+        "quotations/form.html", quotation=None, leads=leads, buyers=buyers, bank_options=bank_options,
         form_data=prefill, form_items=None, alt_qty_map={}, pallet_types_map={},
         today=date.today().isoformat(),
     )
@@ -220,18 +221,18 @@ def edit_quotation(quotation_id):
             return redirect(url_for("quotations.view_quotation", quotation_id=quotation_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, bank_options = _form_context()
+            leads, buyers, bank_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
-                "quotations/form.html", quotation=quotation, leads=leads, bank_options=bank_options,
+                "quotations/form.html", quotation=quotation, leads=leads, buyers=buyers, bank_options=bank_options,
                 form_data=request.form, form_items=items, alt_qty_map=_alt_qty_map(items),
                 pallet_types_map=_pallet_types_map(items),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, bank_options = _form_context()
+    leads, buyers, bank_options = _form_context()
     return render_template(
-        "quotations/form.html", quotation=quotation, leads=leads, bank_options=bank_options,
+        "quotations/form.html", quotation=quotation, leads=leads, buyers=buyers, bank_options=bank_options,
         form_data=None, form_items=None, alt_qty_map=_alt_qty_map(quotation.items),
         pallet_types_map=_pallet_types_map(quotation.items), today=date.today().isoformat(),
     )

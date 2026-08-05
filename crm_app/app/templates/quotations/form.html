@@ -14,14 +14,25 @@
   {% set data = form_data if form_data else quotation %}
   <div class="card">
     <div class="card-header"><h3>Buyer / Importer</h3></div>
-    <div class="field">
-      <label for="lead_select">Prefill from an existing lead <span class="text-soft text-sm">(optional)</span></label>
-      <select id="lead_select">
-        <option value="">— Select a lead to prefill —</option>
-        {% for l in leads %}
-          <option value="{{ l.id }}" data-name="{{ l.company_name }}">{{ l.company_name }}</option>
-        {% endfor %}
-      </select>
+    <div class="form-row">
+      <div class="field">
+        <label for="lead_select">Prefill from an existing lead <span class="text-soft text-sm">(optional)</span></label>
+        <select id="lead_select">
+          <option value="">— Select a lead to prefill —</option>
+          {% for l in leads %}
+            <option value="{{ l.id }}" data-name="{{ l.company_name }}">{{ l.company_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="buyer_select">Prefill from an existing buyer <span class="text-soft text-sm">(optional)</span></label>
+        <select id="buyer_select">
+          <option value="">— Select a buyer to prefill —</option>
+          {% for b in buyers %}
+            <option value="{{ b.id }}" data-name="{{ b.company_name }}" data-address="{{ b.address | default('', true) }}">{{ b.company_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
     <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
     <div class="form-row">
@@ -414,6 +425,17 @@
     if (!opt.value) { document.getElementById('lead_id').value = ''; return; }
     document.getElementById('lead_id').value = opt.value;
     document.getElementById('buyer_name').value = opt.dataset.name || '';
+    document.getElementById('buyer_select').value = '';
+  });
+
+  // ---- buyer dropdown prefill --------------------------------------------------
+  document.getElementById('buyer_select').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt.value) return;
+    document.getElementById('buyer_name').value = opt.dataset.name || '';
+    document.getElementById('buyer_address').value = opt.dataset.address || '';
+    document.getElementById('lead_select').value = '';
+    document.getElementById('lead_id').value = '';
   });
 
   // ---- bank dropdown prefill --------------------------------------------------
