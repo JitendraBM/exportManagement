@@ -43,7 +43,6 @@
   .epl-items thead td { font-weight: normal; text-align: center; vertical-align: middle; }
   .epl-items tbody td { vertical-align: top; }
   .epl-tot td { font-weight: bold; }
-  .epl-sign { height: 46px; }
   @media print { .epl-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
 
@@ -243,9 +242,9 @@
       <td class="epl-left" style="height:70px;">
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n', '<br>')|safe }}
       </td>
-      <td class="epl-r epl-sign" style="text-align:right; padding:4px 6px; vertical-align:bottom;">
+      <td rowspan="2" class="epl-r epl-sign" style="text-align:right; padding:4px 6px; position:relative;">
         <div class="epl-lbl">For {{ company.company_name|upper if company else '' }}</div>
-        <div style="margin-top:34px;">
+        <div style="position:absolute; right:6px; bottom:4px; left:6px; text-align:right;">
           <div class="epl-lbl">Authorised Signatury</div>
           {% if invoice.authorised_person_name %}
           <div class="epl-lbl">
@@ -259,7 +258,7 @@
     </tr>
     <tr>
       <td class="epl-lbl epl-mid">Stuff At</td>
-      <td class="epl-left" colspan="2">{{ (invoice.stuffing_location or '-')|upper|replace('\n', '<br>')|safe }}</td>
+      <td class="epl-left">{{ (invoice.stuffing_location or '-')|upper|replace('\n', '<br>')|safe }}</td>
     </tr>
   </table>
 </div>
