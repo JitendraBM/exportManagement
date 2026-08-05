@@ -112,6 +112,16 @@ class TestProformaCrud:
         assert reloaded.subtotal_usd == 200.0
         assert reloaded.invoice_value_usd == 205.0  # 200 + 10 - 5
 
+    def test_fob_terms_drop_sea_freight_and_insurance(self, container, seed):
+        # FOB puts the ocean leg on the buyer, so both charges are stored as
+        # zero and stay out of the invoice value even if the form posts them.
+        pi = self._create(container, seed, terms_of_delivery="FOB MUNDRA",
+                          sea_freight="10", insurance="20", other_charges="5")
+        reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
+        assert reloaded.sea_freight == 0
+        assert reloaded.insurance == 0
+        assert reloaded.invoice_value_usd == 205.0  # 200 + 5 other charges
+
     def test_create_records_a_version(self, container, seed):
         pi = self._create(container, seed)
         versions = container.document_version_service.list_for_document(

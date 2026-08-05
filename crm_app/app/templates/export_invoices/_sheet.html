@@ -275,8 +275,13 @@
       {% if invoice.certification %}
       {% set _ = money.append(('Certification', invoice.certification, false)) %}
       {% endif %}
+      {# FOB puts the ocean leg on the buyer: neither charge applies, so both
+         lines drop out. The money ladder drives the whole band's row count, so
+         the left cell's rowspan and the Net/Gross split below follow along. #}
+      {% if not invoice.nature_of_contract | is_fob %}
       {% set _ = money.append(('Insurance', invoice.insurance, false)) %}
       {% set _ = money.append(('Sea Freight', invoice.sea_freight, false)) %}
+      {% endif %}
       {% set _ = money.append(('Other Charges', invoice.other_charges, false)) %}
       {% set _ = money.append(('FOB Value', invoice.subtotal_usd, false)) %}
 

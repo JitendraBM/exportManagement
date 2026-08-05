@@ -137,8 +137,9 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Choosing a catalog product prefills its name, HSN code, unit and pallet type options. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Pallet type starts on "Loose" — no pallets; picking one of the product's pallet types works out Plts from Boxes using that pallet's box capacity (the dropdown shows how much each pallet stores), and "Manual" lets Plts be typed by hand. Price is typed in per line (a specific design and its price are picked later, on the packing list).</p>
     <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      {# Hidden (and forced to 0) while the shipping terms are FOB - see js-fob-charge below. #}
+      <div class="field js-fob-charge" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field js-fob-charge" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
@@ -435,6 +436,22 @@
   ['discount_amount', 'sea_freight', 'insurance', 'certification', 'other_charges'].forEach((id) => {
     document.getElementById(id).addEventListener('input', recalcTotals);
   });
+
+  // ---- FOB hides sea freight / insurance --------------------------------------
+  // Under FOB the buyer pays the ocean leg, so neither charge applies: the two
+  // inputs are hidden and zeroed (the server zeroes them too), which keeps the
+  // invoice value and the printed sheet consistent.
+  const termsSelect = document.getElementById('shipping_terms');
+  function applyFobCharges() {
+    const fob = /^FOB\b/i.test((termsSelect.value || '').trim());
+    document.querySelectorAll('.js-fob-charge').forEach((field) => {
+      field.hidden = fob;
+      if (fob) field.querySelector('input').value = 0;
+    });
+    recalcTotals();
+  }
+  termsSelect.addEventListener('change', applyFobCharges);
+  applyFobCharges();
 
   // ---- lead dropdown prefill --------------------------------------------------
   document.getElementById('lead_select').addEventListener('change', (e) => {

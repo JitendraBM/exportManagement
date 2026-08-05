@@ -670,3 +670,57 @@ class TestDocumentCurrency:
             [{"product_name": "P", "quantity_boxes": "5", "quantity_value": "10", "price_inr": "2"}], [])
         view = client.get(f"/purchase-invoices/{invoice.id}").get_data(as_text=True)
         assert "Price (JPY)" in view and "(INR)" not in view
+
+
+# ==========================================================================
+# FOB drops the sea freight / insurance rows from every printed sheet
+# ==========================================================================
+class TestFobChargeRows:
+    """Under FOB the buyer carries the ocean leg, so the two charges are never
+    part of the price - the sheets print without those rows, and the amount-in-
+    words cell that spans the charge ladder shrinks to match."""
+
+    def test_quotation_sheet_drops_the_rows(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": "FOB", "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
+        assert "CERTIFICATION" in sheet          # the rest of the ladder stays
+        assert 'rowspan="5"' in sheet            # 7 charge rows - the 2 dropped
+
+    def test_proforma_sheet_drops_the_rows(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
+                    "terms_of_delivery": "FOB MUNDRA", "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
+        assert "TOTAL INVOICE VALUE" in sheet
+        assert 'rowspan="3"' in sheet            # 5 charge rows - the 2 dropped
+
+    def test_export_invoice_sheet_drops_the_rows(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = container.export_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
+                    "export_invoice_number": "1000000001", "tax_mode": "igst",
+                    "exchange_rate": "86.70", "nature_of_contract": "FOB",
+                    "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
+        sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        assert "FOB Value" in sheet and "Other Charges" in sheet
+        assert 'rowspan="5"' in sheet            # the shortened money ladder
+
+    def test_non_fob_sheet_keeps_the_rows(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": "CIF", "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "SEA FREIGHT" in sheet and "INSURANCE" in sheet
+        assert 'rowspan="7"' in sheet

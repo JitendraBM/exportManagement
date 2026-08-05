@@ -11,7 +11,10 @@
 {% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
 {% set main_total = main_items | sum(attribute='total_usd') %}
 {% set annex_total = annex_items | sum(attribute='total_usd') %}
-{% set charge_rows = 7 + (1 if annex_items else 0) %}
+{# FOB puts the ocean leg on the buyer, so SEA FREIGHT and INSURANCE are not
+   charged and don't print - two fewer rows for AMOUNT IN WORDS to span. #}
+{% set fob = quotation.shipping_terms | is_fob %}
+{% set charge_rows = (5 if fob else 7) + (1 if annex_items else 0) %}
 {# Short item lists are closed off by one blank filler row sized in the browser
    to exactly the page's leftover space (templates/_page_filler.html), like the
    proforma invoice - rather than stretching every item row by a percentage,
@@ -135,6 +138,7 @@
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(annex_total) }}</td>
       </tr>
       {% endif %}
+      {% if not fob %}
       <tr class="quote-charge-row">
         <td colspan="5" class="num">SEA FREIGHT</td>
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.sea_freight) }}</td>
@@ -143,6 +147,7 @@
         <td colspan="5" class="num">INSURANCE</td>
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.insurance) }}</td>
       </tr>
+      {% endif %}
       <tr class="quote-charge-row">
         <td colspan="5" class="num">CERTIFICATION</td>
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.certification) }}</td>

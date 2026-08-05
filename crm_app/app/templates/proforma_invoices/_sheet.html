@@ -272,7 +272,10 @@
   </table>
 
   <!-- Amount in words / charges -->
-  {% set charge_rows = (6 if invoice.other_charges else 5) + (1 if annex_items else 0) %}
+  {# FOB puts the ocean leg on the buyer, so SEA FREIGHT and INSURANCE are not
+     charged and don't print - two fewer rows for Amount In Word to span. #}
+  {% set fob = invoice.terms_of_delivery | is_fob %}
+  {% set charge_rows = (6 if invoice.other_charges else 5) - (2 if fob else 0) + (1 if annex_items else 0) %}
   <table>
     <colgroup>
       <col style="width:8%"><col style="width:45%"><col style="width:35%"><col style="width:12%">
@@ -289,6 +292,7 @@
       <td class="pi-charge-label">CERTIFICATION</td>
       <td class="pi-val pi-right">{{ usd(invoice.certification) }}</td>
     </tr>
+    {% if not fob %}
     <tr>
       <td class="pi-charge-label">SEA FREIGHT</td>
       <td class="pi-val pi-right">{{ usd(invoice.sea_freight) }}</td>
@@ -297,6 +301,7 @@
       <td class="pi-charge-label">INSURANCE</td>
       <td class="pi-val pi-right">{{ usd(invoice.insurance) }}</td>
     </tr>
+    {% endif %}
     {% if invoice.other_charges %}
     <tr>
       <td class="pi-charge-label">OTHER CHARGES</td>

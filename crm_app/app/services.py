@@ -49,6 +49,7 @@ from app.repositories import (
     PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
 )
 from app.database import Database, SCHEMA_VERSION
+from app.utils import is_fob_terms
 
 
 # ============================================================
@@ -1874,6 +1875,11 @@ class QuotationService:
         if not buyer_name:
             raise ValidationError("Buyer name is compulsory.")
         quotation_date = (fields.get("quotation_date") or "").strip() or date.today().isoformat()
+        # FOB hands the ocean leg to the buyer, so sea freight and insurance
+        # are not chargeable - the form hides both inputs, and anything that
+        # still reaches here (a stale form, an API post) is stored as zero.
+        shipping_terms = (fields.get("shipping_terms") or "").strip() or None
+        fob = is_fob_terms(shipping_terms)
 
         def _float(key, default=0):
             raw = fields.get(key)
@@ -1916,12 +1922,12 @@ class QuotationService:
             packing_details=(fields.get("packing_details") or "").strip() or None,
             container_details=(fields.get("container_details") or "").strip() or None,
             shipping_mode=(fields.get("shipping_mode") or "").strip() or None,
-            shipping_terms=(fields.get("shipping_terms") or "").strip() or None,
+            shipping_terms=shipping_terms,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             price_validity_days=_int("price_validity_days", 30),
             remarks=(fields.get("remarks") or "").strip() or None,
-            sea_freight=_float("sea_freight", 0),
-            insurance=_float("insurance", 0),
+            sea_freight=0 if fob else _float("sea_freight", 0),
+            insurance=0 if fob else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
@@ -2178,6 +2184,10 @@ class ProformaInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
+        # See the quotation builder: FOB drops sea freight and insurance.
+        terms_of_delivery = (fields.get("terms_of_delivery") or "").strip() or None
+        fob = is_fob_terms(terms_of_delivery)
+
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
             # Only trust a lead from this same company - otherwise a crafted
@@ -2222,11 +2232,11 @@ class ProformaInvoiceService:
             variation_in_qty=(fields.get("variation_in_qty") or "").strip() or None,
             delivery_period=(fields.get("delivery_period") or "").strip() or None,
             container_details=(fields.get("container_details") or "").strip() or None,
-            terms_of_delivery=(fields.get("terms_of_delivery") or "").strip() or None,
+            terms_of_delivery=terms_of_delivery,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
-            sea_freight=_float("sea_freight", 0),
-            insurance=_float("insurance", 0),
+            sea_freight=0 if fob else _float("sea_freight", 0),
+            insurance=0 if fob else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
@@ -3239,6 +3249,10 @@ class ExportInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
+        # See the quotation builder: FOB drops sea freight and insurance.
+        nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
+        fob = is_fob_terms(nature_of_contract)
+
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
             lead = self.lead_repo.get_by_id(lead_id)
@@ -3283,7 +3297,7 @@ class ExportInvoiceService:
             port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
             port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
             final_destination=(fields.get("final_destination") or "").strip() or None,
-            nature_of_contract=(fields.get("nature_of_contract") or "").strip() or None,
+            nature_of_contract=nature_of_contract,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             buyer_order_no=(fields.get("buyer_order_no") or "").strip() or None,
             buyer_order_date=(fields.get("buyer_order_date") or "").strip() or None,
@@ -3292,8 +3306,8 @@ class ExportInvoiceService:
             epcg_date=(fields.get("epcg_date") or "").strip() or None,
             loading_type=loading_type, tax_mode=tax_mode,
             exchange_rate=_float("exchange_rate", 0),
-            sea_freight=_float("sea_freight", 0),
-            insurance=_float("insurance", 0),
+            sea_freight=0 if fob else _float("sea_freight", 0),
+            insurance=0 if fob else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),

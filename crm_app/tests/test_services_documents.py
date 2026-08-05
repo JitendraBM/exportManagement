@@ -122,6 +122,21 @@ class TestQuotationCrud:
                 seed.admin, {"buyer_name": ""},
                 [{"product_name": "P", "quantity_value": "1", "price_usd": "1"}])
 
+    def test_fob_shipping_terms_drop_sea_freight_and_insurance(self, container, seed):
+        # FOB puts the ocean leg on the buyer - neither charge is stored.
+        q = self._create(container, seed, shipping_terms="FOB",
+                         sea_freight="100", insurance="50")
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.sea_freight == 0
+        assert reloaded.insurance == 0
+        assert reloaded.invoice_value_usd == 20.0  # goods only
+
+    def test_non_fob_terms_keep_sea_freight_and_insurance(self, container, seed):
+        q = self._create(container, seed, shipping_terms="CIF",
+                         sea_freight="100", insurance="50")
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert (reloaded.sea_freight, reloaded.insurance) == (100, 50)
+
     def test_create_records_a_version(self, container, seed):
         q = self._create(container, seed)
         versions = container.document_version_service.list_for_document("quotation", q.id)

@@ -77,6 +77,15 @@ class TestExportCrud:
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
 
+    def test_fob_nature_of_contract_drops_sea_freight_and_insurance(self, container, seed):
+        # FOB puts the ocean leg on the buyer - neither charge is stored, and
+        # the printed sheet drops both rows with them.
+        inv = make_export(container, seed, nature_of_contract="FOB",
+                          sea_freight="100", insurance="20")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.sea_freight == 0
+        assert got.insurance == 0
+
     def test_number_is_required(self, container, seed):
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="")

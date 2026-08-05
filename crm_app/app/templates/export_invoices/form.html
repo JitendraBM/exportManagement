@@ -386,8 +386,9 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
     <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      {# Hidden (and forced to 0) while the nature of contract is FOB - see js-fob-charge below. #}
+      <div class="field js-fob-charge" style="max-width:150px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field js-fob-charge" style="max-width:150px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
@@ -597,6 +598,22 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', recalcTotals);
   });
+
+  // ---- FOB hides sea freight / insurance --------------------------------------
+  // Under FOB the buyer pays the ocean leg, so neither charge applies: the two
+  // inputs are hidden and zeroed (the server zeroes them too), which keeps the
+  // invoice value and the printed sheet consistent.
+  const contractSelect = document.getElementById('nature_of_contract');
+  function applyFobCharges() {
+    const fob = /^FOB\b/i.test((contractSelect.value || '').trim());
+    document.querySelectorAll('.js-fob-charge').forEach((field) => {
+      field.hidden = fob;
+      if (fob) field.querySelector('input').value = 0;
+    });
+    recalcTotals();
+  }
+  contractSelect.addEventListener('change', applyFobCharges);
+  applyFobCharges();
 
   // ---- reference-PI picker: restrict to one buyer at a time -----------------
   // One export invoice covers a single buyer's PIs, so once any box is

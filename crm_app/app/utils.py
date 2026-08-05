@@ -131,8 +131,26 @@ def inr_in_words(amount, currency_label: str = "INR") -> str:
     return f"{words} {currency_label} ONLY"
 
 
+def is_fob_terms(value) -> bool:
+    """True when a document's nature of contract / terms of delivery is FOB.
+
+    Under FOB the buyer carries the ocean leg, so sea freight and insurance
+    are never part of the price - the two charges are dropped from the form
+    and from the printed sheet. Options are hand-maintained in Administration
+    -> Miscellaneous, so they arrive as free text ('FOB', 'fob', 'FOB Mundra')
+    and are matched on the leading word rather than by equality."""
+    text = str(value or "").strip().upper()
+    return text == "FOB" or text.startswith("FOB ") or text.startswith("FOB-")
+
+
 def register_template_helpers(app):
     """Small, presentation-only helpers exposed to every Jinja template."""
+
+    @app.template_filter("is_fob")
+    def is_fob_filter(value):
+        """`{% if invoice.nature_of_contract | is_fob %}` - hides the sea
+        freight / insurance rows on FOB documents."""
+        return is_fob_terms(value)
 
     @app.template_filter("amount_in_words")
     def amount_in_words_filter(value, currency=None):
