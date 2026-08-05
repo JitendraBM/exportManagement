@@ -41,8 +41,7 @@ _HEADER_FIELDS = [
     "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
-    "total_net_weight_kg", "total_gross_weight_kg", "c_no", "c_date", "shipping_bill_no",
-    "shipping_bill_date", "stuffing_start_time", "stuffing_completion_time",
+    "total_net_weight_kg", "total_gross_weight_kg", "shipping_bill_no", "shipping_bill_date",
 ]
 
 
@@ -126,20 +125,12 @@ def _extract_container_details(form) -> list:
 def _extract_purchase_details(form) -> list:
     gstins = form.getlist("pd_supplier_gstin[]")
     inv_nos = form.getlist("pd_supplier_invoice_no[]")
-    qtys = form.getlist("pd_supplier_invoice_qty[]")
-    taxables = form.getlist("pd_supplier_taxable_amount[]")
-    cgsts = form.getlist("pd_supplier_cgst_amount[]")
-    sgsts = form.getlist("pd_supplier_sgst_amount[]")
-    n = max(len(gstins), len(inv_nos), len(qtys), len(taxables), len(cgsts), len(sgsts))
+    n = max(len(gstins), len(inv_nos))
     rows = []
     for i in range(n):
         rows.append({
             "supplier_gstin": gstins[i] if i < len(gstins) else "",
             "supplier_invoice_no": inv_nos[i] if i < len(inv_nos) else "",
-            "supplier_invoice_qty": qtys[i] if i < len(qtys) else "",
-            "supplier_taxable_amount": taxables[i] if i < len(taxables) else "",
-            "supplier_cgst_amount": cgsts[i] if i < len(cgsts) else "",
-            "supplier_sgst_amount": sgsts[i] if i < len(sgsts) else "",
         })
     return rows
 

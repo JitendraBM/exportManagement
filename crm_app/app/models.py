@@ -14,7 +14,6 @@ just "how do I represent myself", not "how do I persist myself".
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Optional, List
 
 
@@ -1500,12 +1499,8 @@ class ExportInvoice:
     remarks: Optional[str] = None
     total_net_weight_kg: Optional[float] = None  # front-page weight totals, typed not summed from containers
     total_gross_weight_kg: Optional[float] = None
-    c_no: Optional[str] = None  # annexure header row above the examination report title
-    c_date: Optional[str] = None
     shipping_bill_no: Optional[str] = None
     shipping_bill_date: Optional[str] = None  # Annexure-C header: Shipping Bill Date
-    stuffing_start_time: Optional[str] = None  # Annexure-C section 05: Time Of Stuffing
-    stuffing_completion_time: Optional[str] = None
     status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1514,7 +1509,7 @@ class ExportInvoice:
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
     container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight, excise_seal_no, plts, boxes}]
-    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_invoice_qty, supplier_taxable_amount, supplier_cgst_amount, supplier_sgst_amount}]
+    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -1581,12 +1576,8 @@ class ExportInvoice:
             remarks=g("remarks"),
             total_net_weight_kg=g("total_net_weight_kg"),
             total_gross_weight_kg=g("total_gross_weight_kg"),
-            c_no=g("c_no"),
-            c_date=g("c_date"),
             shipping_bill_no=g("shipping_bill_no"),
             shipping_bill_date=g("shipping_bill_date"),
-            stuffing_start_time=g("stuffing_start_time"),
-            stuffing_completion_time=g("stuffing_completion_time"),
             created_by=row["created_by"],
             created_at=g("created_at"),
             updated_at=g("updated_at"),
@@ -1640,24 +1631,6 @@ class ExportInvoice:
     @property
     def loading_type_label(self) -> str:
         return dict(EXPORT_LOADING_TYPES).get(self.loading_type, self.loading_type)
-
-    @property
-    def stuffing_time_taken(self) -> Optional[str]:
-        """Annexure-C section 05's 'Time Taken For Stuffing' - the difference
-        between the typed start/completion times, computed rather than
-        stored so the two can never drift apart. None (printed as '-') if
-        either side is missing or not a parseable HH:MM."""
-        if not self.stuffing_start_time or not self.stuffing_completion_time:
-            return None
-        try:
-            start = datetime.strptime(self.stuffing_start_time, "%H:%M")
-            end = datetime.strptime(self.stuffing_completion_time, "%H:%M")
-        except ValueError:
-            return None
-        delta_minutes = int((end - start).total_seconds() // 60)
-        if delta_minutes < 0:
-            delta_minutes += 24 * 60
-        return f"{delta_minutes // 60:02d}:{delta_minutes % 60:02d}"
 
     @property
     def total_containers(self) -> int:

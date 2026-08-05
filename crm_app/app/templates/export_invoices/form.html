@@ -49,10 +49,6 @@
       <div class="form-row purchase-detail-row">
         <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
         <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
-        <div class="field"><label>Supplier invoice qty</label><input type="text" name="pd_supplier_invoice_qty[]" value="{{ pd.supplier_invoice_qty or '' }}"></div>
-        <div class="field"><label>Supplier taxable amount</label><input type="text" name="pd_supplier_taxable_amount[]" value="{{ pd.supplier_taxable_amount or '' }}"></div>
-        <div class="field"><label>Supplier CGST amount</label><input type="text" name="pd_supplier_cgst_amount[]" value="{{ pd.supplier_cgst_amount or '' }}"></div>
-        <div class="field"><label>Supplier SGST amount</label><input type="text" name="pd_supplier_sgst_amount[]" value="{{ pd.supplier_sgst_amount or '' }}"></div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
       </div>
       {% endfor %}
@@ -100,8 +96,6 @@
       </div>
     </div>
     <div class="form-row">
-      <div class="field"><label for="c_no">C No. <span class="text-soft text-sm">(annexure header)</span></label><input type="text" id="c_no" name="c_no" value="{{ data.c_no | default('', true) }}"></div>
-      <div class="field"><label for="c_date">C date</label><input type="date" id="c_date" name="c_date" value="{{ (data.c_date | default('', true))[:10] }}"></div>
       <div class="field"><label for="shipping_bill_no">Shipping bill no.</label><input type="text" id="shipping_bill_no" name="shipping_bill_no" value="{{ data.shipping_bill_no | default('', true) }}"></div>
       <div class="field"><label for="shipping_bill_date">Shipping bill date</label><input type="date" id="shipping_bill_date" name="shipping_bill_date" value="{{ (data.shipping_bill_date | default('', true))[:10] }}"></div>
     </div>
@@ -129,10 +123,6 @@
     <div class="form-row">
       <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
       <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="stuffing_start_time">Time of stuffing — starting <span class="text-soft text-sm">(annexure-C)</span></label><input type="time" id="stuffing_start_time" name="stuffing_start_time" value="{{ data.stuffing_start_time | default('', true) }}"></div>
-      <div class="field"><label for="stuffing_completion_time">Time of stuffing — completion</label><input type="time" id="stuffing_completion_time" name="stuffing_completion_time" value="{{ data.stuffing_completion_time | default('', true) }}"></div>
     </div>
     <div class="form-row">
       <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
@@ -638,10 +628,6 @@
     div.innerHTML = `
       <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]"></div>
       <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]"></div>
-      <div class="field"><label>Supplier invoice qty</label><input type="text" name="pd_supplier_invoice_qty[]"></div>
-      <div class="field"><label>Supplier taxable amount</label><input type="text" name="pd_supplier_taxable_amount[]"></div>
-      <div class="field"><label>Supplier CGST amount</label><input type="text" name="pd_supplier_cgst_amount[]"></div>
-      <div class="field"><label>Supplier SGST amount</label><input type="text" name="pd_supplier_sgst_amount[]"></div>
       <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
     wrap.appendChild(div);
   });

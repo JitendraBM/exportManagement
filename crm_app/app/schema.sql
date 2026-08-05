@@ -779,12 +779,8 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     remarks                     TEXT,
     total_net_weight_kg         REAL,          -- invoice-level totals printed on the front page (typed, not summed from containers)
     total_gross_weight_kg       REAL,
-    c_no                        TEXT,          -- annexure header: "C No." / "Date" / "Shipping Bill No" row above the examination report title
-    c_date                      TEXT,
     shipping_bill_no            TEXT,
     shipping_bill_date          TEXT,          -- Annexure-C header: Shipping Bill Date
-    stuffing_start_time         TEXT,          -- Annexure-C section 05: Time Of Stuffing
-    stuffing_completion_time    TEXT,
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -856,11 +852,7 @@ CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
     export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
     sr_no                    INTEGER NOT NULL,
     supplier_gstin           TEXT,
-    supplier_invoice_no      TEXT,
-    supplier_invoice_qty     TEXT,
-    supplier_taxable_amount  TEXT,
-    supplier_cgst_amount     TEXT,
-    supplier_sgst_amount     TEXT
+    supplier_invoice_no      TEXT
 );
 
 -- ============================================================

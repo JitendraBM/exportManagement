@@ -3111,12 +3111,8 @@ class ExportInvoiceService:
             remarks=(fields.get("remarks") or "").strip() or None,
             total_net_weight_kg=_float("total_net_weight_kg", None),
             total_gross_weight_kg=_float("total_gross_weight_kg", None),
-            c_no=(fields.get("c_no") or "").strip() or None,
-            c_date=(fields.get("c_date") or "").strip() or None,
             shipping_bill_no=(fields.get("shipping_bill_no") or "").strip() or None,
             shipping_bill_date=(fields.get("shipping_bill_date") or "").strip() or None,
-            stuffing_start_time=(fields.get("stuffing_start_time") or "").strip() or None,
-            stuffing_completion_time=(fields.get("stuffing_completion_time") or "").strip() or None,
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
@@ -3180,8 +3176,7 @@ class ExportInvoiceService:
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("supplier_gstin", "supplier_invoice_no", "supplier_invoice_qty",
-                                "supplier_taxable_amount", "supplier_cgst_amount", "supplier_sgst_amount")}
+                      for k in ("supplier_gstin", "supplier_invoice_no")}
             if any(values.values()):
                 rows.append(values)
         return rows

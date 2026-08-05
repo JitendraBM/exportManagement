@@ -1668,8 +1668,7 @@ class ExportInvoiceRepository:
         ]
         invoice.purchase_details = [
             dict(r) for r in self.db.query(
-                "SELECT supplier_gstin, supplier_invoice_no, supplier_invoice_qty, supplier_taxable_amount, "
-                "supplier_cgst_amount, supplier_sgst_amount FROM export_invoice_purchase_details "
+                "SELECT supplier_gstin, supplier_invoice_no FROM export_invoice_purchase_details "
                 "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1708,11 +1707,10 @@ class ExportInvoiceRepository:
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, stuffing_location, remarks,
-                total_net_weight_kg, total_gross_weight_kg, c_no, c_date, shipping_bill_no,
-                shipping_bill_date, stuffing_start_time, stuffing_completion_time, created_by)
+                total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
+                shipping_bill_date, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1732,8 +1730,8 @@ class ExportInvoiceRepository:
                    examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
-                   total_net_weight_kg = ?, total_gross_weight_kg = ?, c_no = ?, c_date = ?, shipping_bill_no = ?,
-                   shipping_bill_date = ?, stuffing_start_time = ?, stuffing_completion_time = ?,
+                   total_net_weight_kg = ?, total_gross_weight_kg = ?, shipping_bill_no = ?,
+                   shipping_bill_date = ?,
                    updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
@@ -1765,8 +1763,7 @@ class ExportInvoiceRepository:
             invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
-            invoice.c_no, invoice.c_date, invoice.shipping_bill_no,
-            invoice.shipping_bill_date, invoice.stuffing_start_time, invoice.stuffing_completion_time,
+            invoice.shipping_bill_no, invoice.shipping_bill_date,
         )
 
     def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
@@ -1815,12 +1812,9 @@ class ExportInvoiceRepository:
             for i, pd in enumerate(invoice.purchase_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_purchase_details "
-                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no, supplier_invoice_qty, "
-                    "supplier_taxable_amount, supplier_cgst_amount, supplier_sgst_amount) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None,
-                     pd.get("supplier_invoice_qty") or None, pd.get("supplier_taxable_amount") or None,
-                     pd.get("supplier_cgst_amount") or None, pd.get("supplier_sgst_amount") or None),
+                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None),
                 )
 
     def delete(self, invoice_id: int) -> None:
