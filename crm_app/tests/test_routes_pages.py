@@ -67,12 +67,12 @@ class TestListPages:
 # Admin-only pages
 # ==========================================================================
 class TestAdminOnlyPages:
-    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/"])
+    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/"])
     def test_admin_can_open(self, admin_ctx, path):
         client, *_ = admin_ctx
         assert client.get(path).status_code == 200
 
-    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/"])
+    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/"])
     def test_employee_gets_403(self, employee_ctx, path):
         client, *_ = employee_ctx
         assert client.get(path).status_code == 403
@@ -451,3 +451,98 @@ class TestExportPackingListRoutes:
         assert resp.status_code == 400
         assert b"still unassigned" in resp.data
         assert container.export_invoice_service.list_all(company_id) == []
+
+
+# ==========================================================================
+# Administration -> Miscellaneous (the hand-maintained drop lists)
+# ==========================================================================
+class TestMiscRoutes:
+    def test_currency_list_starts_on_the_builtin_fallback(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        assert container.misc_list_service.list_currencies(company_id) == []
+        # ...but a dropdown is never empty.
+        names = [c.name for c in container.misc_list_service.currency_options(company_id)]
+        assert "USD" in names
+
+    def test_add_edit_and_delete_a_currency(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+
+        client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
+        stored = container.misc_list_service.list_currencies(company_id)
+        assert [(c.name, c.symbol) for c in stored] == [("JPY", "¥")]
+
+        client.post(f"/misc/currencies/{stored[0].id}/edit",
+                    data={"name": "JPY", "symbol": "JP¥"}, follow_redirects=True)
+        assert container.misc_list_service.list_currencies(company_id)[0].symbol == "JP¥"
+
+        client.post(f"/misc/currencies/{stored[0].id}/delete",
+                    data={"delete_password": "page-pass-1"}, follow_redirects=True)
+        assert container.misc_list_service.list_currencies(company_id) == []
+
+    def test_a_currency_name_cannot_repeat(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
+        client.post("/misc/currencies", data={"name": "jpy", "symbol": "J"}, follow_redirects=True)
+        assert len(container.misc_list_service.list_currencies(company_id)) == 1
+
+    def test_add_edit_and_delete_a_nature_of_contract(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        assert container.misc_list_service.list_nature_of_contracts(company_id) == []
+
+        client.post("/misc/nature-of-contracts", data={"name": "CIF - BEIRA"}, follow_redirects=True)
+        stored = container.misc_list_service.list_nature_of_contracts(company_id)
+        assert [e.name for e in stored] == ["CIF - BEIRA"]
+
+        client.post(f"/misc/nature-of-contracts/{stored[0].id}/edit",
+                    data={"name": "CIF - MAPUTO"}, follow_redirects=True)
+        assert container.misc_list_service.list_nature_of_contracts(company_id)[0].name == "CIF - MAPUTO"
+
+        # ...and a name can't repeat.
+        client.post("/misc/nature-of-contracts", data={"name": "cif - maputo"}, follow_redirects=True)
+        assert len(container.misc_list_service.list_nature_of_contracts(company_id)) == 1
+
+        client.post(f"/misc/nature-of-contracts/{stored[0].id}/delete",
+                    data={"delete_password": "page-pass-1"}, follow_redirects=True)
+        assert container.misc_list_service.list_nature_of_contracts(company_id) == []
+
+    @pytest.mark.parametrize("path,field", [
+        ("/export-invoices/new", "nature_of_contract"),
+        ("/proforma-invoices/new", "terms_of_delivery"),
+        ("/quotations/new", "shipping_terms"),
+    ])
+    def test_nature_of_contract_fills_every_documents_delivery_terms_dropdown(self, admin_ctx, path, field):
+        client, container, admin, company_id = admin_ctx
+        client.post("/misc/nature-of-contracts", data={"name": "CIF - BEIRA"}, follow_redirects=True)
+        page = client.get(path).get_data(as_text=True)
+        assert f'<select id="{field}" name="{field}">' in page
+        assert "CIF - BEIRA" in page
+
+    def test_picked_currency_prints_on_the_invoice_and_packing_list(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
+        invoice = TestExportPackingListRoutes()._create_export_invoice(
+            client, container, admin, company_id)
+        client.post(f"/export-invoices/{invoice.id}/edit", data={
+            "export_invoice_number": invoice.export_invoice_number,
+            "invoice_date": invoice.invoice_date, "consignee_name": invoice.consignee_name,
+            "tax_mode": "igst", "exchange_rate": "86.70", "currency_code": "JPY",
+            "item_product_name[]": "GVT 600X1200", "item_quantity_value[]": "144",
+            "item_unit[]": "SQM", "item_price_usd[]": "5.92",
+        }, follow_redirects=True)
+
+        sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "JPY [ ¥ ]" in sheet and "USD [ $ ]" not in sheet
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+        epl = client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
+        assert "JPY [ ¥ ]" in epl
+
+    def test_added_currency_shows_in_a_payment_dropdown(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
+        buyer = container.buyer_service.create(
+            admin, {"company_name": "Yen Buyer", "phone": "1", "email": "y@x.com"},
+            [{"name": "Yui", "is_primary": True}])
+        page = client.get(f"/buyers/{buyer.id}").get_data(as_text=True)
+        assert "JPY" in page
+        # The old hard-coded options are gone once a list of your own exists.
+        assert 'value="SAR"' not in page

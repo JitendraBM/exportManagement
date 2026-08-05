@@ -24,7 +24,6 @@
   }
   .ei-title { text-align: center; font-size: 13px; font-weight: bold; padding-bottom: 2px; }
   .ei-subtitle { text-align: center; font-size: 8px; font-weight: bold; padding-bottom: 3px; }
-  .ei-scheme { text-align: center; font-size: 8px; font-weight: bold; padding-bottom: 3px; }
   .ei-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
   .ei-sheet td { border: 1px solid #000; padding: 1px 4px; vertical-align: top; word-wrap: break-word; }
   /* Nested tables sit flush inside their host cell - the host supplies the
@@ -112,9 +111,6 @@
 <div class="ei-sheet js-page-sheet">
   <div class="ei-title">EXPORT INVOICE</div>
   <div class="ei-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</div>
-  {% if company and company.government_schemes %}
-  <div class="ei-scheme">{{ company.government_schemes|replace('\n', '<br>')|safe }}</div>
-  {% endif %}
 
   <!-- ============ HEADER: consigner/consignee | invoice references ============ -->
   <table>
@@ -174,7 +170,7 @@
             <td class="ei-lbl">Buyer Order No &amp; Date</td>
             <td>{{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}</td>
           </tr>
-          <tr><td class="ei-lbl">Currency</td><td>USD [ $ ]</td></tr>
+          <tr><td class="ei-lbl">Currency</td><td>{{ invoice.currency_label }}</td></tr>
           <tr><td class="ei-lbl">Pre Carriage By</td><td>{{ (invoice.pre_carriage_by or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>

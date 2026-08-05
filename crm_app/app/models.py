@@ -390,7 +390,7 @@ class OurCompany:
     address: Optional[str] = None
     logo_path: Optional[str] = None  # relative to static/, shown in the app sidebar and on generated documents
     self_sealing_declaration: Optional[str] = None  # printed on the Export Invoice's declaration block
-    government_schemes: Optional[str] = None  # default for the Export Annexure's section 13, and printed as a heading on the Export Invoice
+    government_schemes: Optional[str] = None  # default for the Export Annexure's section 13 and the Export Invoice's "Export under" text
     updated_at: Optional[str] = None
     contact_details: List[dict] = field(default_factory=list)  # [{type, value, is_primary}]
     contact_persons: List[dict] = field(default_factory=list)  # [{name, designation, is_primary}]
@@ -415,6 +415,60 @@ class OurCompany:
             government_schemes=row["government_schemes"] if "government_schemes" in row.keys() else None,
             updated_at=row["updated_at"],
         )
+
+
+@dataclass
+class MiscCurrency:
+    """One row of the CURRENCY drop list maintained under Administration ->
+    Miscellaneous. Every currency dropdown in the app is filled from these."""
+    id: Optional[int]
+    company_id: int
+    name: str        # "name of currency", e.g. USD
+    symbol: str      # "currency symbol", e.g. $
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        """How the currency reads on a printed sheet: `USD [ $ ]`."""
+        return f"{self.name} [ {self.symbol} ]"
+
+    @staticmethod
+    def from_row(row) -> "MiscCurrency":
+        return MiscCurrency(
+            id=row["id"], company_id=row["company_id"],
+            name=row["name"], symbol=row["symbol"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+@dataclass
+class MiscNatureOfContract:
+    """One row of the NATURE OF CONTRACT drop list maintained under
+    Administration -> Miscellaneous. The same list fills the delivery-terms
+    field on every document, whatever that document calls it ("Nature of
+    contract", "Shipping terms", "Terms of delivery")."""
+    id: Optional[int]
+    company_id: int
+    name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @staticmethod
+    def from_row(row) -> "MiscNatureOfContract":
+        return MiscNatureOfContract(
+            id=row["id"], company_id=row["company_id"], name=row["name"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+# The currency dropdowns used to be a hard-coded list on the payment form.
+# Until an admin adds a row under Administration -> Miscellaneous, that same
+# list is what the dropdowns fall back to, so nothing breaks on upgrade.
+DEFAULT_CURRENCIES = [
+    ("USD", "$"), ("EUR", "€"), ("GBP", "£"),
+    ("AED", "د.إ"), ("CNY", "¥"), ("SAR", "﷼"),
+]
 
 
 @dataclass
@@ -1501,6 +1555,11 @@ class ExportInvoice:
     total_gross_weight_kg: Optional[float] = None
     shipping_bill_no: Optional[str] = None
     shipping_bill_date: Optional[str] = None  # Annexure-C header: Shipping Bill Date
+    # Currency printed on the invoice + packing list, picked from the
+    # Administration -> Miscellaneous currency list and snapshotted here so a
+    # later edit of that list can't rewrite an already-printed sheet.
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
     status: str = "active"  # no draft/confirmed lock; kept for interface symmetry with other documents
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1578,12 +1637,23 @@ class ExportInvoice:
             total_gross_weight_kg=g("total_gross_weight_kg"),
             shipping_bill_no=g("shipping_bill_no"),
             shipping_bill_date=g("shipping_bill_date"),
+            currency_code=g("currency_code"),
+            currency_symbol=g("currency_symbol"),
             created_by=row["created_by"],
             created_at=g("created_at"),
             updated_at=g("updated_at"),
             created_by_name=g("created_by_name"),
             computed_subtotal_usd=row["items_total"] if "items_total" in keys else None,
         )
+
+    @property
+    def currency_label(self) -> str:
+        """The Currency cell on the invoice/packing-list sheets, e.g.
+        `USD [ $ ]`. Falls back to USD for invoices raised before the
+        currency became a picked field."""
+        code = self.currency_code or "USD"
+        symbol = self.currency_symbol or ("$" if not self.currency_code else "")
+        return f"{code} [ {symbol} ]" if symbol else code
 
     @property
     def subtotal_usd(self) -> float:

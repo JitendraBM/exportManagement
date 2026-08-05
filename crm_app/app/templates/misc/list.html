@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Miscellaneous{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Administration</div>
+    <h1>Miscellaneous</h1>
+  </div>
+</div>
+
+<p class="hint">The drop lists the app fills its dropdowns from. Whatever you add here is what everyone picks from.</p>
+
+<div class="card">
+  <div class="card-header">
+    <h3>Currency</h3>
+    <span class="text-sm text-soft">Shown wherever a currency is picked — payment history, export invoices</span>
+  </div>
+
+  {% if currencies %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Name of currency</th>
+          <th>Currency symbol</th>
+          <th>Shows on documents as</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for currency in currencies %}
+        {% if edit_list == 'currency' and edit_id == currency.id %}
+        <tr>
+          <form method="POST" action="{{ url_for('misc.edit_currency', currency_id=currency.id) }}" id="edit-currency-{{ currency.id }}"></form>
+          <td><input type="text" name="name" value="{{ currency.name }}" form="edit-currency-{{ currency.id }}" required></td>
+          <td><input type="text" name="symbol" value="{{ currency.symbol }}" form="edit-currency-{{ currency.id }}" required></td>
+          <td class="text-sm text-soft">{{ currency.label }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <button type="submit" class="btn btn-primary btn-sm" form="edit-currency-{{ currency.id }}">Save</button>
+            <a href="{{ url_for('misc.index') }}" class="btn btn-ghost btn-sm">Cancel</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td class="mono">{{ currency.name }}</td>
+          <td>{{ currency.symbol }}</td>
+          <td class="text-sm text-soft">{{ currency.label }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <a href="{{ url_for('misc.index', list='currency', edit=currency.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('misc.delete_currency', currency_id=currency.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete {{ currency.name }} from the currency list? Documents already saved keep the currency they were printed with.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No currencies added yet — dropdowns are showing the built-in list
+    ({{ fallback_currencies | map(attribute='name') | join(', ') }}) until you add your own.
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('misc.add_currency') }}" style="margin-top:18px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="currency_name">Name of currency<span class="required-mark">*</span></label>
+        <input type="text" id="currency_name" name="name" placeholder="e.g. USD" required>
+      </div>
+      <div class="field">
+        <label for="currency_symbol">Currency symbol<span class="required-mark">*</span></label>
+        <input type="text" id="currency_symbol" name="symbol" placeholder="e.g. $" required>
+      </div>
+    </div>
+    <p class="hint">Use the three-letter code as the name (USD, EUR, JPY) — payment history looks the exchange rate up by it.</p>
+    <button type="submit" class="btn btn-primary btn-sm">Add currency</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3>Nature of contract</h3>
+    <span class="text-sm text-soft">The same list fills “Nature of contract”, “Shipping terms” and “Terms of delivery”</span>
+  </div>
+
+  {% if nature_of_contracts %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr><th>Name</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for entry in nature_of_contracts %}
+        {% if edit_list == 'noc' and edit_id == entry.id %}
+        <tr>
+          <form method="POST" action="{{ url_for('misc.edit_nature_of_contract', entry_id=entry.id) }}" id="edit-noc-{{ entry.id }}"></form>
+          <td><input type="text" name="name" value="{{ entry.name }}" form="edit-noc-{{ entry.id }}" required></td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <button type="submit" class="btn btn-primary btn-sm" form="edit-noc-{{ entry.id }}">Save</button>
+            <a href="{{ url_for('misc.index') }}" class="btn btn-ghost btn-sm">Cancel</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td>{{ entry.name }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <a href="{{ url_for('misc.index', list='noc', edit=entry.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('misc.delete_nature_of_contract', entry_id=entry.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete {{ entry.name }} from the nature of contract list? Documents already saved keep the terms they were printed with.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">Nothing added yet — the delivery-terms dropdowns on quotations, proforma invoices and export invoices stay empty until you add your trade terms here.</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('misc.add_nature_of_contract') }}" style="margin-top:18px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="noc_name">Name<span class="required-mark">*</span></label>
+        <input type="text" id="noc_name" name="name" placeholder="e.g. CIF - BEIRA" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add nature of contract</button>
+  </form>
+</div>
+
+{% endblock %}

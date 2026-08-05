@@ -18,7 +18,7 @@ from typing import Optional, List
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
@@ -819,6 +819,94 @@ class CompanyRepository:
                      b.get("swift_code") or None, b.get("branch") or None,
                      b.get("bank_address") or None, int(b["is_primary"])),
                 )
+
+
+# ============================================================
+# MISCELLANEOUS DROP LISTS (Administration -> Miscellaneous)
+# ============================================================
+class MiscCurrencyRepository:
+    """The CURRENCY drop list an admin maintains under Administration ->
+    Miscellaneous. Not to be confused with CurrencyService, which converts
+    foreign amounts to INR."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, currency_id: int) -> Optional[MiscCurrency]:
+        row = self.db.query_one("SELECT * FROM misc_currencies WHERE id = ?", (currency_id,))
+        return MiscCurrency.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscCurrency]:
+        rows = self.db.query(
+            "SELECT * FROM misc_currencies WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscCurrency.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscCurrency]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_currencies WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscCurrency.from_row(row) if row else None
+
+    def create(self, currency: MiscCurrency) -> MiscCurrency:
+        new_id = self.db.execute(
+            "INSERT INTO misc_currencies (company_id, name, symbol) VALUES (?, ?, ?)",
+            (currency.company_id, currency.name, currency.symbol),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, currency_id: int, currency: MiscCurrency) -> None:
+        self.db.execute(
+            "UPDATE misc_currencies SET name = ?, symbol = ?, updated_at = datetime('now') WHERE id = ?",
+            (currency.name, currency.symbol, currency_id),
+        )
+
+    def delete(self, currency_id: int) -> None:
+        self.db.execute("DELETE FROM misc_currencies WHERE id = ?", (currency_id,))
+
+
+class MiscNatureOfContractRepository:
+    """The NATURE OF CONTRACT drop list (Administration -> Miscellaneous):
+    one name per row, shared by every document's delivery-terms field."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscNatureOfContract]:
+        row = self.db.query_one("SELECT * FROM misc_nature_of_contracts WHERE id = ?", (row_id,))
+        return MiscNatureOfContract.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscNatureOfContract]:
+        rows = self.db.query(
+            "SELECT * FROM misc_nature_of_contracts WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscNatureOfContract.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscNatureOfContract]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_nature_of_contracts WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscNatureOfContract.from_row(row) if row else None
+
+    def create(self, entry: MiscNatureOfContract) -> MiscNatureOfContract:
+        new_id = self.db.execute(
+            "INSERT INTO misc_nature_of_contracts (company_id, name) VALUES (?, ?)",
+            (entry.company_id, entry.name),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscNatureOfContract) -> None:
+        self.db.execute(
+            "UPDATE misc_nature_of_contracts SET name = ?, updated_at = datetime('now') WHERE id = ?",
+            (entry.name, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_nature_of_contracts WHERE id = ?", (row_id,))
 
 
 # ============================================================
@@ -1708,9 +1796,9 @@ class ExportInvoiceRepository:
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, stuffing_location, remarks,
                 total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
-                shipping_bill_date, created_by)
+                shipping_bill_date, currency_code, currency_symbol, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1731,7 +1819,7 @@ class ExportInvoiceRepository:
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
                    total_net_weight_kg = ?, total_gross_weight_kg = ?, shipping_bill_no = ?,
-                   shipping_bill_date = ?,
+                   shipping_bill_date = ?, currency_code = ?, currency_symbol = ?,
                    updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
@@ -1764,6 +1852,7 @@ class ExportInvoiceRepository:
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
             invoice.shipping_bill_no, invoice.shipping_bill_date,
+            invoice.currency_code, invoice.currency_symbol,
         )
 
     def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:

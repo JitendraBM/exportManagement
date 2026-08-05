@@ -80,13 +80,11 @@
       <div class="field"><label>Amount<span class="required-mark">*</span></label><input type="number" step="0.01" min="0.01" name="amount_original" required></div>
       <div class="field">
         <label>Currency<span class="required-mark">*</span></label>
+        {# Options come from Administration -> Miscellaneous (currency_options). #}
         <select name="currency_code" required>
-          <option value="USD">USD</option>
-          <option value="EUR">EUR</option>
-          <option value="GBP">GBP</option>
-          <option value="AED">AED</option>
-          <option value="CNY">CNY</option>
-          <option value="SAR">SAR</option>
+          {% for currency in currency_options %}
+          <option value="{{ currency.name }}">{{ currency.name }} [ {{ currency.symbol }} ]</option>
+          {% endfor %}
         </select>
       </div>
     </div>

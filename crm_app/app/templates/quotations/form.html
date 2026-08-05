@@ -61,7 +61,21 @@
     </div>
     <div class="form-row">
       <div class="field"><label for="shipping_mode">Shipping</label><input type="text" id="shipping_mode" name="shipping_mode" placeholder="e.g. BY SEA" value="{{ data.shipping_mode | default('', true) }}"></div>
-      <div class="field"><label for="shipping_terms">Shipping terms</label><input type="text" id="shipping_terms" name="shipping_terms" placeholder="e.g. FOB" value="{{ data.shipping_terms | default('', true) }}"></div>
+      <div class="field">
+        {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
+        {% set chosen_terms = data.shipping_terms | default('', true) %}
+        <label for="shipping_terms">Shipping terms</label>
+        <select id="shipping_terms" name="shipping_terms">
+          <option value="">— none —</option>
+          {# A document can hold terms since removed from the list - keep them selectable. #}
+          {% if chosen_terms and chosen_terms not in nature_of_contract_options | map(attribute='name') | list %}
+          <option value="{{ chosen_terms }}" selected>{{ chosen_terms }}</option>
+          {% endif %}
+          {% for entry in nature_of_contract_options %}
+          <option value="{{ entry.name }}" {{ 'selected' if entry.name == chosen_terms }}>{{ entry.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
     <div class="field"><label for="payment_terms">Payment terms</label><input type="text" id="payment_terms" name="payment_terms" placeholder="e.g. LC 90 DAYS FROM BL" value="{{ data.payment_terms | default('', true) }}"></div>
   </div>

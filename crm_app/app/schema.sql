@@ -332,6 +332,36 @@ CREATE TABLE IF NOT EXISTS our_company_bank_details (
 );
 
 -- ============================================================
+-- MISCELLANEOUS DROP LISTS  (Administration -> Miscellaneous: the option
+-- lists an admin maintains by hand instead of them being hard-coded.
+-- CURRENCY fills every currency dropdown (payment history, export
+-- invoice); NATURE OF CONTRACT fills the delivery-terms dropdowns that
+-- are worded differently per document - "Nature of contract" on an export
+-- invoice, "Shipping terms" on a quotation, "Terms of delivery" on a
+-- proforma invoice.)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS misc_currencies (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "name of currency", e.g. USD / US Dollar
+    symbol       TEXT NOT NULL,   -- "currency symbol", e.g. $
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_currencies_company ON misc_currencies(company_id);
+
+CREATE TABLE IF NOT EXISTS misc_nature_of_contracts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- e.g. CIF - BEIRA / FOB
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_noc_company ON misc_nature_of_contracts(company_id);
+
+-- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
 -- Company" area. Each permit records a stuffing-place name + place of
 -- stuffing, the issuing authority, is either valid until an expiry date OR
@@ -781,6 +811,8 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     total_gross_weight_kg       REAL,
     shipping_bill_no            TEXT,
     shipping_bill_date          TEXT,          -- Annexure-C header: Shipping Bill Date
+    currency_code               TEXT,          -- snapshot of the misc_currencies row picked on the form
+    currency_symbol             TEXT,          -- (name + symbol, so a later edit of the list can't rewrite a printed invoice)
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),

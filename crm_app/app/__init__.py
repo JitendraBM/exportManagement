@@ -24,7 +24,7 @@ from app.repositories import (
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository,
+    PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, CurrencyService,
@@ -32,7 +32,7 @@ from app.services import (
     QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
     ExportInvoiceService, ExportPackingListService, PackingListService, BackupService,
     DocumentVersionService, ProformaFulfilmentService,
-    InventoryService, PermitService,
+    InventoryService, PermitService, MiscListService,
 )
 from app.utils import register_template_helpers
 
@@ -71,6 +71,8 @@ class ServiceContainer:
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
+        self.misc_currency_repo = MiscCurrencyRepository(db)
+        self.misc_nature_of_contract_repo = MiscNatureOfContractRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -115,6 +117,7 @@ class ServiceContainer:
             self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
+        self.misc_list_service = MiscListService(self.misc_currency_repo, self.misc_nature_of_contract_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
@@ -157,7 +160,7 @@ class ServiceContainer:
             self.purchase_order_repo, self.purchase_invoice_repo, self.company_repo,
             self.document_version_service, self.party_repos,
             Config.EXPORT_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
-            self.export_packing_list_service,
+            self.export_packing_list_service, self.misc_list_service,
         )
         self.backup_service = BackupService(
             db, Config.DATABASE_PATH,
@@ -203,9 +206,19 @@ def create_app(config_class=Config) -> Flask:
         # one small query per request, only when someone is signed in.
         user = g.get("user")
         our_company = app.container.company_service.get(user.company_id) if user else None
+        # The hand-maintained currency drop list (Administration ->
+        # Miscellaneous), so every currency dropdown reads the same options
+        # without each route having to pass them in.
+        currency_options = app.container.misc_list_service.currency_options(user.company_id) if user else []
+        # Same for the delivery-terms list, however the document labels it.
+        nature_of_contract_options = (
+            app.container.misc_list_service.list_nature_of_contracts(user.company_id) if user else []
+        )
         return dict(
             current_user=g.get("user"),
             our_company=our_company,
+            currency_options=currency_options,
+            nature_of_contract_options=nature_of_contract_options,
             LEAD_STATUSES=LEAD_STATUSES,
             CLIENT_STATUSES=CLIENT_STATUSES,
             CLIENT_TYPES=CLIENT_TYPES,
@@ -227,6 +240,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.admin import admin_bp
     from app.routes.company import company_bp
     from app.routes.permits import permits_bp
+    from app.routes.misc import misc_bp
     from app.routes.reports import reports_bp
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
@@ -253,6 +267,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(admin_bp)
     app.register_blueprint(company_bp)
     app.register_blueprint(permits_bp)
+    app.register_blueprint(misc_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)

@@ -121,7 +121,7 @@
             <td class="epl-lbl">Buyer Order No &amp; Date</td>
             <td>{{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}</td>
           </tr>
-          <tr><td class="epl-lbl">Currency</td><td>USD [ $ ]</td></tr>
+          <tr><td class="epl-lbl">Currency</td><td>{{ invoice.currency_label }}</td></tr>
           <tr><td class="epl-lbl">Pre Carriage By</td><td>{{ (invoice.pre_carriage_by or '-')|upper }}</td></tr>
           <tr><td class="epl-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
           <tr><td class="epl-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>

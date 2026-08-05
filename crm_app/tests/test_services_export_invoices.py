@@ -442,3 +442,30 @@ class TestExportPdfAndVersions:
         doc, ver = container.document_version_service.get_version("export_invoice", inv.id, versions[0].version_number)
         assert doc.export_invoice_number == inv.export_invoice_number
         assert len(doc.items) == 1
+
+
+# ==========================================================================
+# Currency (picked from Administration -> Miscellaneous, snapshotted here)
+# ==========================================================================
+class TestExportInvoiceCurrency:
+    def test_defaults_to_usd_when_nothing_is_picked(self, container, seed):
+        invoice = make_export(container, seed)
+        assert invoice.currency_code is None
+        assert invoice.currency_label == "USD [ $ ]"
+
+    def test_picked_currency_snapshots_its_symbol(self, container, seed):
+        container.misc_list_service.create_currency(seed.admin, {"name": "JPY", "symbol": "¥"})
+        invoice = make_export(container, seed, currency_code="JPY")
+        assert (invoice.currency_code, invoice.currency_symbol) == ("JPY", "¥")
+        assert invoice.currency_label == "JPY [ ¥ ]"
+
+    def test_editing_the_list_later_does_not_rewrite_an_issued_invoice(self, container, seed):
+        currency = container.misc_list_service.create_currency(seed.admin, {"name": "JPY", "symbol": "¥"})
+        invoice = make_export(container, seed, currency_code="JPY")
+        container.misc_list_service.update_currency(seed.admin, currency.id, {"name": "JPY", "symbol": "YEN"})
+        assert container.export_invoice_service.get(invoice.id, seed.company_id).currency_symbol == "¥"
+
+    def test_a_currency_that_is_not_on_the_list_keeps_its_name_only(self, container, seed):
+        invoice = make_export(container, seed, currency_code="XYZ")
+        assert (invoice.currency_code, invoice.currency_symbol) == ("XYZ", None)
+        assert invoice.currency_label == "XYZ"

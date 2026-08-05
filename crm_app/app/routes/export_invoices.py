@@ -42,6 +42,7 @@ _HEADER_FIELDS = [
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
     "total_net_weight_kg", "total_gross_weight_kg", "shipping_bill_no", "shipping_bill_date",
+    "currency_code",
 ]
 
 

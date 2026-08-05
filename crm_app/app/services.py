@@ -29,7 +29,7 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, Permit, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Permit, MiscCurrency, MiscNatureOfContract, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
@@ -46,7 +46,7 @@ from app.repositories import (
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository,
+    PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 
@@ -159,6 +159,128 @@ class CurrencyService:
             raise ValidationError("Payments must be recorded in a currency other than INR.")
         rate = self.get_rate_to_inr(currency_code)
         return rate, round(amount * rate, 2)
+
+
+# ============================================================
+# MISCELLANEOUS DROP LISTS (Administration -> Miscellaneous)
+# ============================================================
+class MiscListService:
+    """The hand-maintained option lists behind the app's dropdowns:
+
+      - CURRENCY (name of currency + currency symbol),
+      - NATURE OF CONTRACT (a name), which fills the delivery-terms field
+        on every document whatever that document calls it ("Nature of
+        contract", "Shipping terms", "Terms of delivery").
+
+    Admin-only to edit (the route enforces that); everything is
+    company-scoped. Currency reads fall back to DEFAULT_CURRENCIES while a
+    company has not added one of its own, so that dropdown is never empty;
+    nature of contract has no built-in list, since the values are entirely
+    a company's own trade terms."""
+
+    def __init__(self, currency_repo: MiscCurrencyRepository,
+                 nature_of_contract_repo: Optional[MiscNatureOfContractRepository] = None):
+        self.currency_repo = currency_repo
+        self.nature_of_contract_repo = nature_of_contract_repo
+
+    # ---- reads --------------------------------------------------
+    def list_currencies(self, company_id: int) -> List[MiscCurrency]:
+        """Only what the company actually saved - what the Miscellaneous
+        page manages."""
+        return self.currency_repo.list_all(company_id)
+
+    def currency_options(self, company_id: int) -> List[MiscCurrency]:
+        """What the dropdowns show: the saved list, or the built-in
+        fallback while it is still empty."""
+        stored = self.currency_repo.list_all(company_id)
+        if stored:
+            return stored
+        return [MiscCurrency(id=None, company_id=company_id, name=name, symbol=symbol)
+                for name, symbol in DEFAULT_CURRENCIES]
+
+    def get_currency(self, currency_id: int, company_id: int) -> MiscCurrency:
+        currency = self.currency_repo.get_by_id(currency_id)
+        if not currency or currency.company_id != company_id:
+            # 404, not 403 - don't reveal another company's rows.
+            raise NotFoundError(f"Currency #{currency_id} not found.")
+        return currency
+
+    def find_currency(self, company_id: int, name: str) -> Optional[MiscCurrency]:
+        """The option matching a submitted currency name (stored list first,
+        then the fallback) - used to snapshot name + symbol onto a document."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        for option in self.currency_options(company_id):
+            if option.name.upper() == name.upper():
+                return option
+        return None
+
+    # ---- writes --------------------------------------------------
+    def _clean(self, current_user: User, fields: dict) -> MiscCurrency:
+        name = (fields.get("name") or "").strip()
+        symbol = (fields.get("symbol") or "").strip()
+        if not name:
+            raise ValidationError("Name of currency is compulsory.")
+        if not symbol:
+            raise ValidationError("Currency symbol is compulsory.")
+        return MiscCurrency(id=None, company_id=current_user.company_id, name=name, symbol=symbol)
+
+    def create_currency(self, current_user: User, fields: dict) -> MiscCurrency:
+        currency = self._clean(current_user, fields)
+        if self.currency_repo.find_by_name(current_user.company_id, currency.name):
+            raise ValidationError(f"'{currency.name}' is already on the currency list.")
+        return self.currency_repo.create(currency)
+
+    def update_currency(self, current_user: User, currency_id: int, fields: dict) -> MiscCurrency:
+        self.get_currency(currency_id, current_user.company_id)
+        currency = self._clean(current_user, fields)
+        clash = self.currency_repo.find_by_name(current_user.company_id, currency.name)
+        if clash and clash.id != currency_id:
+            raise ValidationError(f"'{currency.name}' is already on the currency list.")
+        self.currency_repo.update(currency_id, currency)
+        return self.get_currency(currency_id, current_user.company_id)
+
+    def delete_currency(self, current_user: User, currency_id: int) -> MiscCurrency:
+        currency = self.get_currency(currency_id, current_user.company_id)
+        self.currency_repo.delete(currency_id)
+        return currency
+
+    # ---- nature of contract --------------------------------------------------
+    def list_nature_of_contracts(self, company_id: int) -> List[MiscNatureOfContract]:
+        return self.nature_of_contract_repo.list_all(company_id)
+
+    def get_nature_of_contract(self, entry_id: int, company_id: int) -> MiscNatureOfContract:
+        entry = self.nature_of_contract_repo.get_by_id(entry_id)
+        if not entry or entry.company_id != company_id:
+            raise NotFoundError(f"Nature of contract #{entry_id} not found.")
+        return entry
+
+    def _clean_nature_of_contract(self, current_user: User, fields: dict) -> MiscNatureOfContract:
+        name = (fields.get("name") or "").strip()
+        if not name:
+            raise ValidationError("Name is compulsory.")
+        return MiscNatureOfContract(id=None, company_id=current_user.company_id, name=name)
+
+    def create_nature_of_contract(self, current_user: User, fields: dict) -> MiscNatureOfContract:
+        entry = self._clean_nature_of_contract(current_user, fields)
+        if self.nature_of_contract_repo.find_by_name(current_user.company_id, entry.name):
+            raise ValidationError(f"'{entry.name}' is already on the nature of contract list.")
+        return self.nature_of_contract_repo.create(entry)
+
+    def update_nature_of_contract(self, current_user: User, entry_id: int, fields: dict) -> MiscNatureOfContract:
+        self.get_nature_of_contract(entry_id, current_user.company_id)
+        entry = self._clean_nature_of_contract(current_user, fields)
+        clash = self.nature_of_contract_repo.find_by_name(current_user.company_id, entry.name)
+        if clash and clash.id != entry_id:
+            raise ValidationError(f"'{entry.name}' is already on the nature of contract list.")
+        self.nature_of_contract_repo.update(entry_id, entry)
+        return self.get_nature_of_contract(entry_id, current_user.company_id)
+
+    def delete_nature_of_contract(self, current_user: User, entry_id: int) -> MiscNatureOfContract:
+        entry = self.get_nature_of_contract(entry_id, current_user.company_id)
+        self.nature_of_contract_repo.delete(entry_id)
+        return entry
 
 
 # ============================================================
@@ -2786,7 +2908,8 @@ class ExportInvoiceService:
                  company_repo: CompanyRepository, version_service: "DocumentVersionService",
                  party_repos: Optional[dict] = None, upload_folder: str = "",
                  allowed_extensions: set = frozenset(),
-                 export_packing_list_service: Optional["ExportPackingListService"] = None):
+                 export_packing_list_service: Optional["ExportPackingListService"] = None,
+                 misc_list_service: Optional["MiscListService"] = None):
         self.export_invoice_repo = export_invoice_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -2801,6 +2924,10 @@ class ExportInvoiceService:
         # Optional so the service stays constructible on its own in tests;
         # when wired, every save also regenerates the invoice's packing list.
         self.export_packing_list_service = export_packing_list_service
+        # Resolves the picked currency name to its symbol (Administration ->
+        # Miscellaneous); also optional, so an unwired service just keeps the
+        # submitted name and no symbol.
+        self.misc_list_service = misc_list_service
 
     # ---- reads --------------------------------------------------
     def get(self, invoice_id: int, company_id: int) -> ExportInvoice:
@@ -3055,6 +3182,16 @@ class ExportInvoiceService:
                 if match:
                     authorised_desig = (match.get("designation") or "").strip() or None
 
+        # Currency: the form posts a name off the Miscellaneous currency
+        # list; both name and symbol are snapshotted so editing that list
+        # later can't change what an already-issued invoice printed.
+        currency_name = (fields.get("currency_code") or "").strip() or None
+        currency_symbol = None
+        if currency_name and self.misc_list_service:
+            match = self.misc_list_service.find_currency(current_user.company_id, currency_name)
+            if match:
+                currency_name, currency_symbol = match.name, match.symbol
+
         invoice = ExportInvoice(
             id=None, company_id=current_user.company_id, export_invoice_number=export_invoice_number,
             invoice_date=invoice_date,
@@ -3108,6 +3245,8 @@ class ExportInvoiceService:
             total_gross_weight_kg=_float("total_gross_weight_kg", None),
             shipping_bill_no=(fields.get("shipping_bill_no") or "").strip() or None,
             shipping_bill_date=(fields.get("shipping_bill_date") or "").strip() or None,
+            currency_code=currency_name,
+            currency_symbol=currency_symbol,
             items=items,
         )
         invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)

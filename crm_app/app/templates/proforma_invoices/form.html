@@ -100,7 +100,21 @@
     </div>
     <div class="form-row">
       <div class="field"><label for="container_details">Container details</label><input type="text" id="container_details" name="container_details" placeholder="e.g. 3 X 20 FT FCL" value="{{ data.container_details | default('', true) }}"></div>
-      <div class="field"><label for="terms_of_delivery">Terms of delivery</label><input type="text" id="terms_of_delivery" name="terms_of_delivery" placeholder="e.g. CIF - BEIRA" value="{{ data.terms_of_delivery | default('', true) }}"></div>
+      <div class="field">
+        {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
+        {% set chosen_terms = data.terms_of_delivery | default('', true) %}
+        <label for="terms_of_delivery">Terms of delivery</label>
+        <select id="terms_of_delivery" name="terms_of_delivery">
+          <option value="">— none —</option>
+          {# A document can hold terms since removed from the list - keep them selectable. #}
+          {% if chosen_terms and chosen_terms not in nature_of_contract_options | map(attribute='name') | list %}
+          <option value="{{ chosen_terms }}" selected>{{ chosen_terms }}</option>
+          {% endif %}
+          {% for entry in nature_of_contract_options %}
+          <option value="{{ entry.name }}" {{ 'selected' if entry.name == chosen_terms }}>{{ entry.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
     <div class="field"><label for="payment_terms">Payment terms</label><input type="text" id="payment_terms" name="payment_terms" placeholder="e.g. 100% Advance" value="{{ data.payment_terms | default('', true) }}"></div>
   </div>

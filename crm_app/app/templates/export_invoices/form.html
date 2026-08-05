@@ -65,7 +65,21 @@
                value="{{ data.export_invoice_number | default('', true) }}">
       </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
-      <div class="field"><label for="nature_of_contract">Nature of contract</label><input type="text" id="nature_of_contract" name="nature_of_contract" placeholder="e.g. CNF- (Beira)" value="{{ data.nature_of_contract | default('', true) }}"></div>
+      <div class="field">
+        {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
+        {% set chosen_terms = data.nature_of_contract | default('', true) %}
+        <label for="nature_of_contract">Nature of contract</label>
+        <select id="nature_of_contract" name="nature_of_contract">
+          <option value="">— none —</option>
+          {# A document can hold terms since removed from the list - keep them selectable. #}
+          {% if chosen_terms and chosen_terms not in nature_of_contract_options | map(attribute='name') | list %}
+          <option value="{{ chosen_terms }}" selected>{{ chosen_terms }}</option>
+          {% endif %}
+          {% for entry in nature_of_contract_options %}
+          <option value="{{ entry.name }}" {{ 'selected' if entry.name == chosen_terms }}>{{ entry.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
     <div class="form-row">
       <div class="field">
@@ -87,8 +101,22 @@
         </select>
       </div>
       <div class="field">
+        {# Options come from Administration -> Miscellaneous (currency_options). #}
+        {% set chosen_currency = data.currency_code | default('USD', true) %}
+        <label for="currency_code">Currency</label>
+        <select id="currency_code" name="currency_code">
+          {# An invoice can hold a currency since removed from the list - keep it selectable rather than silently switching it. #}
+          {% if chosen_currency not in currency_options | map(attribute='name') | list %}
+          <option value="{{ chosen_currency }}" selected>{{ chosen_currency }}</option>
+          {% endif %}
+          {% for currency in currency_options %}
+          <option value="{{ currency.name }}" {{ 'selected' if currency.name == chosen_currency }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
         <div class="flex-between">
-          <label for="exchange_rate" style="margin-bottom:0;">Exchange rate (USD → INR)</label>
+          <label for="exchange_rate" style="margin-bottom:0;">Exchange rate ({{ chosen_currency }} → INR)</label>
           <a href="https://foservices.icegate.gov.in/#/services/viewExchangeRate" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Check exchange rate</a>
         </div>
         <input type="number" step="0.0001" id="exchange_rate" name="exchange_rate" value="{{ data.exchange_rate | default('', true) }}" {{ '' if can_edit_rate else 'disabled' }}>
