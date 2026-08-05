@@ -60,8 +60,14 @@
         }
       }
 
+      /* Collapsing the filler can reveal that the rest of the sheet already
+         overflows the page on its own (a lot of goods rows, purchase-detail
+         lines, etc.) - leftover goes negative. MIN_PX is only a floor for
+         when there's room to spare; forcing it here would pad an
+         already-overflowing sheet with extra blank space and push content
+         that would otherwise still fit onto a second page. */
       var leftover = (pagePx - contentHeight(sheets[i])) / rows.length;
-      var h = Math.max(MIN_PX, Math.floor(leftover)) + 'px';
+      var h = (leftover < 0 ? 0 : Math.max(MIN_PX, Math.floor(leftover))) + 'px';
       for (var k = 0; k < cells.length; k++) cells[k].style.height = h;
     }
   }
