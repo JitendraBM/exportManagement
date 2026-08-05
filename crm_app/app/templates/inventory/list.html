@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ current_category.name if current_category else 'Inventory' }}{% endblock %}
+
+{% macro num(value) -%}
+  {{ value | int if value == (value | int) else '%.2f' | format(value) }}
+{%- endmacro %}
+
 {% block content %}
 
 <div class="topbar">
@@ -22,6 +27,47 @@
   <div class="empty-state">
     {{ 'This category is empty.' if current_category else 'No categories or products yet.' }}
   </div>
+{% endif %}
+
+{% if in_stock is defined %}
+<div class="card">
+  <div class="card-header"><h3>In stock now</h3></div>
+  {% if in_stock %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Design</th>
+          <th>Product</th>
+          <th>Boxes</th>
+          <th>Pieces</th>
+          <th>Quantity</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for design in in_stock %}
+        <tr>
+          <td>
+            {% if design.photo_path %}
+              <img class="thumb" src="{{ url_for('static', filename=design.photo_path) }}" alt="{{ design.design_name }}">
+            {% endif %}
+            <strong>{{ design.design_name }}</strong>
+          </td>
+          <td class="text-sm">{{ design.product_name }}</td>
+          <td class="text-sm">{{ num(design.stock.boxes) }}</td>
+          <td class="text-sm">{{ num(design.stock.pcs) }}</td>
+          <td class="text-sm">{{ num(design.stock.quantity) }}{% if design.stock.unit %} {{ design.stock.unit }}{% endif %}</td>
+          <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">Nothing in stock yet - stock appears once a purchase order's packing list is recorded.</div>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if categories %}

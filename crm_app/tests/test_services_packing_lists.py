@@ -181,7 +181,7 @@ class TestPackingListCrud:
         # Shape: {"fields": {...}, "items": [...]}
         assert prefill["fields"]["quotation_id"] == q.id
         assert prefill["fields"]["buyer_order_no"] == "REF-9"
-        assert prefill["fields"]["remarks"] == "MADE IN INDIA"
+        assert prefill["fields"]["remarks"] == "PACKED"
 
         # One placeholder line per quotation line, with the quantities left
         # blank for the packer to fill in.

@@ -40,8 +40,9 @@ def list_inventory(category_id=None):
     except NotFoundError:
         abort(404)
     breadcrumb = products_service.category_breadcrumb(g.user.company_id, category_id)
+    in_stock = container.inventory_service.in_stock_designs(g.user.company_id) if category_id is None else []
     return render_template("inventory/list.html", categories=subcategories, products=products,
-                           current_category=current_category, breadcrumb=breadcrumb)
+                           current_category=current_category, breadcrumb=breadcrumb, in_stock=in_stock)
 
 
 # ============================================================

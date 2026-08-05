@@ -1092,6 +1092,22 @@ class DesignRepository:
         )
         return [Design.from_row(r) for r in rows]
 
+    def list_by_ids_with_product(self, design_ids: List[int]) -> List[dict]:
+        """Designs (with their product's name attached) for a batch of ids,
+        one query - used by the Inventory "in stock" summary instead of
+        looking each design up one at a time."""
+        if not design_ids:
+            return []
+        placeholders = ",".join("?" for _ in design_ids)
+        rows = self.db.query(
+            f"""SELECT d.*, p.product_name AS product_name
+                FROM designs d JOIN products p ON p.id = d.product_id
+                WHERE d.id IN ({placeholders})
+                ORDER BY d.design_name""",
+            tuple(design_ids),
+        )
+        return [dict(r) for r in rows]
+
     def create(self, design: Design) -> Design:
         new_id = self.db.execute(
             """INSERT INTO designs
