@@ -1706,9 +1706,11 @@ class ExportInvoiceRepository:
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 manufacturer_name, manufacturer_address, stuffing_location, remarks,
-                total_net_weight_kg, total_gross_weight_kg, c_no, c_date, shipping_bill_no, created_by)
+                total_net_weight_kg, total_gross_weight_kg, c_no, c_date, shipping_bill_no,
+                shipping_bill_date, stuffing_start_time, stuffing_completion_time, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1729,6 +1731,7 @@ class ExportInvoiceRepository:
                    permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
                    total_net_weight_kg = ?, total_gross_weight_kg = ?, c_no = ?, c_date = ?, shipping_bill_no = ?,
+                   shipping_bill_date = ?, stuffing_start_time = ?, stuffing_completion_time = ?,
                    updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
@@ -1761,6 +1764,7 @@ class ExportInvoiceRepository:
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
             invoice.c_no, invoice.c_date, invoice.shipping_bill_no,
+            invoice.shipping_bill_date, invoice.stuffing_start_time, invoice.stuffing_completion_time,
         )
 
     def _replace_children(self, invoice_id: int, invoice: ExportInvoice) -> None:
