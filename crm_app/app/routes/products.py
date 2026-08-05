@@ -89,8 +89,11 @@ def list_products(category_id=None):
     except NotFoundError:
         abort(404)
     breadcrumb = container.product_service.category_breadcrumb(g.user.company_id, category_id)
+    query = request.args.get("q", "")
+    search_results = container.product_service.search_catalog(g.user.company_id, query)
     return render_template("products/list.html", categories=subcategories, products=products,
-                            current_category=current_category, breadcrumb=breadcrumb)
+                            current_category=current_category, breadcrumb=breadcrumb,
+                            query=query, search_results=search_results)
 
 
 # ============================================================

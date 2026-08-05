@@ -5,6 +5,14 @@
   {{ value | int if value == (value | int) else '%.2f' | format(value) }}
 {%- endmacro %}
 
+{% macro search_form(endpoint) %}
+<form method="GET" action="{{ url_for(endpoint) }}" class="catalog-search">
+  <input type="text" name="q" value="{{ query }}" placeholder="Search products or designs…">
+  <button type="submit" class="btn btn-ghost">Search</button>
+  {% if query %}<a href="{{ url_for(endpoint) }}" class="text-sm">Clear</a>{% endif %}
+</form>
+{% endmacro %}
+
 {% block content %}
 
 <div class="topbar">
@@ -22,6 +30,68 @@
     <a href="{{ url_for('inventory.list_inventory', category_id=c.id) }}">{{ c.name }}</a>
   {% endfor %}
 </div>
+
+{{ search_form('inventory.list_inventory') }}
+
+{% if query %}
+  {% if search_results.products or search_results.designs %}
+    {% if search_results.products %}
+    <div class="card">
+      <div class="card-header"><h3>Products matching "{{ query }}"</h3></div>
+      <div class="table-wrap">
+        <table class="ledger">
+          <thead><tr><th>Product name</th><th>HSN code</th><th></th></tr></thead>
+          <tbody>
+            {% for product in search_results.products %}
+            <tr>
+              <td><strong>{{ product.product_name }}</strong></td>
+              <td class="text-sm">{{ product.hsn_code or '—' }}</td>
+              <td><a href="{{ url_for('inventory.view_product', product_id=product.id) }}" class="text-sm">Open →</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+    {% if search_results.designs %}
+    <div class="card">
+      <div class="card-header"><h3>Designs matching "{{ query }}"</h3></div>
+      <div class="table-wrap">
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th>Design</th>
+              <th>Product</th>
+              <th>Boxes</th>
+              <th>Pieces</th>
+              <th>Quantity</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for design in search_results.designs %}
+            <tr>
+              <td>
+                {% if design.photo_path %}<img class="thumb" src="{{ url_for('static', filename=design.photo_path) }}" alt="{{ design.design_name }}">{% endif %}
+                <strong>{{ design.design_name }}</strong>
+              </td>
+              <td class="text-sm">{{ design.product_name }}</td>
+              <td class="text-sm">{{ num(design.stock.boxes) }}</td>
+              <td class="text-sm">{{ num(design.stock.pcs) }}</td>
+              <td class="text-sm">{{ num(design.stock.quantity) }}{% if design.stock.unit %} {{ design.stock.unit }}{% endif %}</td>
+              <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="empty-state">No products or designs match "{{ query }}".</div>
+  {% endif %}
+{% else %}
 
 {% if not categories and not products %}
   <div class="empty-state">
@@ -113,6 +183,8 @@
     </table>
   </div>
 </div>
+{% endif %}
+
 {% endif %}
 
 {% endblock %}

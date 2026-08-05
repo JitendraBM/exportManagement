@@ -910,6 +910,15 @@ class ProductRepository:
         )
         return [Product.from_row(r) for r in rows]
 
+    def search(self, company_id: int, query: str) -> List[Product]:
+        """Products whose name matches `query` (case-insensitive substring),
+        regardless of category - used by the catalog-wide search bar."""
+        rows = self.db.query(
+            "SELECT * FROM products WHERE company_id = ? AND product_name LIKE ? ORDER BY product_name",
+            (company_id, f"%{query}%"),
+        )
+        return [Product.from_row(r) for r in rows]
+
     def list_in_category(self, company_id: int, category_id: Optional[int]) -> List[Product]:
         """Products sitting in one category - category_id=None is the catalog root."""
         if category_id is None:
@@ -1091,6 +1100,21 @@ class DesignRepository:
             "SELECT * FROM designs WHERE product_id = ? ORDER BY design_name", (product_id,)
         )
         return [Design.from_row(r) for r in rows]
+
+    def search(self, company_id: int, query: str) -> List[dict]:
+        """Designs (with their product's name attached) whose own name OR
+        product name matches `query` - a product-name search should surface
+        its designs too, not just the product tile. Used by the
+        catalog-wide search bar (Products and Inventory both)."""
+        term = f"%{query}%"
+        rows = self.db.query(
+            """SELECT d.*, p.product_name AS product_name
+               FROM designs d JOIN products p ON p.id = d.product_id
+               WHERE d.company_id = ? AND (d.design_name LIKE ? OR p.product_name LIKE ?)
+               ORDER BY d.design_name""",
+            (company_id, term, term),
+        )
+        return [dict(r) for r in rows]
 
     def list_by_ids_with_product(self, design_ids: List[int]) -> List[dict]:
         """Designs (with their product's name attached) for a batch of ids,

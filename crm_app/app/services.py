@@ -1044,6 +1044,20 @@ class ProductService:
         return (self.category_repo.list_children(company_id, category_id),
                 self.product_repo.list_in_category(company_id, category_id))
 
+    def search_catalog(self, company_id: int, query: str) -> dict:
+        """Products and designs matching `query` by name, flattened across
+        every category/sub category - used by the search bar on the
+        Products and Inventory catalog roots instead of folder navigation.
+        Blank query returns nothing (the caller falls back to the normal
+        browse view)."""
+        query = (query or "").strip()
+        if not query:
+            return {"products": [], "designs": []}
+        return {
+            "products": self.product_repo.search(company_id, query),
+            "designs": self.design_repo.search(company_id, query),
+        }
+
     def get_product(self, product_id: int, company_id: int) -> Product:
         product = self.product_repo.get_by_id(product_id)
         if not product or product.company_id != company_id:
