@@ -103,15 +103,7 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
-<<<<<<< Updated upstream
-        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo)
-=======
         self.inventory_service = InventoryService(self.product_service, self.packing_list_repo, self.design_repo)
-        self.permit_service = PermitService(
-            self.permit_repo,
-            Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
-        )
->>>>>>> Stashed changes
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
