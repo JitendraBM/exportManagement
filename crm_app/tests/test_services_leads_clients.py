@@ -177,6 +177,46 @@ class TestConvertLead:
             container.buyer_service.convert_lead(99999, seed.admin)
 
 
+class TestDeleteClient:
+    def _client(self, container, seed):
+        lead = container.lead_service.create_lead(
+            seed.employee, "Acme", "1", "a@x.com", None, None, None, _contacts("Bob"))
+        return container.buyer_service.convert_lead(lead.id, seed.admin)
+
+    def test_admin_deletes_buyer(self, container, seed):
+        client = self._client(container, seed)
+        container.buyer_service.delete(client.id, seed.admin)
+        assert container.buyer_repo.get_by_id(client.id) is None
+
+    def test_employee_cannot_delete(self, container, seed):
+        client = self._client(container, seed)
+        with pytest.raises(PermissionDeniedError):
+            container.buyer_service.delete(client.id, seed.employee)
+        assert container.buyer_repo.get_by_id(client.id) is not None
+
+    def test_delete_missing_buyer_is_not_found(self, container, seed):
+        with pytest.raises(NotFoundError):
+            container.buyer_service.delete(99999, seed.admin)
+
+    def test_delete_takes_contacts_and_communications_with_it(self, container, seed):
+        client = self._client(container, seed)
+        container.buyer_service.add_communication(
+            client.id, seed.admin, comm_date="2025-01-01", mode="call", description="hi")
+        container.buyer_service.delete(client.id, seed.admin)
+        assert container.buyer_repo.contacts.list_for(client.id) == []
+        assert container.communication_service.list_for("buyer", client.id) == []
+
+    def test_delete_frees_the_originating_lead_for_reconversion(self, container, seed):
+        client = self._client(container, seed)
+        lead_id = client.lead_id
+        container.buyer_service.delete(client.id, seed.admin)
+        lead = container.lead_repo.get_by_id(lead_id)
+        assert lead.is_converted is False
+        assert lead.converted_client_id is None
+        # and it can be converted again
+        assert container.buyer_service.convert_lead(lead_id, seed.admin).id is not None
+
+
 class TestClientPayments:
     def _client(self, container, seed):
         lead = container.lead_service.create_lead(

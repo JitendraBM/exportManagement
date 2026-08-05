@@ -25,6 +25,7 @@ _HEADER_FIELDS = [
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "delivery_time", "advance_percent", "payment_terms", "remarks",
     "purchase_type",
+    "currency_code",
 ]
 
 

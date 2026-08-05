@@ -10,6 +10,10 @@
   <div class="topbar-actions">
     {% if current_user.is_admin %}
       <a href="{{ url_for(endpoint_prefix ~ '.edit_party', party_id=party.id) }}" class="btn btn-ghost">Edit compulsory fields</a>
+      <form method="POST" action="{{ url_for(endpoint_prefix ~ '.delete_party', party_id=party.id) }}" style="display:inline;"
+            onsubmit="return confirmDeleteWithPassword(this, 'Delete this {{ type_label|lower }}? Its contacts, communications, payments and recorded documents go with it. This cannot be undone.');">
+        <button type="submit" class="btn btn-danger">Delete {{ type_label|lower }}</button>
+      </form>
     {% endif %}
   </div>
 </div>

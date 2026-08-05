@@ -23,6 +23,7 @@ _HEADER_FIELDS = [
     "price_validity_days", "remarks",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
+    "currency_code",
 ]
 
 

@@ -146,6 +146,43 @@ class TestClientRoutes:
         client, *_ = admin_ctx
         assert client.get("/buyers/99999").status_code == 404
 
+    def test_admin_sees_the_delete_button(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        c = container.buyer_service.convert_lead(new_lead(container, admin).id, admin)
+        assert f"/buyers/{c.id}/delete" in client.get(f"/buyers/{c.id}").get_data(as_text=True)
+
+    def test_employee_does_not_see_the_delete_button(self, employee_ctx):
+        client, container, emp, company_id = employee_ctx
+        # An employee can't convert a lead, so seed the buyer with an admin
+        # of the SAME tenant and view it as the employee.
+        admin = container.auth_service.create_user(
+            company_id, "empco-admin", "pass-1", "Emp Co Admin", "admin")
+        c = container.buyer_service.convert_lead(new_lead(container, emp).id, admin)
+        assert f"/buyers/{c.id}/delete" not in client.get(f"/buyers/{c.id}").get_data(as_text=True)
+
+    def test_delete_buyer_via_post(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        c = container.buyer_service.convert_lead(new_lead(container, admin).id, admin)
+        client.post(f"/buyers/{c.id}/delete", data={"delete_password": "page-pass-1"},
+                    follow_redirects=True)
+        assert container.buyer_repo.get_by_id(c.id) is None
+
+    def test_delete_buyer_rejects_wrong_password(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        c = container.buyer_service.convert_lead(new_lead(container, admin).id, admin)
+        client.post(f"/buyers/{c.id}/delete", data={"delete_password": "wrong"},
+                    follow_redirects=True)
+        assert container.buyer_repo.get_by_id(c.id) is not None
+
+    def test_employee_cannot_post_a_delete(self, employee_ctx):
+        client, container, emp, company_id = employee_ctx
+        admin = container.auth_service.create_user(
+            company_id, "empco-admin2", "pass-1", "Emp Co Admin", "admin")
+        c = container.buyer_service.convert_lead(new_lead(container, emp).id, admin)
+        resp = client.post(f"/buyers/{c.id}/delete", data={"delete_password": "emp-pass-1"})
+        assert resp.status_code == 403
+        assert container.buyer_repo.get_by_id(c.id) is not None
+
 
 # ==========================================================================
 # Product catalog pages
@@ -546,3 +583,87 @@ class TestMiscRoutes:
         assert "JPY" in page
         # The old hard-coded options are gone once a list of your own exists.
         assert 'value="SAR"' not in page
+
+
+# ==========================================================================
+# Currency on every document (picked from Administration -> Miscellaneous)
+# ==========================================================================
+class TestDocumentCurrency:
+    def _currency(self, client):
+        client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
+
+    def test_quotation_stores_and_prints_its_currency(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._currency(client)
+        client.post("/quotations/new", data={
+            "buyer_name": "Buyer", "quotation_date": "2026-01-01", "currency_code": "JPY",
+            "item_product_name[]": "P", "item_quantity_value[]": "10", "item_price_usd[]": "2",
+        }, follow_redirects=True)
+        quotation = container.quotation_service.list_all(company_id)[0]
+        assert (quotation.currency_code, quotation.currency_symbol) == ("JPY", "¥")
+
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "JPY [ ¥ ]" in sheet          # the Currency row
+        assert "PRICE (JPY)" in sheet        # the money column headings
+        assert "(USD)" not in sheet
+
+    def test_a_document_saved_before_the_field_existed_still_prints_usd(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        assert quotation.currency_code is None
+        assert quotation.currency_label == "USD [ $ ]"
+        assert "PRICE (USD)" in client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+
+    def test_purchase_order_defaults_to_inr_and_follows_its_pick(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._currency(client)
+        order = container.purchase_order_service.create(
+            admin, {"seller_name": "Supplier", "po_date": "2026-01-01"},
+            [{"product_name": "P", "quantity_boxes": "5", "quantity_value": "10", "price_inr": "2"}])
+        assert order.currency_label == "INR [ ₹ ]"
+
+        updated = container.purchase_order_service.update(
+            admin, order.id, {"seller_name": "Supplier", "po_date": "2026-01-01", "currency_code": "JPY"},
+            [{"product_name": "P", "quantity_boxes": "5", "quantity_value": "10", "price_inr": "2"}])
+        assert (updated.currency_code, updated.currency_symbol) == ("JPY", "¥")
+        sheet = client.get(f"/purchase-orders/{order.id}").get_data(as_text=True)
+        assert "TOTAL (JPY)" in sheet and "TOTAL (INR)" not in sheet
+
+    def test_proforma_invoice_inherits_the_quotations_currency(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._currency(client)
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "currency_code": "JPY"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        prefill = container.proforma_invoice_service.build_prefill_from_quotation(quotation)
+        assert prefill["fields"]["currency_code"] == "JPY"
+
+    def test_every_document_form_offers_the_currency_dropdown(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._currency(client)
+        for path in ("/quotations/new", "/proforma-invoices/new", "/purchase-orders/new",
+                     "/purchase-invoices/new", "/export-invoices/new"):
+            page = client.get(path).get_data(as_text=True)
+            assert 'name="currency_code"' in page, path
+            assert "JPY [ ¥ ]" in page, path
+
+    def test_proforma_and_purchase_invoice_pages_render_in_their_currency(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._currency(client)
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01", "currency_code": "JPY"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "Rate<br>In JPY" in sheet and "¥" in sheet
+
+        order = container.purchase_order_service.create(
+            admin, {"seller_name": "Supplier", "po_date": "2026-01-01", "currency_code": "JPY"},
+            [{"product_name": "P", "quantity_boxes": "5", "quantity_value": "10", "price_inr": "2"}])
+        invoice = container.purchase_invoice_service.create(
+            admin, {"seller_name": "Supplier", "invoice_number": "S-1", "invoice_date": "2026-01-02",
+                    "purchase_order_id": str(order.id), "currency_code": "JPY"},
+            [{"product_name": "P", "quantity_boxes": "5", "quantity_value": "10", "price_inr": "2"}], [])
+        view = client.get(f"/purchase-invoices/{invoice.id}").get_data(as_text=True)
+        assert "Price (JPY)" in view and "(INR)" not in view

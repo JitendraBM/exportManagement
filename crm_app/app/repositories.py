@@ -327,6 +327,9 @@ class PartyRepositoryBase(ABC):
     @abstractmethod
     def update_compulsory_fields(self, party_id: int, fields: dict) -> None: ...
 
+    @abstractmethod
+    def delete(self, party_id: int) -> None: ...
+
 
 class SqlitePartyRepository(PartyRepositoryBase):
     def __init__(self, db: Database, table: str, client_type: str):
@@ -413,6 +416,37 @@ class SqlitePartyRepository(PartyRepositoryBase):
              fields.get("facebook"), fields.get("instagram"), fields.get("other_social"),
              fields.get("address"), party_id),
         )
+
+    def delete(self, party_id: int) -> None:
+        """Removes the party plus everything hanging off it by
+        parent_type/parent_id - contacts, communications, payments and
+        recorded documents - in ONE transaction, so a half-deleted party
+        can never be left behind. Quotations/PIs/POs are NOT touched: they
+        hang off the originating lead (see PartyService.document_feed), not
+        off this row. If the party came from a lead, that lead is put back
+        to un-converted so it can be converted again."""
+        parent = self.client_type.lower()   # 'buyer' | 'exporter'
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                f"SELECT lead_id FROM {self.table} WHERE id = ?", (party_id,)
+            ).fetchone()
+            lead_id = row["lead_id"] if row else None
+            conn.execute(
+                "DELETE FROM party_contacts WHERE parent_type = ? AND parent_id = ?", (parent, party_id))
+            conn.execute(
+                "DELETE FROM communications WHERE parent_type = ? AND parent_id = ?", (parent, party_id))
+            conn.execute(
+                "DELETE FROM payment_history WHERE parent_type = ? AND parent_id = ?", (parent, party_id))
+            conn.execute(
+                "DELETE FROM documents WHERE parent_type = ? AND parent_id = ?", (parent, party_id))
+            conn.execute(f"DELETE FROM {self.table} WHERE id = ?", (party_id,))
+            if lead_id:
+                conn.execute(
+                    "UPDATE leads SET is_converted = 0, converted_client_type = NULL, "
+                    "converted_client_id = NULL, status = 'quotation_submission_pending', "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (lead_id,),
+                )
 
 
 # ============================================================
@@ -1421,8 +1455,8 @@ class QuotationRepository:
                 price_validity_days, remarks,
                 sea_freight, insurance, certification, other_charges,
                 discount_amount, bank_name, bank_account_number, bank_ifsc_code,
-                bank_swift_code, bank_branch, bank_address, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                bank_swift_code, bank_branch, bank_address, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (quotation.company_id, quotation.quotation_number, quotation.quotation_date, quotation.lead_id,
              quotation.buyer_name, quotation.buyer_address, quotation.buyer_reference_no,
              quotation.port_of_loading, quotation.port_of_discharge, quotation.packing_details,
@@ -1433,6 +1467,7 @@ class QuotationRepository:
              quotation.discount_amount,
              quotation.bank_name, quotation.bank_account_number, quotation.bank_ifsc_code,
              quotation.bank_swift_code, quotation.bank_branch, quotation.bank_address,
+             quotation.currency_code, quotation.currency_symbol,
              quotation.created_by),
         )
         self._replace_items(new_id, quotation.items)
@@ -1448,6 +1483,7 @@ class QuotationRepository:
                                       remarks = ?, sea_freight = ?, insurance = ?, certification = ?,
                                       other_charges = ?, discount_amount = ?, bank_name = ?, bank_account_number = ?,
                                       bank_ifsc_code = ?, bank_swift_code = ?, bank_branch = ?, bank_address = ?,
+                                      currency_code = ?, currency_symbol = ?,
                                       updated_at = datetime('now')
                WHERE id = ?""",
             (quotation.quotation_date, quotation.lead_id, quotation.buyer_name,
@@ -1458,7 +1494,8 @@ class QuotationRepository:
              quotation.remarks, quotation.sea_freight, quotation.insurance, quotation.certification,
              quotation.other_charges, quotation.discount_amount, quotation.bank_name,
              quotation.bank_account_number, quotation.bank_ifsc_code, quotation.bank_swift_code,
-             quotation.bank_branch, quotation.bank_address, quotation_id),
+             quotation.bank_branch, quotation.bank_address,
+             quotation.currency_code, quotation.currency_symbol, quotation_id),
         )
         self._replace_items(quotation_id, quotation.items)
 
@@ -1596,8 +1633,8 @@ class ProformaInvoiceRepository:
                 variation_in_qty, delivery_period, container_details, terms_of_delivery, payment_terms,
                 remarks, sea_freight, insurance, certification, other_charges, discount_amount,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
-                bank_address, display_mode, status, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                bank_address, display_mode, status, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
@@ -1609,6 +1646,7 @@ class ProformaInvoiceRepository:
              invoice.certification, invoice.other_charges, invoice.discount_amount, invoice.bank_name,
              invoice.bank_account_number, invoice.bank_ifsc_code, invoice.bank_swift_code,
              invoice.bank_branch, invoice.bank_address, invoice.display_mode, invoice.status,
+             invoice.currency_code, invoice.currency_symbol,
              invoice.created_by),
         )
         self._replace_items(new_id, invoice.items)
@@ -1631,6 +1669,7 @@ class ProformaInvoiceRepository:
                                              other_charges = ?, discount_amount = ?, bank_name = ?,
                                              bank_account_number = ?, bank_ifsc_code = ?, bank_swift_code = ?,
                                              bank_branch = ?, bank_address = ?, display_mode = ?,
+                                             currency_code = ?, currency_symbol = ?,
                                              updated_at = datetime('now')
                WHERE id = ?""",
             (invoice.invoice_date, invoice.lead_id, invoice.quotation_id, invoice.export_ref_no,
@@ -1643,7 +1682,8 @@ class ProformaInvoiceRepository:
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount, invoice.bank_name,
              invoice.bank_account_number, invoice.bank_ifsc_code, invoice.bank_swift_code,
-             invoice.bank_branch, invoice.bank_address, invoice.display_mode, invoice_id),
+             invoice.bank_branch, invoice.bank_address, invoice.display_mode,
+             invoice.currency_code, invoice.currency_symbol, invoice_id),
         )
         self._replace_items(invoice_id, invoice.items)
 
@@ -2142,8 +2182,8 @@ class PurchaseOrderRepository:
                 seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, delivery_time,
                 advance_percent, payment_terms, remarks, igst_percent, cgst_percent, sgst_percent,
-                purchase_type, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                purchase_type, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_order.company_id, purchase_order.po_number, purchase_order.po_date,
              purchase_order.lead_id, purchase_order.proforma_invoice_id, purchase_order.seller_supplier_id,
              purchase_order.seller_name, purchase_order.seller_address, purchase_order.seller_pan,
@@ -2151,7 +2191,8 @@ class PurchaseOrderRepository:
              purchase_order.port_of_discharge, purchase_order.container_details, purchase_order.delivery_time,
              purchase_order.advance_percent, purchase_order.payment_terms, purchase_order.remarks,
              purchase_order.igst_percent, purchase_order.cgst_percent, purchase_order.sgst_percent,
-             purchase_order.purchase_type, purchase_order.created_by),
+             purchase_order.purchase_type, purchase_order.currency_code, purchase_order.currency_symbol,
+             purchase_order.created_by),
         )
         self._replace_items(new_id, purchase_order.items)
         return self.get_by_id(new_id)
@@ -2164,7 +2205,8 @@ class PurchaseOrderRepository:
                                            port_of_loading = ?, port_of_discharge = ?, container_details = ?,
                                            delivery_time = ?, advance_percent = ?, payment_terms = ?,
                                            remarks = ?, igst_percent = ?, cgst_percent = ?, sgst_percent = ?,
-                                           purchase_type = ?, updated_at = datetime('now')
+                                           purchase_type = ?, currency_code = ?, currency_symbol = ?,
+                                           updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_order.po_date, purchase_order.lead_id, purchase_order.proforma_invoice_id,
              purchase_order.seller_supplier_id, purchase_order.seller_name, purchase_order.seller_address,
@@ -2172,7 +2214,8 @@ class PurchaseOrderRepository:
              purchase_order.port_of_loading, purchase_order.port_of_discharge, purchase_order.container_details,
              purchase_order.delivery_time, purchase_order.advance_percent, purchase_order.payment_terms,
              purchase_order.remarks, purchase_order.igst_percent, purchase_order.cgst_percent,
-             purchase_order.sgst_percent, purchase_order.purchase_type, purchase_order_id),
+             purchase_order.sgst_percent, purchase_order.purchase_type,
+             purchase_order.currency_code, purchase_order.currency_symbol, purchase_order_id),
         )
         self._replace_items(purchase_order_id, purchase_order.items)
 
@@ -2289,8 +2332,8 @@ class PurchaseInvoiceRepository:
                 seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, transporter_name, epcg_number, epcg_date,
                 supplier_pdf_path, discount_amount, insurance_other, freight, igst_amount, cgst_amount,
-                sgst_amount, round_off, remarks, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                sgst_amount, round_off, remarks, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_invoice.company_id, purchase_invoice.purchase_invoice_number, purchase_invoice.invoice_number,
              purchase_invoice.invoice_date, purchase_invoice.purchase_order_id, purchase_invoice.lead_id,
              purchase_invoice.seller_supplier_id, purchase_invoice.seller_name, purchase_invoice.seller_address,
@@ -2300,6 +2343,7 @@ class PurchaseInvoiceRepository:
              purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount, purchase_invoice.insurance_other,
              purchase_invoice.freight, purchase_invoice.igst_amount, purchase_invoice.cgst_amount,
              purchase_invoice.sgst_amount, purchase_invoice.round_off, purchase_invoice.remarks,
+             purchase_invoice.currency_code, purchase_invoice.currency_symbol,
              purchase_invoice.created_by),
         )
         self._replace_items(new_id, purchase_invoice.items)
@@ -2315,7 +2359,8 @@ class PurchaseInvoiceRepository:
                                              transporter_name = ?, epcg_number = ?, epcg_date = ?,
                                              supplier_pdf_path = ?, discount_amount = ?, insurance_other = ?,
                                              freight = ?, igst_amount = ?, cgst_amount = ?, sgst_amount = ?,
-                                             round_off = ?, remarks = ?, updated_at = datetime('now')
+                                             round_off = ?, remarks = ?, currency_code = ?, currency_symbol = ?,
+                                             updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_invoice.invoice_number, purchase_invoice.invoice_date, purchase_invoice.purchase_order_id,
              purchase_invoice.lead_id, purchase_invoice.seller_supplier_id, purchase_invoice.seller_name,
@@ -2325,7 +2370,8 @@ class PurchaseInvoiceRepository:
              purchase_invoice.epcg_date, purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount,
              purchase_invoice.insurance_other, purchase_invoice.freight, purchase_invoice.igst_amount,
              purchase_invoice.cgst_amount, purchase_invoice.sgst_amount, purchase_invoice.round_off,
-             purchase_invoice.remarks, purchase_invoice_id),
+             purchase_invoice.remarks, purchase_invoice.currency_code, purchase_invoice.currency_symbol,
+             purchase_invoice_id),
         )
         self._replace_items(purchase_invoice_id, purchase_invoice.items)
         self._replace_vehicles(purchase_invoice_id, purchase_invoice.vehicle_numbers)

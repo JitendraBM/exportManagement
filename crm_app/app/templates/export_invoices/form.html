@@ -340,9 +340,9 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price (USD)</th>
+            <th>Price ({{ chosen_currency }})</th>
             <th>IGST %</th>
-            <th class="num">Total (USD)</th>
+            <th class="num">Total ({{ chosen_currency }})</th>
             <th></th>
           </tr>
         </thead>
@@ -386,11 +386,11 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
     <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
     <div class="form-row">
       <div class="field" style="max-width:180px;"><label for="total_net_weight_kg">Total net weight (KG)</label><input type="number" step="0.01" id="total_net_weight_kg" name="total_net_weight_kg" value="{{ data.total_net_weight_kg | default('', true) }}"></div>

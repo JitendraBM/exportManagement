@@ -89,8 +89,10 @@
     {%- if p|length == 3 %}{{ p[2]|int }}/{{ p[1]|int }}/{{ p[0] }}{% else %}{{ val }}{% endif -%}
   {%- else -%}-{%- endif -%}
 {%- endmacro %}
+{# Money in the invoice's own currency (the macro name predates the currency
+   being a picked field; the symbol now follows invoice.currency_prefix). #}
 {% macro usd(v) -%}
-  {%- if v %}$&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}$&nbsp;-{% endif -%}
+  {%- if v %}{{ invoice.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ invoice.currency_prefix }}&nbsp;-{% endif -%}
 {%- endmacro %}
 
 {% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
@@ -233,7 +235,7 @@
         <td rowspan="2">Description Of Goods</td>
         <td rowspan="2">HSN Code</td>
         <td colspan="3">Quantity Details</td>
-        <td rowspan="2">Rate<br>In USD</td>
+        <td rowspan="2">Rate<br>In {{ invoice.currency_name }}</td>
         <td rowspan="2">Unit</td>
         <td rowspan="2">Total<br>Amount</td>
       </tr>
@@ -277,7 +279,7 @@
     </colgroup>
     <tr>
       <td class="pi-label pi-mid" rowspan="{{ charge_rows }}">Amount<br>In Word</td>
-      <td class="pi-val pi-mid" rowspan="{{ charge_rows }}">{{ invoice.invoice_value_usd | amount_in_words }}</td>
+      <td class="pi-val pi-mid" rowspan="{{ charge_rows }}">{{ invoice.invoice_value_usd | amount_in_words(invoice.currency_name) }}</td>
       {% if annex_items %}
       <td class="pi-charge-label">ANNEXURE</td>
       <td class="pi-val pi-right">{{ usd(annex_total) }}</td>

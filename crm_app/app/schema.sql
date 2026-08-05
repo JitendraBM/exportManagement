@@ -500,6 +500,10 @@ CREATE TABLE IF NOT EXISTS quotations (
     bank_swift_code         TEXT,
     bank_branch             TEXT,
     bank_address            TEXT,
+    -- Currency shown on the document, picked from the Administration -> Miscellaneous
+    -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
+    currency_code           TEXT,
+    currency_symbol         TEXT,
     created_by              INTEGER NOT NULL REFERENCES users(id),
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
@@ -571,6 +575,10 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     bank_address               TEXT,
     display_mode              TEXT NOT NULL DEFAULT 'index',  -- goods layout: 'index' (numbered) | 'surface' (grouped by category + surface)
     status                    TEXT NOT NULL DEFAULT 'draft',  -- 'draft' | 'confirmed'; a confirmed PI is locked for editing and reminds until every design on its packing list is placed on a linked PO
+    -- Currency shown on the document, picked from the Administration -> Miscellaneous
+    -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
+    currency_code           TEXT,
+    currency_symbol         TEXT,
     created_by                 INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -632,6 +640,10 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     cgst_percent            REAL NOT NULL DEFAULT 0,
     sgst_percent            REAL NOT NULL DEFAULT 0,
     purchase_type           TEXT NOT NULL DEFAULT 'full_tax',   -- 'full_tax' | 'exemption'; drives the three percentages above
+    -- Currency shown on the document, picked from the Administration -> Miscellaneous
+    -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
+    currency_code           TEXT,
+    currency_symbol         TEXT,
     created_by              INTEGER NOT NULL REFERENCES users(id),
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
@@ -701,6 +713,10 @@ CREATE TABLE IF NOT EXISTS purchase_invoices (
     sgst_amount             REAL NOT NULL DEFAULT 0,
     round_off               REAL NOT NULL DEFAULT 0,
     remarks                 TEXT,
+    -- Currency shown on the document, picked from the Administration -> Miscellaneous
+    -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
+    currency_code           TEXT,
+    currency_symbol         TEXT,
     created_by              INTEGER NOT NULL REFERENCES users(id),
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),

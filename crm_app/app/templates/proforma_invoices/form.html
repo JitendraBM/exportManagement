@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import currency_select %}
 {% block title %}{{ 'Edit proforma invoice' if invoice else 'New proforma invoice' }}{% endblock %}
 {% block content %}
 
@@ -98,7 +99,9 @@
       <div class="field"><label for="partial_shipment">Partial shipment</label><input type="text" id="partial_shipment" name="partial_shipment" placeholder="e.g. NO" value="{{ data.partial_shipment | default('', true) }}"></div>
       <div class="field"><label for="variation_in_qty">Variation in quantity</label><input type="text" id="variation_in_qty" name="variation_in_qty" placeholder="e.g. +/- 10%" value="{{ data.variation_in_qty | default('', true) }}"></div>
     </div>
+    {% set chosen_currency = data.currency_code | default('USD', true) %}
     <div class="form-row">
+      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed invoice; amounts are typed in this currency.') }}
       <div class="field"><label for="container_details">Container details</label><input type="text" id="container_details" name="container_details" placeholder="e.g. 3 X 20 FT FCL" value="{{ data.container_details | default('', true) }}"></div>
       <div class="field">
         {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
@@ -133,8 +136,8 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price (USD)</th>
-            <th class="num">Total (USD)</th>
+            <th>Price ({{ chosen_currency }})</th>
+            <th class="num">Total ({{ chosen_currency }})</th>
             <th></th>
           </tr>
         </thead>
@@ -173,11 +176,11 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Choosing a catalog product prefills its name, HSN code, unit and pallet type options. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Pallet type starts on "Loose" — no pallets; picking one of the product's pallet types works out Plts from Boxes using that pallet's box capacity (the dropdown shows how much each pallet stores), and "Manual" lets Plts be typed by hand. Price is typed in per line (a specific design and its price are picked later, on the packing list).</p>
     <div class="form-row" style="margin-top:14px;">
-      <div class="field" style="max-width:160px;"><label for="sea_freight">Sea freight (USD)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="insurance">Insurance (USD)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="certification">Certification (USD)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="other_charges">Other (USD)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="discount_amount">Discount (USD)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>

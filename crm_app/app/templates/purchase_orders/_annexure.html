@@ -9,7 +9,7 @@
 {% if annex_items %}
 
 {% macro ax_inr(v) -%}
-  {%- if v %}&#8377;&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}&#8377;&nbsp;-{% endif -%}
+  {%- if v %}{{ purchase_order.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ purchase_order.currency_prefix }}&nbsp;-{% endif -%}
 {%- endmacro %}
 {% macro ax_num(v) -%}
   {%- if v is not none and v != '' and v != 0 %}{{ '{:g}'.format(v | round(2)) }}{% endif -%}
@@ -43,7 +43,7 @@
           <td rowspan="2">HSN CODE</td>
           <td colspan="2">QUANTITY</td>
           <td colspan="2">EX-FACTORY PRICE</td>
-          <td rowspan="2">TOTAL (INR)</td>
+          <td rowspan="2">TOTAL ({{ purchase_order.currency_name }})</td>
         </tr>
         <tr>
           <td>BOXES</td>

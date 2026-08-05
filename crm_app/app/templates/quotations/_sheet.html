@@ -54,8 +54,8 @@
     </tr>
 
     <tr>
-      <td class="quote-side-label" rowspan="4"><span>IMPORTER</span></td>
-      <td class="quote-block" rowspan="4">
+      <td class="quote-side-label" rowspan="5"><span>IMPORTER</span></td>
+      <td class="quote-block" rowspan="5">
         <strong>{{ quotation.buyer_name }}</strong><br>
         {{ (quotation.buyer_address or '')|replace('\n', '<br>')|safe }}
       </td>
@@ -74,6 +74,10 @@
       <td class="quote-field-label">PAYMENT TERMS</td>
       <td class="quote-field-value">{{ quotation.payment_terms or '—' }}</td>
     </tr>
+    <tr>
+      <td class="quote-field-label">CURRENCY</td>
+      <td class="quote-field-value">{{ quotation.currency_label }}</td>
+    </tr>
   </table>
 
   <table class="quote-items-table">
@@ -88,9 +92,9 @@
         <th>HSN CODE</th>
         <th>QTY</th>
         <th>ALT QTY</th>
-        <th>PRICE (USD)</th>
+        <th>PRICE ({{ quotation.currency_name }})</th>
         <th>UNIT</th>
-        <th>TOTAL (USD)</th>
+        <th>TOTAL ({{ quotation.currency_name }})</th>
       </tr>
     </thead>
     <tbody>
@@ -101,9 +105,9 @@
         <td>{{ item.hsn_code or '—' }}</td>
         <td class="num quote-qty-cell">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="quote-unit-sm">{{ item.quantity_unit }}</span>{% else %}—{% endif %}</td>
         <td class="num quote-qty-cell">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="quote-unit-sm">{{ item.unit }}</span></td>
-        <td class="num">$ {{ '{:,.2f}'.format(item.price_usd) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.price_usd) }}</td>
         <td>{{ item.unit }}</td>
-        <td class="num">$ {{ '{:,.2f}'.format(item.total_usd) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.total_usd) }}</td>
       </tr>
       {% endfor %}
       {% if annex_items %}
@@ -120,40 +124,40 @@
       <tr>
         <td rowspan="{{ charge_rows }}" colspan="2" class="quote-amount-words">
           AMOUNT IN WORDS<br>
-          <strong>{{ quotation.invoice_value_usd | amount_in_words }}</strong>
+          <strong>{{ quotation.invoice_value_usd | amount_in_words(quotation.currency_name) }}</strong>
         </td>
         <td colspan="5" class="num"><strong>SUBTOTAL</strong></td>
-        <td class="num">$ {{ '{:,.2f}'.format(main_total) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(main_total) }}</td>
       </tr>
       {% if annex_items %}
       <tr>
         <td colspan="5" class="num">ANNEXURE</td>
-        <td class="num">$ {{ '{:,.2f}'.format(annex_total) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(annex_total) }}</td>
       </tr>
       {% endif %}
       <tr class="quote-charge-row">
         <td colspan="5" class="num">SEA FREIGHT</td>
-        <td class="num">$ {{ '{:,.2f}'.format(quotation.sea_freight) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.sea_freight) }}</td>
       </tr>
       <tr class="quote-charge-row">
         <td colspan="5" class="num">INSURANCE</td>
-        <td class="num">$ {{ '{:,.2f}'.format(quotation.insurance) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.insurance) }}</td>
       </tr>
       <tr class="quote-charge-row">
         <td colspan="5" class="num">CERTIFICATION</td>
-        <td class="num">$ {{ '{:,.2f}'.format(quotation.certification) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.certification) }}</td>
       </tr>
       <tr class="quote-charge-row">
         <td colspan="5" class="num">OTHER</td>
-        <td class="num">$ {{ '{:,.2f}'.format(quotation.other_charges) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.other_charges) }}</td>
       </tr>
       <tr class="quote-charge-row">
         <td colspan="5" class="num">DISCOUNT</td>
-        <td class="num">$ {{ '{:,.2f}'.format(quotation.discount_amount) }}</td>
+        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.discount_amount) }}</td>
       </tr>
       <tr>
-        <td colspan="5" class="num"><strong>INVOICE VALUE (USD)</strong></td>
-        <td class="num"><strong>$ {{ '{:,.2f}'.format(quotation.invoice_value_usd) }}</strong></td>
+        <td colspan="5" class="num"><strong>INVOICE VALUE ({{ quotation.currency_name }})</strong></td>
+        <td class="num"><strong>{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.invoice_value_usd) }}</strong></td>
       </tr>
     </tfoot>
   </table>

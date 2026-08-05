@@ -119,7 +119,7 @@ def number_to_words_indian(n: int) -> str:
     return " ".join(words)
 
 
-def inr_in_words(amount) -> str:
+def inr_in_words(amount, currency_label: str = "INR") -> str:
     """e.g. 383833 -> 'THREE LAKH EIGHTY-THREE THOUSAND EIGHT HUNDRED
     THIRTY-THREE INR ONLY' - used by the printed Purchase Order."""
     amount = round(float(amount or 0), 2)
@@ -128,19 +128,23 @@ def inr_in_words(amount) -> str:
     words = number_to_words_indian(whole)
     if paise:
         words += f" AND PAISE {number_to_words_indian(paise)}"
-    return words + " INR ONLY"
+    return f"{words} {currency_label} ONLY"
 
 
 def register_template_helpers(app):
     """Small, presentation-only helpers exposed to every Jinja template."""
 
     @app.template_filter("amount_in_words")
-    def amount_in_words_filter(value):
-        return amount_in_words(value)
+    def amount_in_words_filter(value, currency=None):
+        """`{{ total | amount_in_words }}` keeps the historic US DOLLARS
+        wording; pass a document's currency name to spell that instead."""
+        return amount_in_words(value, currency.upper() if currency else "US DOLLARS")
 
     @app.template_filter("inr_in_words")
-    def inr_in_words_filter(value):
-        return inr_in_words(value)
+    def inr_in_words_filter(value, currency=None):
+        """Indian crore/lakh grouping. The trailing unit follows the
+        document's own currency when one is passed."""
+        return inr_in_words(value, currency.upper() if currency else "INR")
 
     @app.template_filter("long_date")
     def long_date(value):

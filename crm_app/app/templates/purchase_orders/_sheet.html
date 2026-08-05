@@ -83,7 +83,7 @@
   {%- else -%}-{%- endif -%}
 {%- endmacro %}
 {% macro inr(v) -%}
-  {%- if v %}&#8377;&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}&#8377;&nbsp;-{% endif -%}
+  {%- if v %}{{ purchase_order.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ purchase_order.currency_prefix }}&nbsp;-{% endif -%}
 {%- endmacro %}
 {% macro num(v) -%}
   {%- if v is not none and v != '' and v != 0 %}{{ '{:g}'.format(v | round(2)) }}{% endif -%}
@@ -163,7 +163,7 @@
         <td rowspan="2">HSN CODE</td>
         <td colspan="2">QUANTITY</td>
         <td colspan="2">EX-FACTORY PRICE</td>
-        <td rowspan="2">TOTAL (INR)</td>
+        <td rowspan="2">TOTAL ({{ purchase_order.currency_name }})</td>
       </tr>
       <tr>
         <td>BOXES</td>
@@ -223,7 +223,7 @@
       <col style="width:53%"><col style="width:15%"><col style="width:12%"><col style="width:20%">
     </colgroup>
     <tr>
-      <td class="po-val po-mid" rowspan="{{ 6 if annex_items else 5 }}">ORDER VALUE SAY IN WORD :<br>{{ purchase_order.order_value_inr | inr_in_words }}</td>
+      <td class="po-val po-mid" rowspan="{{ 6 if annex_items else 5 }}">ORDER VALUE SAY IN WORD :<br>{{ purchase_order.order_value_inr | inr_in_words(purchase_order.currency_name) }}</td>
       {% if annex_items %}
       <td class="po-charge-label" colspan="2">ANNEXURE</td>
       <td class="po-val po-right">{{ inr(annex_total) }}</td>
@@ -246,7 +246,7 @@
     </tr>
     <tr>
       <td class="po-charge-label" colspan="2">ROUND OFF</td>
-      <td class="po-val po-right">&#8377;&nbsp;{{ '{:,.2f}'.format(purchase_order.round_off_inr) }}</td>
+      <td class="po-val po-right">{{ purchase_order.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(purchase_order.round_off_inr) }}</td>
     </tr>
     <tr>
       <td class="po-charge-label" colspan="2">ORDER VALUE</td>

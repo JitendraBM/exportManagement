@@ -471,6 +471,18 @@ DEFAULT_CURRENCIES = [
 ]
 
 
+def currency_display(code: Optional[str], symbol: Optional[str],
+                     default_code: str = "USD", default_symbol: str = "$") -> tuple:
+    """(name, prefix, label) for a document's stored currency, e.g.
+    ("USD", "$", "USD [ $ ]"). A document saved before the currency became a
+    picked field has neither, and falls back to whatever its sheet used to
+    hard-code - so nothing already printed changes."""
+    if not code:
+        return default_code, default_symbol, f"{default_code} [ {default_symbol} ]"
+    prefix = symbol or ""
+    return code, prefix, (f"{code} [ {prefix} ]" if prefix else code)
+
+
 @dataclass
 class Permit:
     """One "permission" the company holds, managed under the Our Company
@@ -756,6 +768,11 @@ class Quotation:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
+    # Currency the document is written in, picked from the Administration ->
+    # Miscellaneous list and snapshotted so a later edit of that list can't
+    # rewrite an issued sheet. Display information only - no conversion.
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
     items: List[QuotationItem] = field(default_factory=list)
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -795,7 +812,25 @@ class Quotation:
             updated_at=row["updated_at"],
             created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
             computed_subtotal_usd=row["items_total"] if "items_total" in row.keys() else None,
+            currency_code=row["currency_code"] if "currency_code" in row.keys() else None,
+            currency_symbol=row["currency_symbol"] if "currency_symbol" in row.keys() else None,
         )
+
+    @property
+    def currency_name(self) -> str:
+        """The currency's name, e.g. `USD` - what the money column headings
+        and typed-amount labels read."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        """The symbol printed in front of an amount, e.g. `$`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[1]
+
+    @property
+    def currency_label(self) -> str:
+        """The Currency cell on a printed sheet, e.g. `USD [ $ ]`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[2]
 
     @property
     def subtotal_usd(self) -> float:
@@ -885,6 +920,11 @@ class PurchaseOrder:
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
     proforma_invoice_number: Optional[str] = None  # populated by joined queries only
+    # Currency the document is written in, picked from the Administration ->
+    # Miscellaneous list and snapshotted so a later edit of that list can't
+    # rewrite an issued sheet. Display information only - no conversion.
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
     items: List[PurchaseOrderItem] = field(default_factory=list)
     computed_subtotal_inr: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -920,7 +960,25 @@ class PurchaseOrder:
             created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
             proforma_invoice_number=row["proforma_invoice_number"] if "proforma_invoice_number" in row.keys() else None,
             computed_subtotal_inr=row["items_total"] if "items_total" in row.keys() else None,
+            currency_code=row["currency_code"] if "currency_code" in row.keys() else None,
+            currency_symbol=row["currency_symbol"] if "currency_symbol" in row.keys() else None,
         )
+
+    @property
+    def currency_name(self) -> str:
+        """The currency's name, e.g. `USD` - what the money column headings
+        and typed-amount labels read."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        """The symbol printed in front of an amount, e.g. `$`."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[1]
+
+    @property
+    def currency_label(self) -> str:
+        """The Currency cell on a printed sheet, e.g. `USD [ $ ]`."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[2]
 
     @property
     def total_boxes(self) -> float:
@@ -1044,6 +1102,11 @@ class PurchaseInvoice:
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
     purchase_order_number: Optional[str] = None  # populated by joined queries only
+    # Currency the document is written in, picked from the Administration ->
+    # Miscellaneous list and snapshotted so a later edit of that list can't
+    # rewrite an issued sheet. Display information only - no conversion.
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
     items: List[PurchaseInvoiceItem] = field(default_factory=list)
     vehicle_numbers: List[str] = field(default_factory=list)
     computed_subtotal_inr: Optional[float] = None  # precomputed by list queries that don't load items
@@ -1085,7 +1148,25 @@ class PurchaseInvoice:
             created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
             purchase_order_number=row["purchase_order_number"] if "purchase_order_number" in row.keys() else None,
             computed_subtotal_inr=row["items_total"] if "items_total" in row.keys() else None,
+            currency_code=row["currency_code"] if "currency_code" in row.keys() else None,
+            currency_symbol=row["currency_symbol"] if "currency_symbol" in row.keys() else None,
         )
+
+    @property
+    def currency_name(self) -> str:
+        """The currency's name, e.g. `USD` - what the money column headings
+        and typed-amount labels read."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        """The symbol printed in front of an amount, e.g. `$`."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[1]
+
+    @property
+    def currency_label(self) -> str:
+        """The Currency cell on a printed sheet, e.g. `USD [ $ ]`."""
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[2]
 
     @property
     def total_boxes(self) -> float:
@@ -1354,6 +1435,11 @@ class ProformaInvoice:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
+    # Currency the document is written in, picked from the Administration ->
+    # Miscellaneous list and snapshotted so a later edit of that list can't
+    # rewrite an issued sheet. Display information only - no conversion.
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
     items: List[ProformaInvoiceItem] = field(default_factory=list)
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -1404,7 +1490,25 @@ class ProformaInvoice:
             updated_at=row["updated_at"],
             created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
             computed_subtotal_usd=row["items_total"] if "items_total" in row.keys() else None,
+            currency_code=row["currency_code"] if "currency_code" in row.keys() else None,
+            currency_symbol=row["currency_symbol"] if "currency_symbol" in row.keys() else None,
         )
+
+    @property
+    def currency_name(self) -> str:
+        """The currency's name, e.g. `USD` - what the money column headings
+        and typed-amount labels read."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        """The symbol printed in front of an amount, e.g. `$`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[1]
+
+    @property
+    def currency_label(self) -> str:
+        """The Currency cell on a printed sheet, e.g. `USD [ $ ]`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[2]
 
     @property
     def is_confirmed(self) -> bool:
@@ -1647,13 +1751,20 @@ class ExportInvoice:
         )
 
     @property
+    def currency_name(self) -> str:
+        """The currency's name, e.g. `USD` - what the money column headings
+        and typed-amount labels read."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        """The symbol printed in front of an amount, e.g. `$`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[1]
+
+    @property
     def currency_label(self) -> str:
-        """The Currency cell on the invoice/packing-list sheets, e.g.
-        `USD [ $ ]`. Falls back to USD for invoices raised before the
-        currency became a picked field."""
-        code = self.currency_code or "USD"
-        symbol = self.currency_symbol or ("$" if not self.currency_code else "")
-        return f"{code} [ {symbol} ]" if symbol else code
+        """The Currency cell on a printed sheet, e.g. `USD [ $ ]`."""
+        return currency_display(self.currency_code, self.currency_symbol, "USD", "$")[2]
 
     @property
     def subtotal_usd(self) -> float:

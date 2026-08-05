@@ -17,7 +17,7 @@ from flask import (
 )
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
-from app.utils import login_required, admin_required
+from app.utils import login_required, admin_required, verify_delete_password
 
 
 def build_party_blueprint(name: str, service_attr: str) -> Blueprint:
@@ -133,6 +133,23 @@ def build_party_blueprint(name: str, service_attr: str) -> Blueprint:
         return render_template(
             "parties/edit.html", party=party, endpoint_prefix=name, type_label=service.client_type,
         )
+
+    @bp.route("/<int:party_id>/delete", methods=["POST"])
+    @admin_required
+    def delete_party(party_id):
+        service = _service()
+        if not verify_delete_password(g.user, request.form):
+            flash(f"Incorrect password. {service.client_type} not deleted.", "error")
+            return redirect(url_for(f"{name}.view_party", party_id=party_id))
+        try:
+            party = service.delete(party_id, g.user)
+            flash(f"{service.client_type} '{party.company_name}' deleted.", "success")
+        except PermissionDeniedError as e:
+            flash(str(e), "error")
+            return redirect(url_for(f"{name}.view_party", party_id=party_id))
+        except NotFoundError:
+            abort(404)
+        return redirect(url_for(f"{name}.list_parties"))
 
     @bp.route("/<int:party_id>/status", methods=["POST"])
     @login_required

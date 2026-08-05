@@ -28,7 +28,7 @@ _HEADER_FIELDS = [
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "transporter_name", "epcg_number", "epcg_date",
     "discount_amount", "insurance_other", "freight", "igst_amount", "cgst_amount", "sgst_amount", "round_off",
-    "remarks",
+    "remarks", "currency_code",
 ]
 
 

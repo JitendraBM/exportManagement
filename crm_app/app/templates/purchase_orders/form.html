@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import currency_select %}
 {% block title %}{{ 'Edit purchase order' if purchase_order else 'New purchase order' }}{% endblock %}
 {% block content %}
 
@@ -34,14 +35,16 @@
         </select>
       </div>
     </div>
-    <p class="hint">Choosing a proforma invoice reloads this page and copies its product lines in as a starting point — the purchase order is then its own independent record. Prices are typed in INR (they're the supplier's ex-factory rates, not the proforma's USD selling prices).</p>
+    <p class="hint">Choosing a proforma invoice reloads this page and copies its product lines in as a starting point — the purchase order is then its own independent record. Prices here are the supplier's ex-factory rates in the order's own currency, not the proforma's selling prices.</p>
     <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
     <input type="hidden" name="proforma_invoice_id" id="proforma_invoice_id" value="{{ data.proforma_invoice_id | default('', true) }}">
   </div>
 
+  {% set chosen_currency = data.currency_code | default('INR', true) %}
   <div class="card">
     <div class="card-header"><h3>Order details</h3></div>
     <div class="form-row">
+      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed order; amounts are typed in this currency.') }}
       <div class="field"><label for="po_date">Date<span class="required-mark">*</span></label><input type="date" id="po_date" name="po_date" required value="{{ data.po_date | default(today, true) }}"></div>
       <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
       <div class="field"><label for="delivery_time">Delivery time</label><input type="text" id="delivery_time" name="delivery_time" placeholder="e.g. 20 DAY FROM PO DATE" value="{{ data.delivery_time | default('', true) }}"></div>
@@ -122,9 +125,9 @@
             <th>Boxes</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price (INR)</th>
+            <th>Price ({{ chosen_currency }})</th>
             <th>Per</th>
-            <th class="num">Total (INR)</th>
+            <th class="num">Total ({{ chosen_currency }})</th>
             <th></th>
           </tr>
         </thead>
@@ -165,7 +168,7 @@
       </table>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
-    <p class="hint">Choosing a catalog product prefills its name, HSN code and unit. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Price is the seller's ex-factory rate in INR — per BOX (the usual basis) or per the row's quantity unit. A catalog product also carries the tax rate used below for a Full Tax Purchase.</p>
+    <p class="hint">Choosing a catalog product prefills its name, HSN code and unit. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Price is the seller's ex-factory rate in the order's currency — per BOX (the usual basis) or per the row's quantity unit. A catalog product also carries the tax rate used below for a Full Tax Purchase.</p>
     <div class="form-row" style="margin-top:14px;">
       <div class="field" style="max-width:260px;">
         <label for="purchase_type">Purchase under<span class="required-mark">*</span></label>
@@ -193,9 +196,9 @@
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
       <div class="text-sm">
-        <strong>Total amount:</strong> ₹ <span id="subtotal-display">0.00</span>
-        &nbsp;·&nbsp; <strong>Round off:</strong> ₹ <span id="roundoff-display">0.00</span>
-        &nbsp;·&nbsp; <strong>Order value:</strong> ₹ <span id="order-value-display">0.00</span>
+        <strong>Total amount:</strong> {{ chosen_currency }} <span id="subtotal-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Round off:</strong> {{ chosen_currency }} <span id="roundoff-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Order value:</strong> {{ chosen_currency }} <span id="order-value-display">0.00</span>
       </div>
     </div>
   </div>

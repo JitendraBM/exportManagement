@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import currency_select %}
 {% block title %}{{ 'Edit purchase invoice' if purchase_invoice else 'New purchase invoice' }}{% endblock %}
 {% block content %}
 
@@ -39,9 +40,11 @@
     <input type="hidden" name="purchase_order_id" id="purchase_order_id" value="{{ data.purchase_order_id | default('', true) }}">
   </div>
 
+  {% set chosen_currency = data.currency_code | default('INR', true) %}
   <div class="card">
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
+      {{ currency_select(chosen_currency, currency_options, hint="Shown on the invoice record; amounts are typed in this currency.") }}
       <div class="field"><label for="invoice_number">Invoice number<span class="required-mark">*</span></label><input type="text" id="invoice_number" name="invoice_number" required placeholder="Supplier's own invoice no." value="{{ data.invoice_number | default('', true) }}"></div>
       <div class="field"><label for="invoice_date">Invoice date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
       <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
@@ -136,9 +139,9 @@
             <th>Boxes</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price (INR)</th>
+            <th>Price ({{ chosen_currency }})</th>
             <th>Per</th>
-            <th class="num">Total (INR)</th>
+            <th class="num">Total ({{ chosen_currency }})</th>
             <th></th>
           </tr>
         </thead>
@@ -197,8 +200,8 @@
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
       <div class="text-sm">
-        <strong>Products subtotal:</strong> ₹ <span id="subtotal-display">0.00</span>
-        &nbsp;·&nbsp; <strong>Invoice value:</strong> ₹ <span id="invoice-value-display">0.00</span>
+        <strong>Products subtotal:</strong> {{ chosen_currency }} <span id="subtotal-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Invoice value:</strong> {{ chosen_currency }} <span id="invoice-value-display">0.00</span>
       </div>
     </div>
   </div>

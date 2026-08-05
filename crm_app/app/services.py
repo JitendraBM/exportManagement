@@ -216,6 +216,17 @@ class MiscListService:
                 return option
         return None
 
+    def resolve_currency(self, company_id: int, name: Optional[str]) -> tuple:
+        """(name, symbol) to snapshot onto a document for a submitted
+        currency name. An unknown name is kept as typed with no symbol
+        rather than being dropped, and a blank one stays blank so the
+        document falls back to what its sheet always printed."""
+        name = (name or "").strip() or None
+        if not name:
+            return None, None
+        match = self.find_currency(company_id, name)
+        return (match.name, match.symbol) if match else (name, None)
+
     # ---- writes --------------------------------------------------
     def _clean(self, current_user: User, fields: dict) -> MiscCurrency:
         name = (fields.get("name") or "").strip()
@@ -512,6 +523,16 @@ class PartyService:
         if not fields.get("company_name") or not fields.get("phone") or not fields.get("email"):
             raise ValidationError("Company name, phone and email are all compulsory.")
         self.party_repo.update_compulsory_fields(party_id, fields)
+
+    def delete(self, party_id: int, current_user: User) -> Party:
+        """Admin-only, and the route additionally re-checks the admin's own
+        password before calling this - deleting a party also deletes its
+        contacts, communications, payments and recorded documents."""
+        if not current_user.is_admin:
+            raise PermissionDeniedError(f"Only an admin can delete a {self.client_type.lower()}.")
+        party = self.get(party_id, current_user.company_id)  # 404s if missing/another company's
+        self.party_repo.delete(party_id)
+        return party
 
     def update_status(self, party_id: int, current_user: User, status: str) -> None:
         self.get(party_id, current_user.company_id)  # 404s if missing/another company's
@@ -1747,11 +1768,16 @@ class DocumentVersionService:
 # ============================================================
 class QuotationService:
     def __init__(self, quotation_repo: QuotationRepository, product_repo: ProductRepository,
-                 lead_repo: LeadRepositoryBase, version_service: "DocumentVersionService"):
+                 lead_repo: LeadRepositoryBase, version_service: "DocumentVersionService",
+                 misc_list_service: Optional["MiscListService"] = None):
         self.quotation_repo = quotation_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
         self.version_service = version_service
+        # Resolves the picked currency name to its symbol (Administration ->
+        # Miscellaneous). Optional, so an unwired service just keeps the
+        # submitted name and no symbol.
+        self.misc_list_service = misc_list_service
 
     # ---- reads --------------------------------------------------
     def get(self, quotation_id: int, company_id: int) -> Quotation:
@@ -1871,6 +1897,15 @@ class QuotationService:
             if not lead or lead.company_id != current_user.company_id:
                 lead_id = None
 
+        # Currency the document is written in: the form posts a name off the
+        # Miscellaneous currency list, and both name and symbol are
+        # snapshotted so editing that list later can't rewrite an issued
+        # sheet. Display information only - amounts are stored as typed.
+        currency_code, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
+
         quotation = Quotation(
             id=None, company_id=current_user.company_id, quotation_number="", quotation_date=quotation_date,
             buyer_name=buyer_name, created_by=current_user.id, lead_id=lead_id,
@@ -1896,6 +1931,7 @@ class QuotationService:
             bank_swift_code=(fields.get("bank_swift_code") or "").strip() or None,
             bank_branch=(fields.get("bank_branch") or "").strip() or None,
             bank_address=(fields.get("bank_address") or "").strip() or None,
+            currency_code=currency_code, currency_symbol=currency_symbol,
             items=items,
         )
         return quotation
@@ -1952,7 +1988,9 @@ class ProformaInvoiceService:
 
     def __init__(self, invoice_repo: ProformaInvoiceRepository, product_repo: ProductRepository,
                  lead_repo: LeadRepositoryBase, quotation_repo: QuotationRepository,
-                 version_service: "DocumentVersionService", party_repos: Optional[dict] = None):
+                 version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
+                 misc_list_service: Optional["MiscListService"] = None):
+        self.misc_list_service = misc_list_service
         self.invoice_repo = invoice_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -2063,6 +2101,9 @@ class ProformaInvoiceService:
             "bank_branch": quotation.bank_branch,
             "bank_address": quotation.bank_address,
             "remarks": quotation.remarks,
+            # The document the goods were quoted in is the one they are
+            # invoiced in, unless the user changes it on the form.
+            "currency_code": quotation.currency_code,
         }
         items = [
             {
@@ -2152,6 +2193,15 @@ class ProformaInvoiceService:
             if not quotation or quotation.company_id != current_user.company_id:
                 quotation_id = None
 
+        # Currency the document is written in: the form posts a name off the
+        # Miscellaneous currency list, and both name and symbol are
+        # snapshotted so editing that list later can't rewrite an issued
+        # sheet. Display information only - amounts are stored as typed.
+        currency_code, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
+
         invoice = ProformaInvoice(
             id=None, company_id=current_user.company_id, invoice_number="", invoice_date=invoice_date,
             consignee_name=consignee_name, created_by=current_user.id, lead_id=lead_id,
@@ -2186,6 +2236,7 @@ class ProformaInvoiceService:
             bank_swift_code=(fields.get("bank_swift_code") or "").strip() or None,
             bank_branch=(fields.get("bank_branch") or "").strip() or None,
             bank_address=(fields.get("bank_address") or "").strip() or None,
+            currency_code=currency_code, currency_symbol=currency_symbol,
             display_mode=fields.get("display_mode") if fields.get("display_mode") in ("index", "surface") else "index",
             items=items,
         )
@@ -2247,7 +2298,9 @@ class PurchaseOrderService:
                  version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
                  supplier_repo: Optional[SupplierRepositoryBase] = None,
                  company_repo: Optional[CompanyRepository] = None,
-                 fulfilment_service: Optional["ProformaFulfilmentService"] = None):
+                 fulfilment_service: Optional["ProformaFulfilmentService"] = None,
+                 misc_list_service: Optional["MiscListService"] = None):
+        self.misc_list_service = misc_list_service
         self.purchase_order_repo = purchase_order_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -2522,6 +2575,15 @@ class PurchaseOrderService:
             if not supplier or supplier.company_id != current_user.company_id:
                 seller_supplier_id = None
 
+        # Currency the document is written in: the form posts a name off the
+        # Miscellaneous currency list, and both name and symbol are
+        # snapshotted so editing that list later can't rewrite an issued
+        # sheet. Display information only - amounts are stored as typed.
+        currency_code, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
+
         return PurchaseOrder(
             id=None, company_id=current_user.company_id, po_number="", po_date=po_date,
             seller_name=seller_name, created_by=current_user.id, lead_id=lead_id,
@@ -2541,6 +2603,7 @@ class PurchaseOrderService:
             cgst_percent=cgst_percent,
             sgst_percent=sgst_percent,
             purchase_type=purchase_type,
+            currency_code=currency_code, currency_symbol=currency_symbol,
             items=items,
         )
 
@@ -2597,7 +2660,9 @@ class PurchaseInvoiceService:
                  lead_repo: LeadRepositoryBase, purchase_order_repo: PurchaseOrderRepository,
                  version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
                  supplier_repo: Optional[SupplierRepositoryBase] = None,
-                 upload_folder: str = "", allowed_extensions: set = frozenset()):
+                 upload_folder: str = "", allowed_extensions: set = frozenset(),
+                 misc_list_service: Optional["MiscListService"] = None):
+        self.misc_list_service = misc_list_service
         self.purchase_invoice_repo = purchase_invoice_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -2675,6 +2740,8 @@ class PurchaseInvoiceService:
             "igst_amount": purchase_order.igst_amount,
             "cgst_amount": purchase_order.cgst_amount,
             "sgst_amount": purchase_order.sgst_amount,
+            # The supplier invoices in the currency the order was placed in.
+            "currency_code": purchase_order.currency_code,
         }
         items = [self._raw_item(item) for item in purchase_order.items]
         return {"fields": fields, "items": items}
@@ -2779,6 +2846,15 @@ class PurchaseInvoiceService:
             if not supplier or supplier.company_id != current_user.company_id:
                 seller_supplier_id = None
 
+        # Currency the document is written in: the form posts a name off the
+        # Miscellaneous currency list, and both name and symbol are
+        # snapshotted so editing that list later can't rewrite an issued
+        # sheet. Display information only - amounts are stored as typed.
+        currency_code, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
+
         return PurchaseInvoice(
             id=None, company_id=current_user.company_id, purchase_invoice_number="",
             invoice_number=invoice_number, invoice_date=invoice_date,
@@ -2801,6 +2877,7 @@ class PurchaseInvoiceService:
             sgst_amount=self._parse_amount(fields, "sgst_amount", "SGST"),
             round_off=self._parse_amount(fields, "round_off", "Round off"),
             remarks=(fields.get("remarks") or "").strip() or None,
+            currency_code=currency_code, currency_symbol=currency_symbol,
             items=items,
         )
 
@@ -3062,6 +3139,8 @@ class ExportInvoiceService:
             "final_destination": first.final_destination if first else None,
             "nature_of_contract": first.terms_of_delivery if first else None,
             "payment_terms": first.payment_terms if first else None,
+            # Same currency as the proforma invoices being exported under.
+            "currency_code": first.currency_code if first else None,
             "buyer_order_no": buyer_order_no,
             "buyer_order_date": buyer_order_date,
             "sea_freight": sea_freight,
@@ -3185,12 +3264,10 @@ class ExportInvoiceService:
         # Currency: the form posts a name off the Miscellaneous currency
         # list; both name and symbol are snapshotted so editing that list
         # later can't change what an already-issued invoice printed.
-        currency_name = (fields.get("currency_code") or "").strip() or None
-        currency_symbol = None
-        if currency_name and self.misc_list_service:
-            match = self.misc_list_service.find_currency(current_user.company_id, currency_name)
-            if match:
-                currency_name, currency_symbol = match.name, match.symbol
+        currency_name, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
 
         invoice = ExportInvoice(
             id=None, company_id=current_user.company_id, export_invoice_number=export_invoice_number,

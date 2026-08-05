@@ -70,7 +70,7 @@
       <thead>
         <tr>
           <th>Sr</th><th>Product</th><th>HSN code</th><th>Boxes</th><th>Qty</th><th>Unit</th>
-          <th>Price (INR)</th><th>Per</th><th class="num">Total (INR)</th>
+          <th>Price ({{ purchase_invoice.currency_name }})</th><th>Per</th><th class="num">Total ({{ purchase_invoice.currency_name }})</th>
         </tr>
       </thead>
       <tbody>
@@ -93,7 +93,7 @@
   <div class="flex-between" style="margin-top:14px;">
     <div></div>
     <div class="text-sm">
-      <strong>Products subtotal:</strong> ₹ {{ '{:,.2f}'.format(purchase_invoice.subtotal_inr) }}
+      <strong>Products subtotal:</strong> {{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.subtotal_inr) }}
     </div>
   </div>
 </div>
@@ -101,19 +101,19 @@
 <div class="card">
   <div class="card-header"><h3>Charges &amp; taxes</h3></div>
   <div class="form-row">
-    <div class="field"><label>Discount</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.discount_amount) }}</div></div>
-    <div class="field"><label>Insurance and Other</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.insurance_other) }}</div></div>
-    <div class="field"><label>Freight</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.freight) }}</div></div>
+    <div class="field"><label>Discount</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.discount_amount) }}</div></div>
+    <div class="field"><label>Insurance and Other</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.insurance_other) }}</div></div>
+    <div class="field"><label>Freight</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.freight) }}</div></div>
   </div>
   <div class="form-row">
-    <div class="field"><label>IGST</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.igst_amount) }}</div></div>
-    <div class="field"><label>CGST</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.cgst_amount) }}</div></div>
-    <div class="field"><label>SGST</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.sgst_amount) }}</div></div>
-    <div class="field"><label>Round off</label><div>₹ {{ '{:,.2f}'.format(purchase_invoice.round_off) }}</div></div>
+    <div class="field"><label>IGST</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.igst_amount) }}</div></div>
+    <div class="field"><label>CGST</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.cgst_amount) }}</div></div>
+    <div class="field"><label>SGST</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.sgst_amount) }}</div></div>
+    <div class="field"><label>Round off</label><div>{{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.round_off) }}</div></div>
   </div>
   <div class="flex-between" style="margin-top:14px;">
     <div></div>
-    <div class="text-sm"><strong>Invoice value:</strong> ₹ {{ '{:,.2f}'.format(purchase_invoice.invoice_value_inr) }}</div>
+    <div class="text-sm"><strong>Invoice value:</strong> {{ purchase_invoice.currency_prefix }} {{ '{:,.2f}'.format(purchase_invoice.invoice_value_inr) }}</div>
   </div>
 </div>
 
