@@ -391,7 +391,7 @@ class TestExportPackingListRoutes:
         assert client.get("/export-packing-lists/").status_code == 200
         resp = client.get(f"/export-packing-lists/{packing_list.id}")
         assert resp.status_code == 200
-        assert b"EXPORT PACKING LIST" in resp.data
+        assert b"PACKING LIST" in resp.data
         assert b"BLJU2253726" in resp.data
         assert b"GLAZED VITRIFIED TILES - HSNC 69072100" in resp.data
         assert b"ALIVE GRANITO LLP, MORBI" in resp.data

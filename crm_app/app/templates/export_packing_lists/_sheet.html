@@ -1,42 +1,59 @@
-{# The EXPORT PACKING LIST A4 sheet (replica of the AAYU EXIM EXPORT PACKING
-   LIST format). Expects `packing_list`, `invoice` (its parent export
+{# The EXPORT PACKING LIST A4 sheet - a replica of the AAYU EXIM "PACKING
+   LIST" format. Expects `packing_list`, `invoice` (its parent export
    invoice, which every header box is read off) and `company` in context.
 
+   Header layout is the same banded technique as export_invoices/_sheet.html:
+   each band is its own <table> pulled up by -1px so its top border collapses
+   onto the band above, and the Consigner/Consignee/Buyer half nests a table
+   inside a host <td> so it can carry its own row grid independent of the
+   invoice-reference half beside it.
+
    The body is driven by packing_list.printed_containers: Container No /
-   Seal No / RFID Seal no rowspan down the whole run of rows loaded into that
-   container, and an HSN heading row ("CERAMIC GLAZED VITRIFIED TILES - HSNC
-   69072100") is printed each time the group changes - the service has
-   already ordered the rows so one group runs together and carries across a
-   container boundary without being re-announced. #}
+   Lince Seal No / RFID Seal No rowspan down the whole run of rows loaded
+   into that container, and a group heading row ("<CATEGORY> - HSNC <code>")
+   is printed each time the group changes - the service has already ordered
+   the rows so one group runs together and carries across a container
+   boundary without being re-announced. #}
 <style>
   .epl-sheet {
     background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
-    padding: 6mm 6mm 8mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
-    font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.25;
+    padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 8.5px; line-height: 1.3;
   }
-  .epl-title { border: 1px solid #000; text-align: center; font-size: 14px; font-weight: bold; padding: 3px 0; }
-  .epl-subtitle { border: 1px solid #000; border-top: none; text-align: center; font-size: 8px; font-weight: bold; padding: 2px 0; }
+  .epl-title { text-align: center; font-size: 13px; font-weight: bold; padding-bottom: 2px; }
+  .epl-subtitle { text-align: center; font-size: 8px; font-weight: bold; padding-bottom: 3px; }
   .epl-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
-  .epl-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: left; word-wrap: break-word; }
-  .epl-sheet tr { break-inside: avoid; page-break-inside: avoid; }
-  .epl-label { font-size: 8px; }
-  .epl-val { font-weight: bold; }
-  .epl-left { text-align: left; vertical-align: top; }
-  .epl-mid { vertical-align: middle !important; }
-  .epl-num { text-align: right; }
+  .epl-sheet td { border: 1px solid #000; padding: 1px 4px; vertical-align: top; word-wrap: break-word; }
+  /* Nested tables sit flush inside their host cell, same technique as the
+     export invoice sheet: the host supplies the outer border, the nested
+     table supplies the interior rules, and every row keeps its own
+     border-bottom (see that file's header comment for why). */
+  .epl-nest > td { padding: 0; }
+  .epl-nest table { margin-top: 0; }
+  .epl-nest table td { border: none; border-bottom: 1px solid #000; }
+  .epl-nest table td + td { border-left: 1px solid #000; }
+  .epl-nest table tr.epl-nb td { border-bottom: none; }
+
+  .epl-lbl { font-weight: bold; }
+  .epl-blk { font-weight: bold; }
+  .epl-mid { vertical-align: middle; }
+  .epl-left { text-align: left; }
   .epl-center { text-align: center; }
-  .epl-side { writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-size: 8px; font-weight: bold; letter-spacing: 1px; vertical-align: middle; }
-  .epl-items thead td { text-align: center; vertical-align: middle; font-size: 8px; font-weight: bold; }
-  .epl-group td { font-weight: bold; }
+  .epl-num { text-align: right; white-space: nowrap; }
+  .epl-cnum { text-align: center; white-space: nowrap; }
   .epl-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
-  .epl-sign-cell { height: 80px; padding: 4px 6px; vertical-align: bottom; }
+  .epl-items thead td { font-weight: normal; text-align: center; vertical-align: middle; }
+  .epl-items tbody td { vertical-align: top; }
+  .epl-group td { font-weight: bold; }
+  .epl-tot td { font-weight: bold; }
+  .epl-sign { height: 46px; }
   @media print { .epl-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
 
 {% macro dmy(val) -%}
   {%- if val -%}
     {%- set p = (val|string)[:10].split('-') -%}
-    {%- if p|length == 3 %}{{ p[2]|int }}/{{ p[1]|int }}/{{ p[0] }}{% else %}{{ val }}{% endif -%}
+    {%- if p|length == 3 %}{{ '%02d'|format(p[2]|int) }}-{{ '%02d'|format(p[1]|int) }}-{{ p[0] }}{% else %}{{ val }}{% endif -%}
   {%- else -%}-{%- endif -%}
 {%- endmacro %}
 {% macro num(v, dp=2) -%}
@@ -47,143 +64,113 @@
 {% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
 
 <div class="epl-sheet js-page-sheet">
-  <div class="epl-title">EXPORT PACKING LIST</div>
-  {% if invoice.export_under %}<div class="epl-subtitle">{{ invoice.export_under|upper }}</div>{% endif %}
+  <div class="epl-title">PACKING LIST</div>
+  <div class="epl-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</div>
 
-  <!-- Consigner / references -->
+  <!-- ============ HEADER: consigner/consignee | invoice references ============ -->
   <table>
-    <colgroup><col style="width:20px"><col><col style="width:16%"><col style="width:20%"><col style="width:8%"><col style="width:13%"></colgroup>
-    <tr>
-      <td class="epl-side" rowspan="4">CONSIGNER</td>
-      <td rowspan="3" class="epl-left" style="border-bottom:none;">
-        <span class="epl-val">{{ company.company_name|upper if company else '' }}</span><br>
-        <span class="epl-val">{{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}</span>
+    <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+    <tr class="epl-nest">
+      <!-- Left half: consigner, its registration numbers, consignee, notify -->
+      <td>
+        <table>
+          <colgroup><col style="width:22%"><col style="width:78%"></colgroup>
+          <tr class="epl-nb"><td colspan="2" class="epl-lbl">Consigner</td></tr>
+          <tr>
+            <td colspan="2" class="epl-blk">
+              {{ company.company_name|upper if company else '' }}<br>
+              {{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}
+            </td>
+          </tr>
+          <tr><td class="epl-lbl">EMAIL</td><td class="epl-blk">{{ email.value|upper if email else '-' }}</td></tr>
+          <tr><td class="epl-lbl">CONTACT</td><td class="epl-blk">{{ phone.value if phone else '-' }}</td></tr>
+          <tr><td class="epl-lbl">IEC</td><td class="epl-blk">{{ company.iec if company and company.iec else '-' }}</td></tr>
+          <tr><td class="epl-lbl">GSTIN</td><td class="epl-blk">{{ company.gstin if company and company.gstin else '-' }}</td></tr>
+          <tr><td class="epl-lbl">BIN</td><td class="epl-blk">{{ company.bin if company and company.bin else '-' }}</td></tr>
+          <tr><td class="epl-lbl">PAN</td><td class="epl-blk">{{ company.pan_no if company and company.pan_no else '-' }}</td></tr>
+          <tr class="epl-nb"><td colspan="2" class="epl-lbl">Consignee</td></tr>
+          <tr>
+            <td colspan="2" class="epl-blk">
+              {{ (invoice.consignee_name or '')|upper }}<br>
+              {{ (invoice.consignee_address or '')|upper|replace('\n', '<br>')|safe }}
+            </td>
+          </tr>
+          <tr class="epl-nb"><td colspan="2" class="epl-lbl">Buyer If Other Then Consignee[Notify]</td></tr>
+          <tr>
+            <td colspan="2" class="epl-blk">
+              {% if invoice.notify_name or invoice.notify_address %}
+                {{ (invoice.notify_name or '')|upper }}<br>
+                {{ (invoice.notify_address or '')|upper|replace('\n', '<br>')|safe }}
+              {% else %}-{% endif %}
+            </td>
+          </tr>
+        </table>
       </td>
-      <td class="epl-label">Invoice No</td>
-      <td class="epl-val">{{ invoice.export_invoice_number }}</td>
-      <td class="epl-label">DATE</td>
-      <td class="epl-val">{{ dmy(invoice.invoice_date) }}</td>
-    </tr>
-    <tr>
-      <td class="epl-label">Export Ref. No</td>
-      <td class="epl-val epl-left">
-        {% for pi in invoice.linked_proformas %}{{ pi.invoice_number }}<br>{% else %}-{% endfor %}
-      </td>
-      <td class="epl-label">DATE</td>
-      <td class="epl-val epl-left">
-        {% for pi in invoice.linked_proformas %}{{ dmy(pi.invoice_date) }}<br>{% else %}-{% endfor %}
-      </td>
-    </tr>
-    <tr>
-      <td class="epl-label epl-mid">Buyer Order No &amp;<br>Date</td>
-      <td class="epl-val epl-left" colspan="3">
-        {{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp;·&nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}
-      </td>
-    </tr>
-    <tr>
-      <td class="epl-left" style="padding:0;">
-        <div style="display:flex;">
-          <div style="padding:3px 5px;" class="epl-label">EMAIL</div>
-          <div style="padding:3px 5px;flex:1;" class="epl-val">{{ email.value|upper if email else '-' }}</div>
-          <div style="padding:3px 5px;border-left:1px solid #000;" class="epl-label">MOBILE</div>
-          <div style="padding:3px 5px;" class="epl-val">{{ phone.value if phone else '-' }}</div>
-        </div>
-      </td>
-      <td class="epl-label epl-mid">GSTIN / PAN</td>
-      <td class="epl-val epl-mid">{{ company.gstin if company else '-' }}<br>{{ company.pan_no if company else '-' }}</td>
-      <td class="epl-label epl-mid">IEC</td>
-      <td class="epl-val epl-mid">{{ company.iec if company else '-' }}</td>
-    </tr>
-    <tr>
-      <td class="epl-side">CONSIGNEE</td>
-      <td class="epl-left">
-        <span class="epl-val">{{ (invoice.consignee_name or '')|upper }}</span><br>
-        <span class="epl-val">{{ (invoice.consignee_address or '')|upper|replace('\n', '<br>')|safe }}</span>
-      </td>
-      <td class="epl-label epl-mid">Buyer If Other Then<br>Consignee[Notify]</td>
-      <td class="epl-mid epl-left" colspan="3">
-        {% if invoice.notify_name or invoice.notify_address %}
-          <span class="epl-val">{{ (invoice.notify_name or '')|upper }}</span><br>
-          <span class="epl-val">{{ (invoice.notify_address or '')|upper|replace('\n', '<br>')|safe }}</span>
-        {% else %}-{% endif %}
+
+      <!-- Right half: invoice references, routing, container split, bank -->
+      <td>
+        <table>
+          <colgroup><col style="width:40%"><col style="width:60%"></colgroup>
+          <tr><td class="epl-lbl">Invoice No</td><td>{{ invoice.export_invoice_number }}</td></tr>
+          <tr><td class="epl-lbl">Invoice Date</td><td>{{ dmy(invoice.invoice_date) }}</td></tr>
+          <tr>
+            <td class="epl-lbl">Proforma Invoice No</td>
+            <td>{% for pi in invoice.linked_proformas %}{{ pi.invoice_number }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+          </tr>
+          <tr>
+            <td class="epl-lbl">Proforma Invoice Date</td>
+            <td>{% for pi in invoice.linked_proformas %}{{ dmy(pi.invoice_date) }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+          </tr>
+          <tr>
+            <td class="epl-lbl">Buyer Order No &amp; Date</td>
+            <td>{{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}</td>
+          </tr>
+          <tr><td class="epl-lbl">Currency</td><td>USD [ $ ]</td></tr>
+          <tr><td class="epl-lbl">Pre Carriage By</td><td>{{ (invoice.pre_carriage_by or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Country of Destination</td><td>{{ (invoice.country_of_destination or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Vessel / Flight Name &amp; No</td><td>N/A</td></tr>
+          <tr><td class="epl-lbl">Port Of Loading</td><td>{{ (invoice.port_of_loading or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Port Of Discharge</td><td>{{ (invoice.port_of_discharge or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Final Destination</td><td>{{ (invoice.final_destination or '-')|upper }}</td></tr>
+          <tr>
+            <td class="epl-lbl">Container Details</td>
+            <td>
+              {% for c in invoice.containers %}
+                {{ c.container_count }} &nbsp;x&nbsp; {{ c.container_type }}{% if not loop.last %}<br>{% endif %}
+              {% else %}-{% endfor %}
+            </td>
+          </tr>
+          <tr><td class="epl-lbl">Nature Of Contract</td><td>{{ (invoice.nature_of_contract or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Payment Terms</td><td>{{ invoice.payment_terms or '-' }}</td></tr>
+          <tr><td class="epl-lbl">Bank Name</td><td>{{ (invoice.bank_name or '-')|upper }}</td></tr>
+          <tr><td class="epl-lbl">Bank Address</td><td>{{ (invoice.bank_address or '-')|upper|replace('\n', '<br>')|safe }}</td></tr>
+          <tr><td class="epl-lbl">Bank Account No</td><td>{{ invoice.bank_account_number or '-' }}</td></tr>
+          <tr><td class="epl-lbl">SWIFT Code</td><td>{{ (invoice.bank_swift_code or '-')|upper }}</td></tr>
+        </table>
       </td>
     </tr>
   </table>
 
-  <!-- Origin / shipping grid -->
-  <table>
-    <colgroup><col style="width:25%"><col style="width:25%"><col style="width:25%"><col style="width:25%"></colgroup>
-    <tr>
-      <td class="epl-label epl-center">Pre Carriage By</td>
-      <td class="epl-label epl-center">Place of Receipt</td>
-      <td class="epl-label epl-center">Country of Origin</td>
-      <td class="epl-label epl-center">Country of Destination</td>
-    </tr>
-    <tr>
-      <td class="epl-val epl-center">{{ (invoice.pre_carriage_by or '-')|upper }}</td>
-      <td class="epl-val epl-center">{{ (invoice.place_of_receipt or '-')|upper }}</td>
-      <td class="epl-val epl-center">{{ (invoice.country_of_origin or 'INDIA')|upper }}</td>
-      <td class="epl-val epl-center">{{ (invoice.country_of_destination or '-')|upper }}</td>
-    </tr>
-    <tr>
-      <td class="epl-label epl-center">Port Of Loading</td>
-      <td class="epl-val epl-center">{{ (invoice.port_of_loading or '-')|upper }}</td>
-      <td class="epl-label epl-mid epl-center" rowspan="4">Bank Details</td>
-      <td class="epl-val epl-left epl-mid" rowspan="4">
-        <span class="epl-val">BENEFICIARY : {{ company.company_name|upper if company else '' }}</span><br>
-        <span class="epl-val">{{ (invoice.bank_name or '-')|upper }}</span><br>
-        <span class="epl-val">{{ (invoice.bank_address or '')|upper|replace('\n', '<br>')|safe }}</span>
-        {% if invoice.bank_account_number %}<br><span class="epl-val">A/C NO : {{ invoice.bank_account_number }}</span>{% endif %}
-        {% if invoice.bank_swift_code %}<br><span class="epl-val">SWIFT : {{ invoice.bank_swift_code|upper }}</span>{% endif %}
-        {% if invoice.bank_ifsc_code %}<br><span class="epl-val">IFSC : {{ invoice.bank_ifsc_code|upper }}</span>{% endif %}
-      </td>
-    </tr>
-    <tr>
-      <td class="epl-label epl-center">Port Of Discharge</td>
-      <td class="epl-label epl-center">Final Destination</td>
-    </tr>
-    <tr>
-      <td class="epl-val epl-center">{{ (invoice.port_of_discharge or '-')|upper }}</td>
-      <td class="epl-val epl-center">{{ (invoice.final_destination or '-')|upper }}</td>
-    </tr>
-    <tr>
-      <td class="epl-label epl-center">Container Details</td>
-      <td class="epl-label epl-center">Nature Of Contract</td>
-    </tr>
-    <tr>
-      <td class="epl-val epl-center">
-        {% for c in invoice.containers %}
-          {{ c.container_count }} &nbsp;X&nbsp; {{ c.container_type }}{% if not loop.last %}<br>{% endif %}
-        {% else %}-{% endfor %}
-      </td>
-      <td class="epl-val epl-center">{{ (invoice.nature_of_contract or '-')|upper }}</td>
-      <td class="epl-label epl-center">Payment Terms</td>
-      <td class="epl-val">{{ invoice.payment_terms or '-' }}</td>
-    </tr>
-  </table>
-
-  <!-- The split itself: one block of rows per physical container, grouped by HSN -->
+  <!-- ============ THE SPLIT: one block of rows per physical container, grouped by HSN ============ -->
   <table class="epl-items">
     <colgroup>
-      <col style="width:12%"><col style="width:11%"><col style="width:12%"><col style="width:27%">
-      <col style="width:5%"><col style="width:7%"><col style="width:9%"><col style="width:8.5%"><col style="width:8.5%">
+      <col style="width:11%"><col style="width:11%"><col style="width:12%"><col style="width:22%"><col style="width:8%">
+      <col style="width:6%"><col style="width:7%"><col style="width:8%"><col style="width:7.5%"><col style="width:7.5%">
     </colgroup>
     <thead>
       <tr>
-        <td colspan="3">Container Details</td>
-        <td rowspan="2">Description Of Goods</td>
-        <td colspan="3">Quantity Details</td>
-        <td colspan="2">Weight In KGS</td>
-      </tr>
-      <tr>
         <td>Container No</td>
-        <td>Seal No</td>
-        <td>RFID Seal no</td>
-        <td>Plts</td>
-        <td>Boxes</td>
-        <td>SQM/LM/PCS</td>
-        <td>Net Weight</td>
-        <td>Gross Weight</td>
+        <td>Lince Seal No</td>
+        <td>RFID Seal No</td>
+        <td>Description Of Goods</td>
+        <td>HSNC</td>
+        <td>Packing</td>
+        <td>Qty</td>
+        <td>Alt. Qty</td>
+        <td>Net Weight (KG)</td>
+        <td>Gross Weight (KG)</td>
       </tr>
     </thead>
     <tbody>
@@ -191,100 +178,89 @@
         {% for row in c.rows %}
         <tr {% if row.kind == 'group' %}class="epl-group"{% endif %}>
           {% if loop.first %}
-          <td class="epl-val epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.container_no or '' }}</td>
-          <td class="epl-val epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.seal_no or '' }}</td>
-          <td class="epl-val epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.rfid_seal_no or '' }}</td>
+          <td class="epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.container_no or '' }}</td>
+          <td class="epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.seal_no or '' }}</td>
+          <td class="epl-mid epl-center" rowspan="{{ c.rowspan }}">{{ c.rfid_seal_no or '' }}</td>
           {% endif %}
           {% if row.kind == 'group' %}
-          <td class="epl-left" colspan="6">{{ row.heading }}</td>
+          <td class="epl-left" colspan="7">{{ row.heading }}</td>
           {% else %}
           {% set item = row.item %}
           <td class="epl-left">{{ item.product_name }}</td>
-          <td class="epl-center">{{ num(item.pallets, 0) }}</td>
-          <td class="epl-center">{% if item.quantity_boxes %}{{ num(item.quantity_boxes, 0) }} <span class="epl-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
-          <td class="epl-num">{{ num(item.quantity_value) }}</td>
+          <td class="epl-center">{{ item.hsn_code or '' }}</td>
+          <td class="epl-cnum">{{ num(item.pallets, 0) }}</td>
+          <td class="epl-cnum">{% if item.quantity_boxes %}{{ num(item.quantity_boxes, 0) }} <span class="epl-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+          <td class="epl-cnum">{{ num(item.quantity_value) }} <span class="epl-unit-sm">{{ item.unit }}</span></td>
           <td class="epl-num">{{ num(item.net_weight_kg) }}</td>
           <td class="epl-num">{{ num(item.gross_weight_kg) }}</td>
           {% endif %}
         </tr>
         {% endfor %}
       {% else %}
-      <tr><td colspan="9" class="epl-center">No containers loaded yet.</td></tr>
+      <tr><td colspan="10" class="epl-center">No containers loaded yet.</td></tr>
       {% endfor %}
       {# Blank filler cell: sized by _page_filler.html so the split stretches
          and the sheet fills its A4 page exactly. #}
       <tr class="js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+      <tr class="epl-tot">
+        <td colspan="5" style="font-weight:normal;">TOTAL</td>
+        <td class="epl-cnum">{{ num(packing_list.total_pallets, 0) }}</td>
+        <td class="epl-cnum">{{ num(packing_list.total_boxes, 0) }}</td>
+        <td class="epl-cnum">{{ num(packing_list.total_quantity) }}</td>
+        <td class="epl-num">{{ num(packing_list.total_net_weight) }}</td>
+        <td class="epl-num">{{ num(packing_list.total_gross_weight) }}</td>
       </tr>
       <tr>
-        <td colspan="4" class="epl-val">TOTAL</td>
-        <td class="epl-val epl-center">{{ num(packing_list.total_pallets, 0) }}</td>
-        <td class="epl-val epl-center">{{ num(packing_list.total_boxes, 0) }}</td>
-        <td class="epl-val epl-num">{{ num(packing_list.total_quantity) }}</td>
-        <td class="epl-val epl-num">{{ num(packing_list.total_net_weight) }}</td>
-        <td class="epl-val epl-num">{{ num(packing_list.total_gross_weight) }}</td>
-      </tr>
-      <tr>
-        <td colspan="4"></td>
-        <td class="epl-label epl-center">Plts</td>
-        <td class="epl-label epl-center">Boxes</td>
-        <td class="epl-label epl-center">SQM</td>
-        <td class="epl-label epl-center">Net Weight</td>
-        <td class="epl-label epl-center">Gross Weight</td>
+        <td colspan="5"></td>
+        <td class="epl-center">Packing</td>
+        <td class="epl-center">Qty</td>
+        <td class="epl-center">Alt. Qty</td>
+        <td style="text-align:right;">Net Weight(KG)</td>
+        <td style="text-align:right;">Gross Weight(KG)</td>
       </tr>
     </tbody>
   </table>
 
-  <!-- Export under: the RoDTEP claim, the EPCG licence and the LUT line -->
+  <!-- ============ EXPORT UNDER: the RoDTEP claim, the EPCG licence and the LUT line ============ -->
   <table>
-    <colgroup><col style="width:20px"><col style="width:62%"><col style="width:37%"></colgroup>
+    <colgroup><col style="width:65%"><col style="width:35%"></colgroup>
     <tr>
-      <td class="epl-side" rowspan="3">EXPORT UNDER</td>
-      <td class="epl-left">
-        Declaration: WE INTEND TO CLAIM REWARDS UNDER REMISSION OF DUTIES AND TAXES ON EXPORTED PRODUCTS
-        FROM INDIA SCHEME (RoDTEP) &amp; DBK
+      <td rowspan="3" class="epl-left" style="font-weight:normal;">
+        <span class="epl-lbl">Export Under</span><br>
+        WE INTEND TO CLAIM REWARDS UNDER REMISSION OF DUTIES AND TAXES ON EXPORTED PRODUCTS FROM INDIA
+        SCHEME (RoDTEP) &amp; DBK<br>
+        SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
+        {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
       </td>
-      <td class="epl-val epl-mid epl-center" rowspan="2" style="font-size:11px;">
+      <td rowspan="3" class="epl-lbl epl-mid epl-center" style="font-size:11px;">
         CERTIFY THAT GOODS ARE OF<br>"INDIAN ORIGIN"
       </td>
     </tr>
-    <tr>
-      <td class="epl-val epl-left">
-        {% if invoice.epcg_number %}EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ dmy(invoice.epcg_date) }}{% endif %}{% else %}-{% endif %}
-      </td>
-    </tr>
-    <tr>
-      <td class="epl-val epl-left" colspan="2">{{ (invoice.export_under or '-')|upper }}</td>
-    </tr>
+    <tr></tr>
+    <tr></tr>
   </table>
 
-  <table>
-    <colgroup><col style="width:14%"><col style="width:86%"></colgroup>
-    <tr>
-      <td class="epl-label epl-mid">REMARKS</td>
-      <td class="epl-left" style="height:34px;">{{ (invoice.remarks or '-')|replace('\n', '<br>')|safe }}</td>
-    </tr>
-  </table>
-
-  <!-- Self-sealing declaration + signatory, then the stuffing address -->
+  <!-- ============ SELF-SEALING DECLARATION + SIGNATORY, THEN STUFFING ADDRESS ============ -->
   <table>
     <colgroup><col style="width:14%"><col style="width:56%"><col style="width:30%"></colgroup>
     <tr>
-      <td class="epl-label epl-mid">Self Sealing<br>Declaration</td>
+      <td class="epl-lbl epl-mid">Self Sealing<br>Declaration</td>
       <td class="epl-left" style="height:70px;">
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n', '<br>')|safe }}
       </td>
-      <td class="epl-sign-cell">
-        <div class="epl-val">FOR {{ company.company_name|upper if company else '' }}</div>
+      <td class="epl-r epl-sign" style="text-align:right; padding:4px 6px; vertical-align:bottom;">
+        <div class="epl-lbl">For {{ company.company_name|upper if company else '' }}</div>
         <div style="margin-top:34px;">
-          <div class="epl-val">Authorised Signatury</div>
+          <div class="epl-lbl">Authorised Signatury</div>
           {% if invoice.authorised_person_designation %}<div>{{ invoice.authorised_person_designation }}</div>{% endif %}
-          {% if invoice.authorised_person_name %}<div class="epl-val">{{ invoice.authorised_person_name }}</div>{% endif %}
+          {% if invoice.authorised_person_name %}<div class="epl-lbl">{{ invoice.authorised_person_name }}</div>{% endif %}
         </div>
       </td>
     </tr>
     <tr>
-      <td class="epl-label epl-mid">Stuff At</td>
+      <td class="epl-lbl epl-mid">Stuff At</td>
       <td class="epl-left" colspan="2">{{ (invoice.stuffing_location or '-')|upper|replace('\n', '<br>')|safe }}</td>
     </tr>
   </table>
