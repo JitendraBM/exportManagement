@@ -1964,26 +1964,33 @@ class QuotationService:
         The discount is deliberately NOT part of the lump: it comes off above
         the invoice value line, not between FOB and CIF.
 
-        The uplift is kept at full precision (only the line totals are rounded
-        to the cent) so that CIF - charges lands back exactly on the FOB total
-        that was typed - the FOB VALUE row is the figure the user reasoned in,
-        so it is the one that has to stay exact. `price_usd` stays the CIF
-        price throughout, which is why nothing downstream - the printed sheet,
-        the money ladder, the proforma-invoice prefill - needs a special case;
-        `fob_price_usd` only remembers what was typed so reopening the form
-        shows the same numbers back.
+        The uplifted price is rounded to the cent, because it is a price the
+        buyer reads off the sheet and multiplies out: every printed column has
+        to agree. Those rounded lines then can't add up to exactly (FOB total +
+        charges), so the remainder goes to `quotation.round_off` and prints as
+        its own row just above CIF VALUE - which leaves the FOB VALUE row
+        exactly the goods total that was typed, the figure the user actually
+        reasoned in. `price_usd` stays the CIF price throughout, which is why
+        nothing downstream - the printed sheet, the money ladder, the
+        proforma-invoice prefill - needs a special case; `fob_price_usd` only
+        remembers what was typed so reopening the form shows the numbers back.
         """
         items = quotation.items or []
+        quotation.round_off = 0
         if not quotation.fob_pricing:
             for item in items:
                 item.fob_price_usd = None
             return
         total_qty = sum(item.quantity_value for item in items)
         uplift = (quotation.charges_total / total_qty) if total_qty else 0
+        fob_total = 0.0
         for item in items:
             item.fob_price_usd = item.price_usd
-            item.price_usd = item.price_usd + uplift
+            item.price_usd = round(item.price_usd + uplift, 2)
             item.total_usd = round(item.quantity_value * item.price_usd, 2)
+            fob_total += item.quantity_value * item.fob_price_usd
+        quotation.round_off = round(
+            fob_total + quotation.charges_total - sum(item.total_usd for item in items), 2)
 
     def _build_header(self, current_user: User, fields: dict, items: List[QuotationItem]) -> Quotation:
         buyer_name = (fields.get("buyer_name") or "").strip()

@@ -908,6 +908,30 @@ class TestDeliveryTermChargeRows:
         assert 'rowspan="7"' in sheet
         _table_is_rectangular(sheet, "Sr No")
 
+    # ---- FOB-typed prices add the ROUND-OFF row ------------------------------
+    def test_fob_priced_quotation_sheet_prints_a_round_off_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": "CIF", "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "ROUND-OFF" in sheet
+        assert "+0.01" in sheet                   # signed: charge added back
+        assert 'rowspan="9"' in sheet             # the 8 ladder rows + ROUND-OFF
+        _table_is_rectangular(sheet, "CIF VALUE")
+
+    def test_plain_quotation_sheet_has_no_round_off_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": "CIF", "sea_freight": "100"},
+            [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "ROUND-OFF" not in sheet
+        assert 'rowspan="8"' in sheet
+        _table_is_rectangular(sheet, "CIF VALUE")
+
     # ---- the structure survives the row coming out ---------------------------
     @pytest.mark.parametrize("terms", ["CIF", "CFR - BEIRA", "FOB"])
     def test_every_sheet_stays_rectangular_whatever_the_terms(self, admin_ctx, terms):

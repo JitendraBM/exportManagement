@@ -166,16 +166,28 @@ class TestQuotationCrud:
         assert reloaded.cif_value_usd == 420.0
         assert reloaded.fob_value_usd == pytest.approx(10 * 2 + 20 * 5 - 40)
 
-    def test_fob_pricing_keeps_the_fob_total_exact_when_it_does_not_divide(self, container, seed):
-        # 100 over 3 units is a recurring per-unit figure: it is carried at
-        # full precision so the FOB value stays exactly the typed goods total.
+    def test_fob_pricing_rounds_the_price_and_books_the_rest_as_round_off(self, container, seed):
+        # 100 over 3 units is 33.333...: the printed price rounds to 40.33, so
+        # the line total (120.99) carries 99c of charge instead of 100 - the
+        # missing cent prints as ROUND-OFF, leaving CIF and FOB both exact.
         q = container.quotation_service.create(
             seed.admin,
             {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
              "sea_freight": "100", "fob_pricing": "1"},
             [{"product_name": "A", "quantity_value": "3", "price_usd": "7"}])
         reloaded = container.quotation_service.get(q.id, seed.company_id)
-        assert reloaded.fob_value_usd == pytest.approx(21.0)
+        item = reloaded.items[0]
+        assert (item.price_usd, item.total_usd) == (40.33, 120.99)
+        assert item.total_usd == round(item.quantity_value * item.price_usd, 2)  # columns multiply out
+        assert reloaded.round_off == 0.01
+        assert reloaded.cif_value_usd == pytest.approx(121.0)
+        assert reloaded.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+
+    def test_round_off_is_zero_without_fob_pricing(self, container, seed):
+        q = self._create(container, seed, shipping_terms="CIF", sea_freight="100")
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.round_off == 0
+        assert reloaded.cif_value_usd == 20.0  # the lines are the CIF value, untouched
 
     def test_without_fob_pricing_the_typed_price_is_the_cif_price(self, container, seed):
         q = self._create(container, seed, shipping_terms="CIF", sea_freight="100")

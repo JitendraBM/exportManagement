@@ -766,9 +766,16 @@ class CifMoneyLadder:
     """
 
     @property
+    def round_off(self) -> float:
+        """The cent or two the printed lines can't carry - see Quotation's own
+        `round_off` field, which shadows this. Zero for every document that
+        prices the plain way, where the lines ARE the CIF value."""
+        return 0.0
+
+    @property
     def cif_value_usd(self) -> float:
         """CIF Value - the goods total, i.e. what used to print as SUBTOTAL."""
-        return self.subtotal_usd
+        return self.subtotal_usd + self.round_off
 
     @property
     def invoice_value_usd(self) -> float:
@@ -863,6 +870,13 @@ class Quotation(CifMoneyLadder):
     # added onto every line, so each item's price_usd still ends up being the
     # CIF price the sheet prints. See QuotationService._apply_fob_uplift.
     fob_pricing: bool = False
+    # Under fob_pricing the printed price is rounded to the cent, so the lines
+    # can't add up to exactly (FOB total + charges). The remainder is carried
+    # here and printed as its own ROUND-OFF row just above CIF VALUE, which
+    # keeps every column on the sheet multiplying out AND the FOB value exactly
+    # the goods total that was typed. Always 0 when fob_pricing is off. This
+    # field deliberately shadows CifMoneyLadder.round_off.
+    round_off: float = 0
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -906,6 +920,7 @@ class Quotation(CifMoneyLadder):
             other_charges=row["other_charges"] if "other_charges" in row.keys() else 0,
             discount_amount=row["discount_amount"],
             fob_pricing=bool(row["fob_pricing"]) if "fob_pricing" in row.keys() else False,
+            round_off=(row["round_off"] if "round_off" in row.keys() else 0) or 0,
             bank_name=row["bank_name"],
             bank_account_number=row["bank_account_number"],
             bank_ifsc_code=row["bank_ifsc_code"],

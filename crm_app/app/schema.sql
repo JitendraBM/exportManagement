@@ -535,6 +535,9 @@ CREATE TABLE IF NOT EXISTS quotations (
     -- back onto every line to reach the CIF price that gets printed. See
     -- QuotationService._apply_fob_uplift.
     fob_pricing             INTEGER NOT NULL DEFAULT 0,
+    -- What the rounded-to-the-cent line prices can't carry, printed as its own
+    -- ROUND-OFF row just above CIF VALUE. Only ever non-zero under fob_pricing.
+    round_off               REAL NOT NULL DEFAULT 0,
     bank_name               TEXT,
     bank_account_number     TEXT,
     bank_ifsc_code          TEXT,
