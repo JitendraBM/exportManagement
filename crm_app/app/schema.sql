@@ -823,7 +823,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     payment_terms               TEXT,
     buyer_order_no               TEXT,
     buyer_order_date             TEXT,
-    export_under                TEXT,          -- imported "SUPPLY MEANT FOR EXPORT..." / LUT text, editable
+    export_under                TEXT,          -- the government-scheme line of the Export Under block; blank means "use our_company.government_schemes as it stands today". The other lines of that block (the SUPPLY MEANT FOR EXPORT heading, the EPCG licence, the LUT number) are derived at print time, never stored here
     epcg_number                 TEXT,          -- imported from the chain's purchase invoices when present, editable
     epcg_date                   TEXT,
     loading_type                TEXT NOT NULL DEFAULT 'self_sealing',  -- 'buffer' | 'self_sealing'

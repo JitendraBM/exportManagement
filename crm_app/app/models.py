@@ -735,6 +735,56 @@ class Design:
         )
 
 
+class CifMoneyLadder:
+    """The money ladder shared by every document that quotes a buyer a price:
+    Quotation, Proforma Invoice and Export Invoice.
+
+    Every price in this app is a CIF price - the carriage, insurance and
+    handling are already inside the per-unit rate the buyer is quoted, they are
+    NOT charges added on top of it. So the ladder runs DOWNWARDS from the goods
+    total, and the printed sheets all read:
+
+        CIF Value       goods total (the sum of the line totals)
+      - Discount
+      = Invoice Value   what the buyer actually pays; the figure spelled out
+                        in words at the foot of the sheet
+      - Insurance
+      - Sea Freight
+      - Certification
+      - Other
+      = FOB Value       the goods on their own, which is the figure customs
+                        and the export incentives are computed against
+
+    Kept in one mixin (rather than repeated on each dataclass) so a change to
+    the arithmetic can't leave one document type disagreeing with another.
+    A mixin adds no fields, so the dataclasses that inherit it keep their exact
+    field list - which matters, because document version history round-trips
+    them through `dataclasses.asdict` / `cls(**data)`.
+
+    Implementors supply `subtotal_usd` (the goods total, sometimes precomputed
+    by a list query) plus the five charge/discount fields.
+    """
+
+    @property
+    def cif_value_usd(self) -> float:
+        """CIF Value - the goods total, i.e. what used to print as SUBTOTAL."""
+        return self.subtotal_usd
+
+    @property
+    def invoice_value_usd(self) -> float:
+        """CIF less the discount: the amount payable."""
+        return self.cif_value_usd - self.discount_amount
+
+    @property
+    def fob_value_usd(self) -> float:
+        """The invoice value with the carriage/handling charges stripped back
+        out. Under FOB terms sea freight and insurance are already held at zero
+        (the buyer carries the ocean leg), so they drop out of the subtraction
+        on their own and need no special case here."""
+        return (self.invoice_value_usd - self.insurance - self.sea_freight
+                - self.certification - self.other_charges)
+
+
 @dataclass
 class QuotationItem:
     id: Optional[int]
@@ -773,7 +823,7 @@ class QuotationItem:
 
 
 @dataclass
-class Quotation:
+class Quotation(CifMoneyLadder):
     id: Optional[int]
     company_id: int
     quotation_number: str
@@ -875,11 +925,6 @@ class Quotation:
         if self.computed_subtotal_usd is not None:
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
-
-    @property
-    def invoice_value_usd(self) -> float:
-        return (self.subtotal_usd + self.sea_freight + self.insurance
-                + self.certification + self.other_charges - self.discount_amount)
 
 
 @dataclass
@@ -1429,7 +1474,7 @@ class ProformaInvoiceItem:
 
 
 @dataclass
-class ProformaInvoice:
+class ProformaInvoice(CifMoneyLadder):
     id: Optional[int]
     company_id: int
     invoice_number: str
@@ -1562,11 +1607,6 @@ class ProformaInvoice:
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
 
-    @property
-    def invoice_value_usd(self) -> float:
-        return (self.subtotal_usd + self.sea_freight + self.insurance
-                + self.certification + self.other_charges - self.discount_amount)
-
 
 EXPORT_TAX_MODE_IGST = "igst"
 EXPORT_TAX_MODE_LUT = "lut"
@@ -1629,7 +1669,7 @@ class ExportInvoiceItem:
 
 
 @dataclass
-class ExportInvoice:
+class ExportInvoice(CifMoneyLadder):
     """The customer/customs-facing Export Invoice at the buyer end of the
     pipeline. References one or more Proforma Invoices (many-to-many via
     proforma_invoice_ids). Goods are prefilled from those PIs then edited.
@@ -1660,6 +1700,11 @@ class ExportInvoice:
     payment_terms: Optional[str] = None
     buyer_order_no: Optional[str] = None
     buyer_order_date: Optional[str] = None
+    # Only the government-scheme LINE of the printed "Export Under" block -
+    # blank means "use OurCompany.government_schemes as it stands today". The
+    # block's other lines (the SUPPLY MEANT FOR EXPORT heading from tax_mode,
+    # the EPCG licence below, the company's LUT number) are composed by the
+    # sheets at print time, so they can never go stale.
     export_under: Optional[str] = None
     epcg_number: Optional[str] = None
     epcg_date: Optional[str] = None
@@ -1810,20 +1855,20 @@ class ExportInvoice:
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
 
-    @property
-    def invoice_value_usd(self) -> float:
-        return (self.subtotal_usd + self.sea_freight + self.insurance
-                + self.certification + self.other_charges - self.discount_amount)
-
+    # The two persisted columns export_invoices.cnf_value / .fob_value are
+    # written from these on every save (nothing reads them back - they exist so
+    # the figures are queryable outside the app). Both are just the ladder in
+    # CifMoneyLadder under this document's own names: CNF and CIF are the same
+    # value here, and FOB is the ladder's bottom line.
     @property
     def cnf_value(self) -> float:
-        """Total value of the bill in USD, before sea freight/insurance/etc are applied."""
-        return self.subtotal_usd
+        """Goods total, before the charges are stripped out to reach FOB."""
+        return self.cif_value_usd
 
     @property
     def fob_value(self) -> float:
-        """Value of the bill after sea freight/insurance/etc - same as invoice_value_usd."""
-        return self.invoice_value_usd
+        """Invoice value less insurance / sea freight / certification / other."""
+        return self.fob_value_usd
 
     @property
     def invoice_value_inr(self) -> float:

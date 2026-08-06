@@ -13,7 +13,39 @@ from app import utils
 from app.utils import (
     number_to_words, amount_in_words, number_to_words_indian, inr_in_words,
     _three_digit_words, register_template_helpers,
+    is_fob_terms, is_cfr_terms, drops_sea_freight, drops_insurance,
 )
+
+
+# --------------------------------------------------------------------------
+# Delivery terms -> which charges apply
+# --------------------------------------------------------------------------
+class TestDeliveryTerms:
+    """The options are hand-maintained free text, so the incoterm is matched on
+    the leading word: 'CFR', 'cfr', 'CFR - BEIRA', 'CFR-BEIRA' are all CFR."""
+
+    @pytest.mark.parametrize("terms", ["FOB", "fob", "FOB MUNDRA", "FOB-MUNDRA", "FOB - MUNDRA - INDIA"])
+    def test_fob_is_recognised(self, terms):
+        assert is_fob_terms(terms) and not is_cfr_terms(terms)
+
+    @pytest.mark.parametrize("terms", ["CFR", "cfr", "CFR BEIRA", "CFR-BEIRA", "CFR - BEIRA"])
+    def test_cfr_is_recognised(self, terms):
+        assert is_cfr_terms(terms) and not is_fob_terms(terms)
+
+    @pytest.mark.parametrize("terms", ["CIF", "CIF BEIRA", "", None, "FOBBY", "CFRX", "EX WORKS"])
+    def test_other_terms_are_neither(self, terms):
+        assert not is_fob_terms(terms) and not is_cfr_terms(terms)
+
+    def test_fob_drops_both_charges(self):
+        assert drops_sea_freight("FOB MUNDRA") and drops_insurance("FOB MUNDRA")
+
+    def test_cfr_drops_the_insurance_only(self):
+        # The whole point of CFR: the seller still pays the freight.
+        assert drops_insurance("CFR BEIRA")
+        assert not drops_sea_freight("CFR BEIRA")
+
+    def test_cif_drops_nothing(self):
+        assert not drops_sea_freight("CIF BEIRA") and not drops_insurance("CIF BEIRA")
 
 
 # --------------------------------------------------------------------------

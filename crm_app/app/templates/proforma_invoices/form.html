@@ -176,16 +176,19 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Choosing a catalog product prefills its name, HSN code, unit and pallet type options. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Pallet type starts on "Loose" — no pallets; picking one of the product's pallet types works out Plts from Boxes using that pallet's box capacity (the dropdown shows how much each pallet stores), and "Manual" lets Plts be typed by hand. Price is typed in per line (a specific design and its price are picked later, on the packing list).</p>
     <div class="form-row" style="margin-top:14px;">
-      {# Hidden (and forced to 0) while the terms of delivery are FOB - see js-fob-charge below. #}
-      <div class="field js-fob-charge" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field js-fob-charge" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      {# Each charge is hidden (and forced to 0) by the delivery terms that
+         don't charge it - see applyDeliveryTermCharges below. #}
+      <div class="field js-charge-sea-freight" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field js-charge-insurance" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
-      <div class="text-sm"><strong>Subtotal:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span></div>
+      {# Same ladder the printed sheet uses: CIF - discount = invoice value,
+         then the charges come back out of it to leave FOB. #}
+      <div class="text-sm"><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
     </div>
   </div>
 
@@ -343,8 +346,10 @@
     const certification = parseFloat(document.getElementById('certification').value) || 0;
     const otherCharges = parseFloat(document.getElementById('other_charges').value) || 0;
     document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
-    const invoiceValue = subtotal + seaFreight + insurance + certification + otherCharges - discount;
+    const invoiceValue = subtotal - discount;
+    const fobValue = invoiceValue - insurance - seaFreight - certification - otherCharges;
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
+    document.getElementById('fob-value-display').textContent = fobValue.toFixed(2);
   }
 
   // Qty auto-fills from Boxes x the row's catalog product's Alternate
@@ -475,21 +480,29 @@
     document.getElementById(id).addEventListener('input', recalcTotals);
   });
 
-  // ---- FOB hides sea freight / insurance --------------------------------------
-  // Under FOB the buyer pays the ocean leg, so neither charge applies: the two
-  // inputs are hidden and zeroed (the server zeroes them too), which keeps the
-  // invoice value and the printed sheet consistent.
+  // ---- the delivery terms decide which charges apply --------------------------
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
+  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
+  // the insurance and nothing else. Each input is toggled on its own question -
+  // matching drops_sea_freight/drops_insurance in app/utils.py, which zero the
+  // same charges server-side and leave the same rows off the printed sheet.
   const termsSelect = document.getElementById('terms_of_delivery');
-  function applyFobCharges() {
-    const fob = /^FOB\b/i.test((termsSelect.value || '').trim());
-    document.querySelectorAll('.js-fob-charge').forEach((field) => {
-      field.hidden = fob;
-      if (fob) field.querySelector('input').value = 0;
-    });
+  function applyDeliveryTermCharges() {
+    const terms = (termsSelect.value || '').trim();
+    const fob = /^FOB\b/i.test(terms);
+    const cfr = /^CFR\b/i.test(terms);
+    const toggle = (selector, dropped) => {
+      document.querySelectorAll(selector).forEach((field) => {
+        field.hidden = dropped;
+        if (dropped) field.querySelector('input').value = 0;
+      });
+    };
+    toggle('.js-charge-sea-freight', fob);
+    toggle('.js-charge-insurance', fob || cfr);
     recalcTotals();
   }
-  termsSelect.addEventListener('change', applyFobCharges);
-  applyFobCharges();
+  termsSelect.addEventListener('change', applyDeliveryTermCharges);
+  applyDeliveryTermCharges();
 
   // ---- quotation dropdown prefill (reloads the page with ?quotation_id=) --------------------------------------------------
   document.getElementById('quotation_select').addEventListener('change', (e) => {

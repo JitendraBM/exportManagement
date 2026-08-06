@@ -6,7 +6,11 @@ These are the tests that catch a broken template, a renamed url_for endpoint,
 or a route/service signature drift - things the service-level tests can't see.
 """
 
+import re
+
 import pytest
+
+from tests.test_services_company_stats_reports import save_company
 
 
 # --------------------------------------------------------------------------
@@ -366,7 +370,7 @@ class TestTenantIsolationOverHttp:
 # Export invoice + its generated export packing list, end to end over HTTP
 # ==========================================================================
 class TestExportPackingListRoutes:
-    def _create_export_invoice(self, client, container, admin, company_id, split=True):
+    def _create_export_invoice(self, client, container, admin, company_id, split=True, extra=None):
         """Post the export invoice form the way the browser does, including
         the container split that generates the packing list."""
         product = container.product_service.create_product(
@@ -386,6 +390,7 @@ class TestExportPackingListRoutes:
             "cd_vehicle_no[]": ["", ""],
             "cd_tare_weight[]": ["2250.5", "2260"],
         }
+        data.update(extra or {})
         if split:
             data.update({
                 "alloc_container_index[]": ["0", "1"],
@@ -432,6 +437,79 @@ class TestExportPackingListRoutes:
         resp = client.get(f"/export-invoices/{invoice.id}")
         assert resp.status_code == 200
         assert b"EXPORT INVOICE" in resp.data
+
+    def _set_government_schemes(self, container, admin, text):
+        save_company(container, admin, government_schemes=text)
+
+    def _export_under_cell(self, html):
+        """The Export Under cell's printed lines, label row dropped. Anchored
+        on the label span, not on the bare words - both sheets mention
+        "Export Under" in a CSS comment further up."""
+        anchor = re.search(r'-lbl">Export Under</span>', html)
+        assert anchor, "no Export Under cell on this sheet"
+        seg = html[anchor.end():]
+        seg = seg[:seg.find("</td>")]
+        seg = re.sub(r"<br\s*/?>", "\n", seg)
+        seg = re.sub(r"<[^>]+>", "", seg)
+        return [line.strip() for line in seg.split("\n") if line.strip()]
+
+    def test_export_under_block_is_composed_of_scheme_heading_and_epcg(self, admin_ctx):
+        """All three parts are derived - only the scheme line is ever typed."""
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "epcg_number": "2431000888", "epcg_date": "2019-09-17",
+        })
+
+        lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
+        assert lines[0] == "WE INTEND TO CLAIM REWARDS UNDER RODTEP & DBK"
+        assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
+        assert lines[2].startswith("EPCG LICENCE NO : 2431000888")
+
+    def test_the_epcg_line_is_absent_when_there_is_no_licence(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
+        invoice = self._create_export_invoice(client, container, admin, company_id)
+
+        lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
+        assert not any("EPCG" in line for line in lines)
+
+    def test_a_typed_export_under_overrides_only_the_scheme_line(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "COMPANY DEFAULT SCHEME")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "export_under": "CLAIMING UNDER ADVANCE AUTHORISATION",
+        })
+
+        lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
+        assert lines[0] == "CLAIMING UNDER ADVANCE AUTHORISATION"
+        assert "COMPANY DEFAULT SCHEME" not in " ".join(lines)
+        # The heading still follows tax_mode, not what was typed.
+        assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
+
+    def test_a_blank_export_under_falls_back_to_the_live_company_scheme(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "FIRST SCHEME TEXT")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={"export_under": ""})
+        self._set_government_schemes(container, admin, "SECOND SCHEME TEXT")
+
+        lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
+        assert lines[0] == "SECOND SCHEME TEXT"
+
+    def test_the_packing_list_prints_the_same_scheme_line_as_its_invoice(self, admin_ctx):
+        """The packing list used to hard-code RoDTEP wording, so it could
+        disagree with the invoice it belongs to."""
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "export_under": "CLAIMING UNDER ADVANCE AUTHORISATION",
+        })
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+
+        lines = self._export_under_cell(
+            client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True))
+        assert lines[0] == "CLAIMING UNDER ADVANCE AUTHORISATION"
+        assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
 
     def test_saving_an_export_invoice_generates_its_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -693,12 +771,40 @@ class TestDocumentCurrency:
 
 
 # ==========================================================================
-# FOB drops the sea freight / insurance rows from every printed sheet
+# The delivery terms drop charge rows from every printed sheet
 # ==========================================================================
-class TestFobChargeRows:
-    """Under FOB the buyer carries the ocean leg, so the two charges are never
-    part of the price - the sheets print without those rows, and the amount-in-
-    words cell that spans the charge ladder shrinks to match."""
+def _table_is_rectangular(html, marker):
+    """Every row of the table containing `marker` accounts for the same number
+    of columns, counting colspans and the rows a rowspan reaches into.
+
+    This is what catches a dropped charge row taking the surrounding structure
+    with it: a stale rowspan on the amount-in-words cell shows up here as a
+    row that is one column short or one column over."""
+    table = re.search(r"<table[^>]*>(?:(?!</table>).)*?"
+                      + re.escape(marker) + r"(?:(?!</table>).)*?</table>", html, re.S)
+    assert table, f"no table containing {marker!r}"
+    rows = re.findall(r"<tr[^>]*>((?:(?!</tr>).)*)</tr>", table.group(0), re.S)
+    widths, carried = [], {}          # carried: row offset -> columns still spanned
+    for i, row in enumerate(rows):
+        width = carried.pop(i, 0)
+        for cell in re.finditer(r"<t[dh]([^>]*)>", row):
+            attrs = cell.group(1)
+            colspan = int((re.search(r'colspan="(\d+)"', attrs) or [0, 1])[1])
+            rowspan = int((re.search(r'rowspan="(\d+)"', attrs) or [0, 1])[1])
+            width += colspan
+            for extra in range(1, rowspan):
+                carried[i + extra] = carried.get(i + extra, 0) + colspan
+        widths.append(width)
+    assert not carried, f"a rowspan runs past the last row of the table: {carried}"
+    assert len(set(widths)) == 1, f"ragged table around {marker!r}: row widths {widths}"
+
+
+class TestDeliveryTermChargeRows:
+    """FOB hands the whole ocean leg to the buyer, so both charges leave the
+    sheet; CFR keeps the freight with the seller and drops the insurance alone.
+    Each sheet has to lose exactly the right row(s) AND stay rectangular - the
+    amount-in-words cell spans the whole ladder, so its rowspan has to be
+    counted from the rows that actually print."""
 
     def test_quotation_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -709,7 +815,8 @@ class TestFobChargeRows:
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
         assert "CERTIFICATION" in sheet          # the rest of the ladder stays
-        assert 'rowspan="5"' in sheet            # 7 charge rows - the 2 dropped
+        assert "CIF VALUE" in sheet and "FOB VALUE" in sheet
+        assert 'rowspan="6"' in sheet            # 8 ladder rows - the 2 dropped
 
     def test_proforma_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -719,8 +826,8 @@ class TestFobChargeRows:
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
         assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
-        assert "TOTAL INVOICE VALUE" in sheet
-        assert 'rowspan="3"' in sheet            # 5 charge rows - the 2 dropped
+        assert "CIF VALUE" in sheet and "INVOICE VALUE" in sheet and "FOB VALUE" in sheet
+        assert 'rowspan="6"' in sheet            # 8 ladder rows - the 2 dropped
 
     def test_export_invoice_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -732,8 +839,76 @@ class TestFobChargeRows:
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
         assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        assert "CIF Value" in sheet and "Invoice Value" in sheet
         assert "FOB Value" in sheet and "Other Charges" in sheet
-        assert 'rowspan="5"' in sheet            # the shortened money ladder
+        assert 'rowspan="6"' in sheet            # the shortened money ladder
+
+    # ---- CFR: the insurance row alone comes out ------------------------------
+    def test_quotation_sheet_drops_only_the_insurance_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": "CFR - BEIRA", "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "INSURANCE" not in sheet
+        assert "SEA FREIGHT" in sheet            # CFR = cost AND freight
+        assert 'rowspan="7"' in sheet            # 8 ladder rows - the 1 dropped
+        _table_is_rectangular(sheet, "CIF VALUE")
+
+    def test_proforma_sheet_drops_only_the_insurance_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
+                    "terms_of_delivery": "CFR BEIRA", "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "INSURANCE" not in sheet and "SEA FREIGHT" in sheet
+        assert 'rowspan="7"' in sheet
+        _table_is_rectangular(sheet, "CIF VALUE")
+
+    def test_export_invoice_sheet_drops_only_the_insurance_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = container.export_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
+                    "export_invoice_number": "1000000002", "tax_mode": "igst",
+                    "exchange_rate": "86.70", "nature_of_contract": "CFR - BEIRA",
+                    "sea_freight": "100", "insurance": "50"},
+            [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
+        sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "Insurance" not in sheet and "Sea Freight" in sheet
+        # 7 money rows: the Export Under cell spans them all, and the Net/Gross
+        # weight cells split the remaining 5 between them (2 + 3).
+        assert 'rowspan="7"' in sheet
+        _table_is_rectangular(sheet, "Sr No")
+
+    # ---- the structure survives the row coming out ---------------------------
+    @pytest.mark.parametrize("terms", ["CIF", "CFR - BEIRA", "FOB"])
+    def test_every_sheet_stays_rectangular_whatever_the_terms(self, admin_ctx, terms):
+        client, container, admin, company_id = admin_ctx
+        charges = {"sea_freight": "100", "insurance": "50", "certification": "20",
+                   "other_charges": "10", "discount_amount": "30"}
+        item = [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}]
+
+        quotation = container.quotation_service.create(
+            admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                    "shipping_terms": terms, **charges}, item)
+        _table_is_rectangular(
+            client.get(f"/quotations/{quotation.id}").get_data(as_text=True), "CIF VALUE")
+
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
+                    "terms_of_delivery": terms, **charges}, item)
+        _table_is_rectangular(
+            client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True), "CIF VALUE")
+
+        invoice = container.export_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
+                    "export_invoice_number": f"EXP/{terms[:3]}", "tax_mode": "igst",
+                    "exchange_rate": "86.70", "nature_of_contract": terms, **charges},
+            [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
+        _table_is_rectangular(
+            client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True), "Sr No")
 
     def test_non_fob_sheet_keeps_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -743,4 +918,4 @@ class TestFobChargeRows:
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "SEA FREIGHT" in sheet and "INSURANCE" in sheet
-        assert 'rowspan="7"' in sheet
+        assert 'rowspan="8"' in sheet            # the full ladder

@@ -172,12 +172,16 @@ class TestQuotation:
         q.items = [self._item(1)]  # ignored because precomputed is set
         assert q.subtotal_usd == 999
 
-    def test_invoice_value_adds_charges_and_subtracts_discount(self):
+    def test_the_ladder_runs_down_from_cif_to_fob(self):
+        # Prices are CIF, so the charges are already inside the line totals:
+        # the discount comes off to give the invoice value, and the charges
+        # come out of THAT to leave the FOB value.
         q = self._quotation(sea_freight=10, insurance=5, certification=2,
                             other_charges=3, discount_amount=4)
         q.items = [self._item(100)]
-        # 100 + 10 + 5 + 2 + 3 - 4
-        assert q.invoice_value_usd == 116
+        assert q.cif_value_usd == 100
+        assert q.invoice_value_usd == 96          # 100 - 4
+        assert q.fob_value_usd == 76              # 96 - 5 - 10 - 2 - 3
 
 
 # --------------------------------------------------------------------------
@@ -282,10 +286,14 @@ class TestProformaInvoice:
         return ProformaInvoice(**base)
 
     def test_invoice_value(self):
+        # Same CIF -> discount -> invoice value -> charges -> FOB ladder as the
+        # quotation, from the shared CifMoneyLadder mixin.
         pi = self._pi(sea_freight=10, discount_amount=5)
         pi.items = [ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=1,
                                         product_name="P", total_usd=100)]
-        assert pi.invoice_value_usd == 105
+        assert pi.cif_value_usd == 100
+        assert pi.invoice_value_usd == 95         # 100 - 5
+        assert pi.fob_value_usd == 85             # 95 - 10 sea freight
 
     def test_display_mode_defaults_to_index_when_null(self):
         row = self._make_row(display_mode=None)

@@ -220,9 +220,13 @@
     <colgroup><col style="width:65%"><col style="width:35%"></colgroup>
     <tr>
       <td rowspan="3" class="epl-left" style="font-weight:normal;">
+        {# Same three derived lines as the export invoice sheet's own Export
+           Under cell, read from the same places - the scheme text used to be
+           hard-coded RoDTEP wording here, which meant it silently disagreed
+           with whatever the invoice actually printed. #}
+        {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
         <span class="epl-lbl">Export Under</span><br>
-        WE INTEND TO CLAIM REWARDS UNDER REMISSION OF DUTIES AND TAXES ON EXPORTED PRODUCTS FROM INDIA
-        SCHEME (RoDTEP) &amp; DBK<br>
+        {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
         SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
         {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
       </td>

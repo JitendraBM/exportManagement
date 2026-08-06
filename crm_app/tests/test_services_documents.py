@@ -131,6 +131,16 @@ class TestQuotationCrud:
         assert reloaded.insurance == 0
         assert reloaded.invoice_value_usd == 20.0  # goods only
 
+    def test_cfr_shipping_terms_drop_only_the_insurance(self, container, seed):
+        # Under CFR the seller still pays the freight - only the cargo
+        # insurance moves to the buyer.
+        q = self._create(container, seed, shipping_terms="CFR BEIRA",
+                         sea_freight="100", insurance="50")
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.sea_freight == 100
+        assert reloaded.insurance == 0
+        assert reloaded.fob_value_usd == -80.0  # CIF 20 - 100 freight
+
     def test_non_fob_terms_keep_sea_freight_and_insurance(self, container, seed):
         q = self._create(container, seed, shipping_terms="CIF",
                          sea_freight="100", insurance="50")

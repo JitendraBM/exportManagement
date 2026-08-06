@@ -86,6 +86,15 @@ class TestExportCrud:
         assert got.sea_freight == 0
         assert got.insurance == 0
 
+    def test_cfr_nature_of_contract_drops_only_the_insurance(self, container, seed):
+        # CFR keeps the freight with the seller and moves only the cargo
+        # insurance to the buyer, so only that row leaves the printed sheet.
+        inv = make_export(container, seed, nature_of_contract="CFR - BEIRA",
+                          sea_freight="100", insurance="20")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.sea_freight == 100
+        assert got.insurance == 0
+
     def test_number_is_required(self, container, seed):
         with pytest.raises(ValidationError):
             make_export(container, seed, export_invoice_number="")

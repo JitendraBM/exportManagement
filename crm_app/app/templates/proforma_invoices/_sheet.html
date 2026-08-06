@@ -274,8 +274,21 @@
   <!-- Amount in words / charges -->
   {# FOB puts the ocean leg on the buyer, so SEA FREIGHT and INSURANCE are not
      charged and don't print - two fewer rows for Amount In Word to span. #}
-  {% set fob = invoice.terms_of_delivery | is_fob %}
-  {% set charge_rows = (6 if invoice.other_charges else 5) - (2 if fob else 0) + (1 if annex_items else 0) %}
+  {# The ladder is 8 rows (CIF VALUE / DISCOUNT / INVOICE VALUE / INSURANCE /
+     SEA FREIGHT / CERTIFICATION / OTHER CHARGES / FOB VALUE) and an annexure
+     adds its own line above it. Every ladder row prints even at zero: the
+     reader has to be able to follow the subtraction from CIF down to FOB
+     without a step going missing.
+
+     The delivery terms are the one thing that removes a row - FOB drops both
+     the freight and the insurance, CFR drops the insurance alone. Each row is
+     asked about separately and the Amount In Word rowspan is counted from the
+     answers, so removing one row can't leave the cell spanning a row that
+     isn't there. #}
+  {% set show_sea_freight = not invoice.terms_of_delivery | drops_sea_freight %}
+  {% set show_insurance = not invoice.terms_of_delivery | drops_insurance %}
+  {% set charge_rows = 6 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+                         + (1 if annex_items else 0) %}
   <table>
     <colgroup>
       <col style="width:8%"><col style="width:45%"><col style="width:35%"><col style="width:12%">
@@ -289,32 +302,42 @@
     </tr>
     <tr>
       {% endif %}
-      <td class="pi-charge-label">CERTIFICATION</td>
-      <td class="pi-val pi-right">{{ usd(invoice.certification) }}</td>
+      <td class="pi-charge-label">CIF VALUE</td>
+      <td class="pi-val pi-right">{{ usd(invoice.cif_value_usd) }}</td>
     </tr>
-    {% if not fob %}
-    <tr>
-      <td class="pi-charge-label">SEA FREIGHT</td>
-      <td class="pi-val pi-right">{{ usd(invoice.sea_freight) }}</td>
-    </tr>
-    <tr>
-      <td class="pi-charge-label">INSURANCE</td>
-      <td class="pi-val pi-right">{{ usd(invoice.insurance) }}</td>
-    </tr>
-    {% endif %}
-    {% if invoice.other_charges %}
-    <tr>
-      <td class="pi-charge-label">OTHER CHARGES</td>
-      <td class="pi-val pi-right">{{ usd(invoice.other_charges) }}</td>
-    </tr>
-    {% endif %}
     <tr>
       <td class="pi-charge-label">DISCOUNT</td>
       <td class="pi-val pi-right">{{ usd(invoice.discount_amount) }}</td>
     </tr>
     <tr>
-      <td class="pi-charge-label">TOTAL INVOICE VALUE</td>
+      <td class="pi-charge-label">INVOICE VALUE</td>
       <td class="pi-val pi-right">{{ usd(invoice.invoice_value_usd) }}</td>
+    </tr>
+    {# Subtracted out of the invoice value to reach FOB - the rate quoted is a
+       CIF rate, so these are already inside it. #}
+    {% if show_insurance %}
+    <tr>
+      <td class="pi-charge-label">INSURANCE</td>
+      <td class="pi-val pi-right">{{ usd(invoice.insurance) }}</td>
+    </tr>
+    {% endif %}
+    {% if show_sea_freight %}
+    <tr>
+      <td class="pi-charge-label">SEA FREIGHT</td>
+      <td class="pi-val pi-right">{{ usd(invoice.sea_freight) }}</td>
+    </tr>
+    {% endif %}
+    <tr>
+      <td class="pi-charge-label">CERTIFICATION</td>
+      <td class="pi-val pi-right">{{ usd(invoice.certification) }}</td>
+    </tr>
+    <tr>
+      <td class="pi-charge-label">OTHER CHARGES</td>
+      <td class="pi-val pi-right">{{ usd(invoice.other_charges) }}</td>
+    </tr>
+    <tr>
+      <td class="pi-charge-label">FOB VALUE</td>
+      <td class="pi-val pi-right">{{ usd(invoice.fob_value_usd) }}</td>
     </tr>
   </table>
 

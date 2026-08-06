@@ -110,17 +110,30 @@ class TestProformaCrud:
         pi = self._create(container, seed, sea_freight="10", discount_amount="5")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.subtotal_usd == 200.0
-        assert reloaded.invoice_value_usd == 205.0  # 200 + 10 - 5
+        assert reloaded.invoice_value_usd == 195.0  # CIF 200 - 5 discount
+        assert reloaded.fob_value_usd == 185.0      # 195 - 10 sea freight
 
     def test_fob_terms_drop_sea_freight_and_insurance(self, container, seed):
         # FOB puts the ocean leg on the buyer, so both charges are stored as
-        # zero and stay out of the invoice value even if the form posts them.
+        # zero even if the form posts them - which means neither is subtracted
+        # on the way down from the invoice value to the FOB value.
         pi = self._create(container, seed, terms_of_delivery="FOB MUNDRA",
                           sea_freight="10", insurance="20", other_charges="5")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 0
         assert reloaded.insurance == 0
-        assert reloaded.invoice_value_usd == 205.0  # 200 + 5 other charges
+        assert reloaded.invoice_value_usd == 200.0  # no discount posted
+        assert reloaded.fob_value_usd == 195.0      # 200 - 5 other charges only
+
+    def test_cfr_terms_drop_only_the_insurance(self, container, seed):
+        # CFR = cost AND FREIGHT: the seller keeps paying the freight, the
+        # buyer insures the cargo.
+        pi = self._create(container, seed, terms_of_delivery="CFR BEIRA",
+                          sea_freight="10", insurance="20")
+        reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
+        assert reloaded.sea_freight == 10
+        assert reloaded.insurance == 0
+        assert reloaded.fob_value_usd == 190.0  # CIF 200 - 10 freight
 
     def test_create_records_a_version(self, container, seed):
         pi = self._create(container, seed)

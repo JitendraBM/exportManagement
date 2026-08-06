@@ -50,7 +50,7 @@ from app.repositories import (
     PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
 )
 from app.database import Database, SCHEMA_VERSION
-from app.utils import is_fob_terms
+from app.utils import drops_insurance, drops_sea_freight
 
 
 # ============================================================
@@ -1953,11 +1953,16 @@ class QuotationService:
         if not buyer_name:
             raise ValidationError("Buyer name is compulsory.")
         quotation_date = (fields.get("quotation_date") or "").strip() or date.today().isoformat()
-        # FOB hands the ocean leg to the buyer, so sea freight and insurance
-        # are not chargeable - the form hides both inputs, and anything that
-        # still reaches here (a stale form, an API post) is stored as zero.
+        # The delivery terms decide which charges are chargeable at all: FOB
+        # hands the whole ocean leg to the buyer (no freight, no insurance),
+        # CFR keeps the freight but leaves the buyer to insure the cargo. The
+        # form hides whichever inputs don't apply, and anything that still
+        # reaches here (a stale form, an API post) is stored as zero. The two
+        # questions are asked separately so a term can drop one charge without
+        # touching the other.
         shipping_terms = (fields.get("shipping_terms") or "").strip() or None
-        fob = is_fob_terms(shipping_terms)
+        no_sea_freight = drops_sea_freight(shipping_terms)
+        no_insurance = drops_insurance(shipping_terms)
 
         def _float(key, default=0):
             raw = fields.get(key)
@@ -2004,8 +2009,8 @@ class QuotationService:
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             price_validity_days=_int("price_validity_days", 30),
             remarks=(fields.get("remarks") or "").strip() or None,
-            sea_freight=0 if fob else _float("sea_freight", 0),
-            insurance=0 if fob else _float("insurance", 0),
+            sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
+            insurance=0 if no_insurance else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
@@ -2262,9 +2267,11 @@ class ProformaInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
-        # See the quotation builder: FOB drops sea freight and insurance.
+        # See the quotation builder: FOB drops both charges, CFR drops the
+        # insurance only.
         terms_of_delivery = (fields.get("terms_of_delivery") or "").strip() or None
-        fob = is_fob_terms(terms_of_delivery)
+        no_sea_freight = drops_sea_freight(terms_of_delivery)
+        no_insurance = drops_insurance(terms_of_delivery)
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -2313,8 +2320,8 @@ class ProformaInvoiceService:
             terms_of_delivery=terms_of_delivery,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
-            sea_freight=0 if fob else _float("sea_freight", 0),
-            insurance=0 if fob else _float("insurance", 0),
+            sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
+            insurance=0 if no_insurance else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
@@ -3207,9 +3214,12 @@ class ExportInvoiceService:
                             seen_pd.add(key)
                             purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None})
 
-        # "Export under" default text: the company's government schemes, the
-        # same text the Annexure's section 13 defaults to. Editable afterwards.
-        # The LUT number is printed alongside it by the sheet, not baked in.
+        # The government-scheme line of the Export Under block: the company's
+        # government schemes, the same text the Annexure's section 13 defaults
+        # to. Editable afterwards, and blanking it just means "use whatever
+        # Our Company says today". The rest of that block - the SUPPLY MEANT
+        # FOR EXPORT heading, the EPCG licence, the LUT number - is derived by
+        # the sheets from tax_mode/epcg_number/the company, never baked in.
         company = self.company_repo.get(company_id)
         export_under = (company.government_schemes if company else None) or None
 
@@ -3327,9 +3337,11 @@ class ExportInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
-        # See the quotation builder: FOB drops sea freight and insurance.
+        # See the quotation builder: FOB drops both charges, CFR drops the
+        # insurance only.
         nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
-        fob = is_fob_terms(nature_of_contract)
+        no_sea_freight = drops_sea_freight(nature_of_contract)
+        no_insurance = drops_insurance(nature_of_contract)
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -3384,8 +3396,8 @@ class ExportInvoiceService:
             epcg_date=(fields.get("epcg_date") or "").strip() or None,
             loading_type=loading_type, tax_mode=tax_mode,
             exchange_rate=_float("exchange_rate", 0),
-            sea_freight=0 if fob else _float("sea_freight", 0),
-            insurance=0 if fob else _float("insurance", 0),
+            sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
+            insurance=0 if no_insurance else _float("insurance", 0),
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),

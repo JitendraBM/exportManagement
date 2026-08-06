@@ -131,16 +131,43 @@ def inr_in_words(amount, currency_label: str = "INR") -> str:
     return f"{words} {currency_label} ONLY"
 
 
+def _starts_with_term(value, incoterm: str) -> bool:
+    """Delivery-terms options are hand-maintained in Administration ->
+    Miscellaneous, so they arrive as free text ('FOB', 'fob', 'FOB Mundra',
+    'CFR - BEIRA') and are matched on the leading word rather than by
+    equality."""
+    text = str(value or "").strip().upper()
+    return text == incoterm or text.startswith(incoterm + " ") or text.startswith(incoterm + "-")
+
+
 def is_fob_terms(value) -> bool:
     """True when a document's nature of contract / terms of delivery is FOB.
 
-    Under FOB the buyer carries the ocean leg, so sea freight and insurance
-    are never part of the price - the two charges are dropped from the form
-    and from the printed sheet. Options are hand-maintained in Administration
-    -> Miscellaneous, so they arrive as free text ('FOB', 'fob', 'FOB Mundra')
-    and are matched on the leading word rather than by equality."""
-    text = str(value or "").strip().upper()
-    return text == "FOB" or text.startswith("FOB ") or text.startswith("FOB-")
+    Under FOB the buyer carries the whole ocean leg, so neither sea freight nor
+    insurance is part of the price."""
+    return _starts_with_term(value, "FOB")
+
+
+def is_cfr_terms(value) -> bool:
+    """True when the terms are CFR (Cost and Freight).
+
+    Under CFR the seller still pays the freight but the buyer insures the
+    cargo - so CFR drops the insurance and ONLY the insurance."""
+    return _starts_with_term(value, "CFR")
+
+
+# Which charges a delivery term takes off the price. Both the services (which
+# store the dropped charges as zero) and the printed sheets (which leave the
+# row out) ask these two questions rather than testing for an incoterm by name,
+# so a term can never be handled one way on the form and another on the sheet.
+def drops_sea_freight(value) -> bool:
+    """FOB alone hands the freight to the buyer; CFR keeps paying it."""
+    return is_fob_terms(value)
+
+
+def drops_insurance(value) -> bool:
+    """FOB and CFR both leave the cargo insurance to the buyer."""
+    return is_fob_terms(value) or is_cfr_terms(value)
 
 
 def register_template_helpers(app):
@@ -148,9 +175,21 @@ def register_template_helpers(app):
 
     @app.template_filter("is_fob")
     def is_fob_filter(value):
-        """`{% if invoice.nature_of_contract | is_fob %}` - hides the sea
-        freight / insurance rows on FOB documents."""
+        """`{% if invoice.nature_of_contract | is_fob %}` - true for FOB terms."""
         return is_fob_terms(value)
+
+    @app.template_filter("drops_sea_freight")
+    def drops_sea_freight_filter(value):
+        """`{% if not terms | drops_sea_freight %}` - hides the SEA FREIGHT row
+        (FOB only)."""
+        return drops_sea_freight(value)
+
+    @app.template_filter("drops_insurance")
+    def drops_insurance_filter(value):
+        """`{% if not terms | drops_insurance %}` - hides the INSURANCE row
+        (FOB and CFR). Asked separately from the freight so a term can drop one
+        row without disturbing the other or the rows around them."""
+        return drops_insurance(value)
 
     @app.template_filter("amount_in_words")
     def amount_in_words_filter(value, currency=None):

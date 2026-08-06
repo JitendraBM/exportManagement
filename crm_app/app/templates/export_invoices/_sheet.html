@@ -57,7 +57,7 @@
   .ei-items tbody td { vertical-align: top; }
   .ei-goods { font-weight: bold; }
   .ei-tot td { font-weight: bold; }
-  /* Total Invoice Value - the one figure the reader looks for, so it gets a
+  /* Invoice Value - the one figure the reader looks for, so it gets a
      shaded band and heavier rules to lift it out of the charges ladder. The
      rules are on the money columns only; the Export Under / weight cells
      beside it are rowspanned and must not be cut across. */
@@ -261,29 +261,32 @@
          The money side drives the row count (it's the longest), so it's built
          as a list here and the left-hand cells rowspan down to meet it.
 
-         FOB = goods value with freight/insurance/charges stripped back out,
-         i.e. the items subtotal. NOT invoice.fob_value - that property is an
-         alias for invoice_value_usd, so it would print the grand total twice.
-
-         Certification isn't on the reference sheet, which has no such charge -
-         print it only when it carries money, so a typical invoice matches the
-         reference exactly and a charged one never hides the amount. #}
+         The ladder is the app-wide one (see CifMoneyLadder in app/models.py):
+         the rate is a CIF rate, so it runs DOWNWARDS - CIF less the discount
+         is what the buyer pays, and stripping the carriage/handling charges
+         back out of that leaves the FOB value customs works from. Every step
+         prints even at zero, so the subtraction can be followed all the way
+         down. #}
       {% set money = [] %}
-      {% set _ = money.append(('CIF Invoice Value', invoice.invoice_value_usd, false)) %}
+      {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false)) %}
       {% set _ = money.append(('Discount', invoice.discount_amount, false)) %}
-      {% set _ = money.append(('Total Invoice Value', invoice.invoice_value_usd - invoice.discount_amount, true)) %}
-      {% if invoice.certification %}
-      {% set _ = money.append(('Certification', invoice.certification, false)) %}
-      {% endif %}
-      {# FOB puts the ocean leg on the buyer: neither charge applies, so both
-         lines drop out. The money ladder drives the whole band's row count, so
-         the left cell's rowspan and the Net/Gross split below follow along. #}
-      {% if not invoice.nature_of_contract | is_fob %}
+      {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true)) %}
+      {# The delivery terms decide which of these two apply: FOB puts the whole
+         ocean leg on the buyer so both drop out, CFR keeps the freight but
+         leaves the buyer to insure the cargo so only the insurance goes. Each
+         is appended on its own question. The money ladder drives the whole
+         band's row count, so the left cell's rowspan and the Net/Gross split
+         below re-derive themselves from whatever ends up in this list - a
+         dropped row can't knock the band out of alignment. #}
+      {% if not invoice.nature_of_contract | drops_insurance %}
       {% set _ = money.append(('Insurance', invoice.insurance, false)) %}
+      {% endif %}
+      {% if not invoice.nature_of_contract | drops_sea_freight %}
       {% set _ = money.append(('Sea Freight', invoice.sea_freight, false)) %}
       {% endif %}
+      {% set _ = money.append(('Certification', invoice.certification, false)) %}
       {% set _ = money.append(('Other Charges', invoice.other_charges, false)) %}
-      {% set _ = money.append(('FOB Value', invoice.subtotal_usd, false)) %}
+      {% set _ = money.append(('FOB Value', invoice.fob_value_usd, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          are split evenly between Net and Gross Weight so the two read as one
@@ -297,13 +300,25 @@
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
-          {# Only the (editable) export-under text and the company's current LUT
-             number belong in this cell - nothing else. #}
+          {# Four stacked lines, every one of them derived - see the same block
+             on the export packing list sheet, which prints the identical
+             structure so the two sheets can't disagree:
+               1. the government scheme (this invoice's own export-under text
+                  when it was edited, otherwise the company's current one),
+               2. the sheet's own SUPPLY MEANT FOR EXPORT heading, repeated
+                  here because the cell is what customs reads,
+               3. the EPCG licence, when the chain's purchase invoices carried
+                  one or it was typed straight onto this invoice,
+               4. the company's current LUT number.
+             Nothing else belongs in this cell. #}
           {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
           {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else {}) or {}).get('lut_number') %}
+          {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
           <span class="ei-lbl">Export Under</span><br>
-          {% if invoice.export_under %}{{ invoice.export_under|upper|replace('\n', '<br>')|safe }}{% endif %}
-          {% if lut_no %}{% if invoice.export_under %}<br>{% endif %}LUT NO : {{ lut_no }}{% endif %}
+          {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
+          SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
+          {% if invoice.epcg_number %}<br>EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
+          {% if lut_no %}<br>LUT NO : {{ lut_no }}{% endif %}
         </td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
