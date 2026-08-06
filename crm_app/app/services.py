@@ -3388,8 +3388,7 @@ class ExportInvoiceService:
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight",
-                                "excise_seal_no", "plts", "boxes")}
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight")}
             values["gross_weight"] = None
             values["net_weight"] = None
             if any(values.values()):

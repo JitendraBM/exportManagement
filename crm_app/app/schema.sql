@@ -887,10 +887,7 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     vehicle_no            TEXT,
     tare_weight           TEXT,
     gross_weight          TEXT,
-    net_weight            TEXT,
-    excise_seal_no        TEXT,
-    plts                  TEXT,
-    boxes                 TEXT
+    net_weight            TEXT
 );
 
 -- Purchase Details: supplier GSTIN + invoice-no rows imported from the

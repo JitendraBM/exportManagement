@@ -103,11 +103,7 @@ def _extract_container_details(form) -> list:
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
     tares = form.getlist("cd_tare_weight[]")
-    excise_seals = form.getlist("cd_excise_seal_no[]")
-    plts = form.getlist("cd_plts[]")
-    boxes = form.getlist("cd_boxes[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares),
-            len(excise_seals), len(plts), len(boxes))
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares))
     rows = []
     for i in range(n):
         rows.append({
@@ -116,9 +112,6 @@ def _extract_container_details(form) -> list:
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
             "tare_weight": tares[i] if i < len(tares) else "",
-            "excise_seal_no": excise_seals[i] if i < len(excise_seals) else "",
-            "plts": plts[i] if i < len(plts) else "",
-            "boxes": boxes[i] if i < len(boxes) else "",
         })
     return rows
 

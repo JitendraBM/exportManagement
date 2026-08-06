@@ -396,14 +396,17 @@ class TestExportChildLists:
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.purchase_details[0]["supplier_invoice_no"] == "GSTT/4987"
 
-    def test_11b_excise_seal_plts_boxes_round_trip(self, container, seed):
+    def test_11b_row_round_trip_without_dropped_fields(self, container, seed):
+        # excise_seal_no/plts/boxes were dropped in v37 - anything still
+        # sending them is ignored rather than stored.
         inv = make_export(container, seed, container_details_list=[
-            {"container_no": "BLJU2253726", "excise_seal_no": "WIND02432727", "plts": "24", "boxes": "1919"}])
+            {"container_no": "BLJU2253726", "tare_weight": "3800",
+             "excise_seal_no": "WIND02432727", "plts": "24", "boxes": "1919"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         cd = got.container_details[0]
-        assert cd["excise_seal_no"] == "WIND02432727"
-        assert cd["plts"] == "24"
-        assert cd["boxes"] == "1919"
+        assert cd["container_no"] == "BLJU2253726"
+        assert cd["tare_weight"] == "3800"
+        assert not {"excise_seal_no", "plts", "boxes"} & set(cd)
 
     def test_booking_no_round_trip(self, container, seed):
         inv = make_export(container, seed, booking_no="BKG/12345")
