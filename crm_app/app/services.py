@@ -29,7 +29,7 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, Permit, MiscCurrency, MiscNatureOfContract, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Transporter, Permit, MiscCurrency, MiscNatureOfContract, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.repositories import (
     TenantRepository, UserRepositoryBase, LeadRepositoryBase, PartyRepositoryBase, SupplierRepositoryBase,
+    TransporterRepositoryBase,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
@@ -826,6 +827,83 @@ class SupplierService:
                 })
         rows.sort(key=lambda r: r["date"], reverse=True)
         return rows
+
+
+# ============================================================
+# TRANSPORTER SERVICE
+# ============================================================
+class TransporterService:
+    """The haulier directory. The one party type with no lead behind it and
+    no status pipeline (see models.Transporter), so this service is a plain
+    company-scoped CRUD: reads for anyone signed in, writes admin-only, in
+    line with how Buyer/Supplier/Exporter gate their own edits."""
+
+    def __init__(self, transporter_repo: TransporterRepositoryBase):
+        self.transporter_repo = transporter_repo
+
+    # ---- reads --------------------------------------------------
+    def get(self, transporter_id: int, company_id: int) -> Transporter:
+        transporter = self.transporter_repo.get_by_id(transporter_id)
+        if not transporter or transporter.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's record exists.
+            raise NotFoundError(f"Transporter #{transporter_id} not found.")
+        return transporter
+
+    def list_all(self, company_id: int) -> List[Transporter]:
+        return self.transporter_repo.list_all(company_id)
+
+    # ---- validation --------------------------------------------------
+    @staticmethod
+    def _clean_contacts(contacts: list) -> list:
+        """Drops the blank rows the repeatable form always submits, and makes
+        sure exactly one of the survivors is primary (the first one, if the
+        form marked none)."""
+        valid = [c for c in contacts if (c.get("name") or "").strip()]
+        for c in valid:
+            c["name"] = c["name"].strip()
+        if valid and not any(c.get("is_primary") for c in valid):
+            valid[0]["is_primary"] = True
+        return valid
+
+    @staticmethod
+    def _clean_fields(fields: dict) -> dict:
+        name = (fields.get("name") or "").strip()
+        if not name:
+            raise ValidationError("Transporter name is compulsory.")
+        return {
+            "name": name,
+            "address": (fields.get("address") or "").strip() or None,
+            "gstin_transporter_no": (fields.get("gstin_transporter_no") or "").strip() or None,
+            "pan_no": (fields.get("pan_no") or "").strip() or None,
+            "cin_llp_no": (fields.get("cin_llp_no") or "").strip() or None,
+            "email": (fields.get("email") or "").strip() or None,
+        }
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, contacts: list) -> Transporter:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can add a transporter.")
+        clean = self._clean_fields(fields)
+        transporter = self.transporter_repo.create(Transporter(
+            id=None, company_id=current_user.company_id, created_by=current_user.id, **clean,
+        ))
+        self.transporter_repo.replace_contacts(transporter.id, self._clean_contacts(contacts))
+        return self.get(transporter.id, current_user.company_id)
+
+    def update(self, transporter_id: int, current_user: User, fields: dict, contacts: list) -> Transporter:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can edit a transporter.")
+        self.get(transporter_id, current_user.company_id)  # 404s if missing/another company's
+        self.transporter_repo.update(transporter_id, self._clean_fields(fields))
+        self.transporter_repo.replace_contacts(transporter_id, self._clean_contacts(contacts))
+        return self.get(transporter_id, current_user.company_id)
+
+    def delete(self, transporter_id: int, current_user: User) -> Transporter:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can delete a transporter.")
+        transporter = self.get(transporter_id, current_user.company_id)
+        self.transporter_repo.delete(transporter_id)
+        return transporter
 
 
 def advance_client_status(party_repos: dict, lead_repo: LeadRepositoryBase,

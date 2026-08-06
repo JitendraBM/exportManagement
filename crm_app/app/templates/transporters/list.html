@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Transporters{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Accounts</div>
+    <h1>Transporters</h1>
+  </div>
+  {% if current_user.is_admin %}
+  <div class="topbar-actions">
+    <a href="{{ url_for('transporters.new_transporter') }}" class="btn btn-primary">+ New Transporter</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% if transporters %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>GSTIN / Transporter No.</th>
+          <th>PAN No.</th>
+          <th>Email</th>
+          <th>Primary contact</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for transporter in transporters %}
+        {% set primary = transporter.contacts|selectattr('is_primary')|first %}
+        <tr>
+          <td><strong>{{ transporter.name }}</strong></td>
+          <td class="text-sm mono">{{ transporter.gstin_transporter_no or '—' }}</td>
+          <td class="text-sm mono">{{ transporter.pan_no or '—' }}</td>
+          <td class="text-sm">{{ transporter.email or '—' }}</td>
+          <td class="text-sm">
+            {% if primary %}{{ primary.name }}{% if primary.phone %} · {{ primary.phone }}{% endif %}{% else %}—{% endif %}
+          </td>
+          <td><a href="{{ url_for('transporters.view_transporter', transporter_id=transporter.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No transporters yet.
+    {% if current_user.is_admin %}<a href="{{ url_for('transporters.new_transporter') }}">Add one →</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

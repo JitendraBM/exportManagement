@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ transporter.name }}{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Transporter #{{ transporter.id }}</div>
+    <h1>{{ transporter.name }}</h1>
+  </div>
+  {% if current_user.is_admin %}
+  <div class="topbar-actions">
+    <a href="{{ url_for('transporters.edit_transporter', transporter_id=transporter.id) }}" class="btn btn-ghost">Edit</a>
+    <form method="POST" action="{{ url_for('transporters.delete_transporter', transporter_id=transporter.id) }}" style="display:inline;"
+          onsubmit="return confirmDeleteWithPassword(this, 'Delete this transporter? Its contact details go with it. This cannot be undone.');">
+      <button type="submit" class="btn btn-danger">Delete transporter</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <div class="card-header"><h3>Registration details</h3></div>
+    <table class="ledger">
+      <tr><td class="text-soft" style="width:40%;">Address</td><td>{{ transporter.address or '—' }}</td></tr>
+      <tr><td class="text-soft">GSTIN / Transporter No.</td><td class="mono">{{ transporter.gstin_transporter_no or '—' }}</td></tr>
+      <tr><td class="text-soft">PAN Card No.</td><td class="mono">{{ transporter.pan_no or '—' }}</td></tr>
+      <tr><td class="text-soft">CIN/LLP No.</td><td class="mono">{{ transporter.cin_llp_no or '—' }}</td></tr>
+      <tr><td class="text-soft">Email</td><td>{{ transporter.email or '—' }}</td></tr>
+      <tr><td class="text-soft">Added</td><td>{{ transporter.created_at|friendly_date }}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Contact details</h3></div>
+    {% if transporter.contacts %}
+    <table class="ledger">
+      <thead><tr><th>Name</th><th>Phone</th><th>Email</th></tr></thead>
+      <tbody>
+        {% for c in transporter.contacts %}
+        <tr>
+          <td>{{ c.name }} {% if c.is_primary %}<span class="pill">Primary</span>{% endif %}</td>
+          <td class="text-sm">{{ c.phone or '—' }}</td>
+          <td class="text-sm">{{ c.email or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      No contact details yet.
+      {% if current_user.is_admin %}<a href="{{ url_for('transporters.edit_transporter', transporter_id=transporter.id) }}">Add some →</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

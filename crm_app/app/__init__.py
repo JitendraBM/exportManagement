@@ -19,7 +19,7 @@ from config import Config
 from app.database import Database
 from app.repositories import (
     TenantRepository, SqliteUserRepository, SqliteLeadRepository,
-    SqlitePartyRepository, SqliteSupplierRepository,
+    SqlitePartyRepository, SqliteSupplierRepository, SqliteTransporterRepository,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
@@ -27,7 +27,7 @@ from app.repositories import (
     PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
 )
 from app.services import (
-    AuthService, LeadService, PartyService, SupplierService, CurrencyService,
+    AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
     QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
     ExportInvoiceService, ExportPackingListService, PackingListService, BackupService,
@@ -53,6 +53,7 @@ class ServiceContainer:
         self.buyer_repo = SqlitePartyRepository(db, table="buyers", client_type="Buyer")
         self.exporter_repo = SqlitePartyRepository(db, table="exporters", client_type="Exporter")
         self.supplier_repo = SqliteSupplierRepository(db)
+        self.transporter_repo = SqliteTransporterRepository(db)
         self.comm_repo = CommunicationRepository(db)
         self.payment_repo = PaymentRepository(db)
         self.document_repo = DocumentRepository(db)
@@ -96,6 +97,9 @@ class ServiceContainer:
             self.payment_repo, self.document_repo, self.currency_service,
             self.purchase_order_repo,
         )
+        # No lead_repo/comm/payment/document wiring here: a transporter has
+        # none of those satellites (see models.Transporter).
+        self.transporter_service = TransporterService(self.transporter_repo)
         # Keyed by leads.converted_client_type - advance_client_status looks
         # up the right repo once it knows which type a lead converted to.
         self.party_repos = {"Buyer": self.buyer_repo, "Exporter": self.exporter_repo, "Supplier": self.supplier_repo}
@@ -239,6 +243,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.leads import leads_bp
     from app.routes.parties import build_party_blueprint
     from app.routes.suppliers import suppliers_bp
+    from app.routes.transporters import transporters_bp
     from app.routes.admin import admin_bp
     from app.routes.company import company_bp
     from app.routes.permits import permits_bp
@@ -266,6 +271,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(buyers_bp)
     app.register_blueprint(suppliers_bp)
     app.register_blueprint(exporters_bp)
+    app.register_blueprint(transporters_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(company_bp)
     app.register_blueprint(permits_bp)

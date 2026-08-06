@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if transporter else 'New' }} Transporter{% endblock %}
+
+{# Whatever was just typed wins over what is saved, so a bounced POST doesn't
+   throw the user's edits away. #}
+{% macro val(field) %}{% if form_data %}{{ form_data.get(field, '') }}{% elif transporter %}{{ transporter[field] or '' }}{% endif %}{% endmacro %}
+
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{% if transporter %}Transporter #{{ transporter.id }}{% else %}Accounts{% endif %}</div>
+    <h1>{{ 'Edit' if transporter else 'New' }} Transporter</h1>
+  </div>
+</div>
+
+<div class="card" style="max-width:760px;">
+  <form method="POST">
+    <fieldset>
+      <legend>Registration details</legend>
+      <div class="field">
+        <label for="name">Name<span class="required-mark">*</span></label>
+        <input type="text" id="name" name="name" required value="{{ val('name') }}">
+      </div>
+      <div class="field">
+        <label for="address">Address</label>
+        <textarea id="address" name="address" rows="3">{{ val('address') }}</textarea>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="gstin_transporter_no">GSTIN / Transporter No.</label>
+          <input type="text" id="gstin_transporter_no" name="gstin_transporter_no" value="{{ val('gstin_transporter_no') }}">
+        </div>
+        <div class="field">
+          <label for="pan_no">PAN Card No.</label>
+          <input type="text" id="pan_no" name="pan_no" value="{{ val('pan_no') }}">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="cin_llp_no">CIN/LLP No. <span class="text-soft text-sm">(optional)</span></label>
+          <input type="text" id="cin_llp_no" name="cin_llp_no" value="{{ val('cin_llp_no') }}">
+        </div>
+        <div class="field">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" value="{{ val('email') }}">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Contact details <span class="text-soft text-sm">— optional; a row with no name is ignored</span></legend>
+      <div id="contact-rows">
+        {% for c in contact_rows %}
+        <div class="repeatable-row">
+          <div class="field"><label>Name</label><input type="text" name="contact_name[]" value="{{ c.name }}"></div>
+          <div class="field"><label>Phone</label><input type="tel" name="contact_phone[]" value="{{ c.phone }}"></div>
+          <div class="field"><label>Email</label><input type="email" name="contact_email[]" value="{{ c.email }}"></div>
+          <div class="radio-wrap">
+            <input type="radio" name="primary_contact_index" value="{{ loop.index0 }}" id="primary-{{ loop.index0 }}"
+                   {{ 'checked' if c.is_primary }}>
+            <label for="primary-{{ loop.index0 }}">Primary</label>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addContactRow()">+ Add another contact</button>
+    </fieldset>
+
+    <button type="submit" class="btn btn-primary">{{ 'Save changes' if transporter else 'Add Transporter' }}</button>
+    <a href="{{ url_for('transporters.view_transporter', transporter_id=transporter.id) if transporter else url_for('transporters.list_transporters') }}"
+       class="btn btn-ghost">Cancel</a>
+  </form>
+</div>
+
+<script>
+  let contactRowCount = {{ contact_rows|length }};
+  function addContactRow() {
+    const wrap = document.getElementById('contact-rows');
+    const row = document.createElement('div');
+    row.className = 'repeatable-row';
+    row.innerHTML = `
+      <div class="field"><label>Name</label><input type="text" name="contact_name[]"></div>
+      <div class="field"><label>Phone</label><input type="tel" name="contact_phone[]"></div>
+      <div class="field"><label>Email</label><input type="email" name="contact_email[]"></div>
+      <div class="radio-wrap"><input type="radio" name="primary_contact_index" value="${contactRowCount}" id="primary-${contactRowCount}"><label for="primary-${contactRowCount}">Primary</label></div>`;
+    wrap.appendChild(row);
+    contactRowCount++;
+  }
+</script>
+
+{% endblock %}

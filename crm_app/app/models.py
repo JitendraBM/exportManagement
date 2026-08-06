@@ -315,6 +315,44 @@ class Supplier:
 
 
 @dataclass
+class Transporter:
+    """The haulier a consignment moves with. Unlike Buyer/Supplier/Exporter
+    this one never comes from a lead - nobody prospects a transporter, we
+    just keep the registration details that have to be quoted on the
+    paperwork - so there's no lead_id and no status pipeline, and none of
+    the payments/communications/documents satellites apply either. Contact
+    persons are the same name/phone/email shape a Party uses."""
+    id: Optional[int]
+    company_id: int
+    name: str
+    created_by: int
+    address: Optional[str] = None
+    gstin_transporter_no: Optional[str] = None  # GSTIN / Transporter No. - one and the same cell
+    pan_no: Optional[str] = None
+    cin_llp_no: Optional[str] = None  # optional: CIN (company) or LLPIN (LLP) registration number
+    email: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    contacts: List[ContactPerson] = field(default_factory=list)
+
+    @staticmethod
+    def from_row(row) -> "Transporter":
+        return Transporter(
+            id=row["id"],
+            company_id=row["company_id"],
+            name=row["name"],
+            created_by=row["created_by"],
+            address=row["address"],
+            gstin_transporter_no=row["gstin_transporter_no"],
+            pan_no=row["pan_no"],
+            cin_llp_no=row["cin_llp_no"],
+            email=row["email"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+@dataclass
 class PaymentEntry:
     id: Optional[int]
     parent_type: str  # 'buyer' | 'supplier' | 'exporter'

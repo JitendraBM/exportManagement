@@ -17,7 +17,7 @@ from typing import Optional, List
 
 from app.database import Database
 from app.models import (
-    Tenant, User, Lead, Party, Supplier, ContactPerson, Communication,
+    Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
     PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
@@ -593,6 +593,103 @@ class SqliteSupplierRepository(SupplierRepositoryBase):
                      b.get("swift_code") or None, b.get("branch") or None,
                      b.get("bank_address") or None, int(b["is_primary"])),
                 )
+
+
+# ============================================================
+# TRANSPORTER REPOSITORY (a standalone directory entry - no originating
+# lead, no status, no satellite tables; see models.Transporter.)
+# ============================================================
+class TransporterRepositoryBase(ABC):
+    @abstractmethod
+    def get_by_id(self, transporter_id: int) -> Optional[Transporter]: ...
+
+    @abstractmethod
+    def list_all(self, company_id: int) -> List[Transporter]: ...
+
+    @abstractmethod
+    def create(self, transporter: Transporter) -> Transporter: ...
+
+    @abstractmethod
+    def update(self, transporter_id: int, fields: dict) -> None: ...
+
+    @abstractmethod
+    def replace_contacts(self, transporter_id: int, contacts: list) -> None: ...
+
+    @abstractmethod
+    def delete(self, transporter_id: int) -> None: ...
+
+
+class SqliteTransporterRepository(TransporterRepositoryBase):
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, transporter_id: int) -> Optional[Transporter]:
+        row = self.db.query_one("SELECT * FROM transporters WHERE id = ?", (transporter_id,))
+        if not row:
+            return None
+        transporter = Transporter.from_row(row)
+        transporter.contacts = self._list_contacts(transporter_id)
+        return transporter
+
+    def list_all(self, company_id: int) -> List[Transporter]:
+        rows = self.db.query(
+            "SELECT * FROM transporters WHERE company_id = ? ORDER BY name COLLATE NOCASE", (company_id,)
+        )
+        transporters = [Transporter.from_row(r) for r in rows]
+        for transporter in transporters:
+            transporter.contacts = self._list_contacts(transporter.id)
+        return transporters
+
+    def _list_contacts(self, transporter_id: int) -> List[ContactPerson]:
+        rows = self.db.query(
+            "SELECT * FROM transporter_contacts WHERE transporter_id = ? ORDER BY is_primary DESC, id",
+            (transporter_id,),
+        )
+        return [ContactPerson.from_row(r) for r in rows]
+
+    def create(self, transporter: Transporter) -> Transporter:
+        new_id = self.db.execute(
+            """INSERT INTO transporters (company_id, name, address, gstin_transporter_no,
+                                          pan_no, cin_llp_no, email, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transporter.company_id, transporter.name, transporter.address,
+             transporter.gstin_transporter_no, transporter.pan_no, transporter.cin_llp_no,
+             transporter.email, transporter.created_by),
+        )
+        transporter.id = new_id
+        return transporter
+
+    def update(self, transporter_id: int, fields: dict) -> None:
+        self.db.execute(
+            """UPDATE transporters SET name = ?, address = ?, gstin_transporter_no = ?,
+                                       pan_no = ?, cin_llp_no = ?, email = ?,
+                                       updated_at = datetime('now')
+               WHERE id = ?""",
+            (fields["name"], fields.get("address"), fields.get("gstin_transporter_no"),
+             fields.get("pan_no"), fields.get("cin_llp_no"), fields.get("email"), transporter_id),
+        )
+
+    def replace_contacts(self, transporter_id: int, contacts: list) -> None:
+        """contacts: [{'name': str, 'phone': str, 'email': str, 'is_primary': bool}] -
+        the whole set is rewritten on every save, the same way a supplier's
+        contact rows are, so the form is the single source of truth."""
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM transporter_contacts WHERE transporter_id = ?", (transporter_id,))
+            for c in contacts:
+                conn.execute(
+                    """INSERT INTO transporter_contacts (transporter_id, name, phone, email, is_primary)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (transporter_id, c["name"], c.get("phone") or None,
+                     c.get("email") or None, int(c.get("is_primary", False))),
+                )
+
+    def delete(self, transporter_id: int) -> None:
+        """Its contact rows are ON DELETE CASCADE, but foreign keys are only
+        enforced when the pragma is on, so they're removed explicitly - and
+        in the same transaction, so no orphan set can be left behind."""
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM transporter_contacts WHERE transporter_id = ?", (transporter_id,))
+            conn.execute("DELETE FROM transporters WHERE id = ?", (transporter_id,))
 
 
 # ============================================================

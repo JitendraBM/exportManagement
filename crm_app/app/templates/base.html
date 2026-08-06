@@ -26,6 +26,7 @@
       <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('buyers.') }}" href="{{ url_for('buyers.list_parties') }}">🤝 Buyer</a>
       <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('suppliers.') }}" href="{{ url_for('suppliers.list_suppliers') }}">🏭 Supplier</a>
       <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('exporters.') }}" href="{{ url_for('exporters.list_parties') }}">🚢 Exporter</a>
+      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('transporters.') }}" href="{{ url_for('transporters.list_transporters') }}">🚚 Transporter</a>
       <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('products.') }}" href="{{ url_for('products.list_products') }}">📦 Products</a>
       <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('inventory.') }}" href="{{ url_for('inventory.list_inventory') }}">📊 Inventory</a>
 

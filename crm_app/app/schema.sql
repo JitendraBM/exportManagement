@@ -204,6 +204,42 @@ CREATE TABLE IF NOT EXISTS supplier_bank_details (
 );
 
 -- ============================================================
+-- TRANSPORTERS  (the fourth party type, and the only one that does NOT come
+-- from a lead: a transporter is never sold to, it's just the haulier whose
+-- registration details we have to quote on documents. So there's no lead_id,
+-- no status pipeline, and no payments/communications/documents feed - only a
+-- profile plus contact persons in the same shape buyers use. Its GSTIN cell
+-- doubles as the transporter number, which is what the field is called on the
+-- consignment paperwork.)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS transporters (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          INTEGER NOT NULL REFERENCES tenants(id),
+    name                TEXT NOT NULL,
+    address             TEXT,
+    gstin_transporter_no TEXT,      -- GSTIN / Transporter No. (one and the same cell)
+    pan_no              TEXT,
+    cin_llp_no          TEXT,       -- optional: CIN (company) or LLPIN (LLP) registration number
+    email               TEXT,
+    created_by          INTEGER NOT NULL REFERENCES users(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Same name/phone/email/primary shape as party_contacts, but its own table
+-- rather than a fourth parent_type on that one: party_contacts' CHECK is
+-- ('buyer', 'exporter') and widening it would mean rebuilding the table on
+-- every existing database for no gain.
+CREATE TABLE IF NOT EXISTS transporter_contacts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    transporter_id  INTEGER NOT NULL REFERENCES transporters(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    phone           TEXT,
+    email           TEXT,
+    is_primary      INTEGER NOT NULL DEFAULT 0
+);
+
+-- ============================================================
 -- COMMUNICATIONS
 -- One shared table for lead, buyer, supplier and exporter communications.
 -- `parent_type` + `parent_id` act as a polymorphic foreign key - this keeps
@@ -1059,6 +1095,8 @@ CREATE INDEX IF NOT EXISTS idx_party_contacts_parent ON party_contacts(parent_ty
 CREATE INDEX IF NOT EXISTS idx_buyers_company ON buyers(company_id);
 CREATE INDEX IF NOT EXISTS idx_exporters_company ON exporters(company_id);
 CREATE INDEX IF NOT EXISTS idx_suppliers_company ON suppliers(company_id);
+CREATE INDEX IF NOT EXISTS idx_transporters_company ON transporters(company_id);
+CREATE INDEX IF NOT EXISTS idx_transporter_contacts_transporter ON transporter_contacts(transporter_id);
 CREATE INDEX IF NOT EXISTS idx_categories_company ON categories(company_id);
 CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
 -- idx_products_category lives in database.py's _migrate: on a pre-v4 DB the
