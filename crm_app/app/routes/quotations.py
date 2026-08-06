@@ -239,6 +239,22 @@ def edit_quotation(quotation_id):
     )
 
 
+@quotations_bp.route("/<int:quotation_id>/duplicate", methods=["POST"])
+@login_required
+def duplicate_quotation(quotation_id):
+    """Second copy of an existing quotation, opened straight in the edit form -
+    a duplicate is almost always made in order to change something on it."""
+    try:
+        copy = current_app.container.quotation_service.duplicate(g.user, quotation_id)
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+        return redirect(url_for("quotations.view_quotation", quotation_id=quotation_id))
+    except NotFoundError:
+        abort(404)
+    flash(f"Quotation {copy.quotation_number} created as a copy.", "success")
+    return redirect(url_for("quotations.edit_quotation", quotation_id=copy.id))
+
+
 @quotations_bp.route("/<int:quotation_id>/delete", methods=["POST"])
 @login_required
 def delete_quotation(quotation_id):

@@ -30,6 +30,9 @@
       <a href="{{ url_for('packing_lists.new_packing_list', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">📦 Create packing list</a>
       {% endif %}
       <a href="{{ url_for('quotations.edit_quotation', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+      <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=quotation.id) }}" onsubmit="return confirm('Create a second copy of this quotation?');">
+        <button type="submit" class="btn btn-ghost btn-sm">⧉ Duplicate</button>
+      </form>
       {% if current_user.is_admin %}
       <a href="{{ url_for('quotations.quotation_versions', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Version history</a>
       {% endif %}

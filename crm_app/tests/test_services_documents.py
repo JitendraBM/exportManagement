@@ -11,6 +11,7 @@ These cover the parts most likely to break silently on a refactor:
 """
 
 import pytest
+from datetime import date
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 
@@ -171,6 +172,36 @@ class TestQuotationCrud:
                          "lead_id": lead.id},
             [{"product_name": "P", "quantity_value": "1", "price_usd": "1"}])
         assert container.lead_service.get(lead.id, seed.company_id).status == "in_client"
+
+    def test_duplicate_copies_header_and_items_under_a_new_number(self, container, seed):
+        q = container.quotation_service.create(
+            seed.admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+                         "buyer_address": "Addr", "sea_freight": "120"},
+            [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
+        copy = container.quotation_service.duplicate(seed.admin, q.id)
+        assert copy.id != q.id
+        assert copy.quotation_number != q.quotation_number
+        assert copy.quotation_date == date.today().isoformat()
+        reloaded = container.quotation_service.get(copy.id, seed.company_id)
+        assert reloaded.buyer_name == "Buyer"
+        assert reloaded.buyer_address == "Addr"
+        assert reloaded.sea_freight == 120
+        assert [(i.product_name, i.quantity_value, i.price_usd) for i in reloaded.items] == \
+               [(i.product_name, i.quantity_value, i.price_usd) for i in q.items]
+        # The two are independent: editing the copy leaves the original alone.
+        container.quotation_service.update(
+            seed.admin, copy.id, {"buyer_name": "Other", "quotation_date": "2026-01-01"},
+            [{"product_name": "P", "quantity_value": "1", "price_usd": "1"}])
+        assert container.quotation_service.get(q.id, seed.company_id).buyer_name == "Buyer"
+
+    def test_duplicate_records_a_version_for_the_copy(self, container, seed):
+        q = self._create(container, seed)
+        copy = container.quotation_service.duplicate(seed.admin, q.id)
+        assert len(container.document_version_service.list_for_document("quotation", copy.id)) == 1
+
+    def test_duplicate_of_a_missing_quotation_is_not_found(self, container, seed):
+        with pytest.raises(NotFoundError):
+            container.quotation_service.duplicate(seed.admin, 99999)
 
     def test_delete_quotation(self, container, seed):
         q = self._create(container, seed)

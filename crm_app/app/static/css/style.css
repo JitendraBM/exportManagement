@@ -469,6 +469,14 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .folder-name { display: block; font-weight: 600; font-size: .87rem; word-break: break-word; }
 .folder-tile-actions { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
 
+/* A form's submit button styled as the plain inline link next to it - used
+   where an action needs a POST (duplicate) but sits among <a> actions. */
+.btn-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--color-accent-deep); font-family: var(--font-body); font-weight: 500;
+}
+.btn-link:hover { text-decoration: underline; }
+
 .btn-link-danger {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--color-danger); font-family: var(--font-body); font-weight: 500;

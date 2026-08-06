@@ -2059,6 +2059,23 @@ class QuotationService:
         self._advance_lead_to_in_client(updated.lead_id)
         return updated
 
+    def duplicate(self, current_user: User, quotation_id: int) -> Quotation:
+        """Creates a second, independent quotation carrying over every header
+        field and product line of an existing one. Only the identity of the
+        document is fresh: a newly generated number and today's date (a copy
+        is being raised now, not back when the original was). Nothing links
+        the two afterwards - the copy is edited and deleted on its own."""
+        source = self.get(quotation_id, current_user.company_id)
+        copy = dataclasses.replace(
+            source, id=None, quotation_number="", quotation_date=date.today().isoformat(),
+            created_by=current_user.id, created_at=None, updated_at=None,
+            items=[dataclasses.replace(item, id=None, quotation_id=None) for item in source.items],
+        )
+        copy.quotation_number = self._generate_number(current_user.company_id, copy.quotation_date)
+        created = self.quotation_repo.create(copy)
+        self.version_service.record("quotation", created, current_user.id)
+        return created
+
     def delete(self, current_user: User, quotation_id: int) -> None:
         existing = self.get(quotation_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
