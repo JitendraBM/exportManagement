@@ -1948,6 +1948,43 @@ class QuotationService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
+    def _apply_fob_uplift(self, quotation: Quotation) -> None:
+        """Turns FOB-typed prices into the CIF prices the document stores.
+
+        Every price this app prints is a CIF price (see CifMoneyLadder) - the
+        ocean leg and handling are already inside the per-unit rate. But a
+        quotation is often worked out the other way round: the goods have an
+        FOB price, and the freight/insurance/certification/other charges are
+        known only as one lump sum for the whole shipment. With `fob_pricing`
+        ticked, that lump is divided by the total ALT QTY of every line and the
+        resulting per-unit figure is added uniformly onto each line's price -
+        so a heavier line carries proportionally more of the charge, and the
+        buyer sees a single all-in rate per unit.
+
+        The discount is deliberately NOT part of the lump: it comes off above
+        the invoice value line, not between FOB and CIF.
+
+        The uplift is kept at full precision (only the line totals are rounded
+        to the cent) so that CIF - charges lands back exactly on the FOB total
+        that was typed - the FOB VALUE row is the figure the user reasoned in,
+        so it is the one that has to stay exact. `price_usd` stays the CIF
+        price throughout, which is why nothing downstream - the printed sheet,
+        the money ladder, the proforma-invoice prefill - needs a special case;
+        `fob_price_usd` only remembers what was typed so reopening the form
+        shows the same numbers back.
+        """
+        items = quotation.items or []
+        if not quotation.fob_pricing:
+            for item in items:
+                item.fob_price_usd = None
+            return
+        total_qty = sum(item.quantity_value for item in items)
+        uplift = (quotation.charges_total / total_qty) if total_qty else 0
+        for item in items:
+            item.fob_price_usd = item.price_usd
+            item.price_usd = item.price_usd + uplift
+            item.total_usd = round(item.quantity_value * item.price_usd, 2)
+
     def _build_header(self, current_user: User, fields: dict, items: List[QuotationItem]) -> Quotation:
         buyer_name = (fields.get("buyer_name") or "").strip()
         if not buyer_name:
@@ -2014,6 +2051,7 @@ class QuotationService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
+            fob_pricing=str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off"),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -2042,6 +2080,7 @@ class QuotationService:
     def create(self, current_user: User, fields: dict, raw_items: list) -> Quotation:
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
+        self._apply_fob_uplift(quotation)
         quotation.quotation_number = self._generate_number(current_user.company_id, quotation.quotation_date)
         created = self.quotation_repo.create(quotation)
         self.version_service.record("quotation", created, current_user.id)
@@ -2053,6 +2092,7 @@ class QuotationService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
+        self._apply_fob_uplift(quotation)
         self.quotation_repo.update(quotation_id, quotation)
         updated = self.get(quotation_id, current_user.company_id)
         self.version_service.record("quotation", updated, current_user.id)

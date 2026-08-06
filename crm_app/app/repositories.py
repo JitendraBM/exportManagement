@@ -1551,9 +1551,9 @@ class QuotationRepository:
                 container_details, shipping_mode, shipping_terms, payment_terms,
                 price_validity_days, remarks,
                 sea_freight, insurance, certification, other_charges,
-                discount_amount, bank_name, bank_account_number, bank_ifsc_code,
+                discount_amount, fob_pricing, bank_name, bank_account_number, bank_ifsc_code,
                 bank_swift_code, bank_branch, bank_address, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (quotation.company_id, quotation.quotation_number, quotation.quotation_date, quotation.lead_id,
              quotation.buyer_name, quotation.buyer_address, quotation.buyer_reference_no,
              quotation.port_of_loading, quotation.port_of_discharge, quotation.packing_details,
@@ -1561,7 +1561,7 @@ class QuotationRepository:
              quotation.payment_terms,
              quotation.price_validity_days, quotation.remarks,
              quotation.sea_freight, quotation.insurance, quotation.certification, quotation.other_charges,
-             quotation.discount_amount,
+             quotation.discount_amount, int(bool(quotation.fob_pricing)),
              quotation.bank_name, quotation.bank_account_number, quotation.bank_ifsc_code,
              quotation.bank_swift_code, quotation.bank_branch, quotation.bank_address,
              quotation.currency_code, quotation.currency_symbol,
@@ -1578,7 +1578,8 @@ class QuotationRepository:
                                       shipping_mode = ?, shipping_terms = ?, payment_terms = ?,
                                       price_validity_days = ?,
                                       remarks = ?, sea_freight = ?, insurance = ?, certification = ?,
-                                      other_charges = ?, discount_amount = ?, bank_name = ?, bank_account_number = ?,
+                                      other_charges = ?, discount_amount = ?, fob_pricing = ?,
+                                      bank_name = ?, bank_account_number = ?,
                                       bank_ifsc_code = ?, bank_swift_code = ?, bank_branch = ?, bank_address = ?,
                                       currency_code = ?, currency_symbol = ?,
                                       updated_at = datetime('now')
@@ -1589,7 +1590,8 @@ class QuotationRepository:
              quotation.shipping_mode, quotation.shipping_terms, quotation.payment_terms,
              quotation.price_validity_days,
              quotation.remarks, quotation.sea_freight, quotation.insurance, quotation.certification,
-             quotation.other_charges, quotation.discount_amount, quotation.bank_name,
+             quotation.other_charges, quotation.discount_amount, int(bool(quotation.fob_pricing)),
+             quotation.bank_name,
              quotation.bank_account_number, quotation.bank_ifsc_code, quotation.bank_swift_code,
              quotation.bank_branch, quotation.bank_address,
              quotation.currency_code, quotation.currency_symbol, quotation_id),
@@ -1603,11 +1605,12 @@ class QuotationRepository:
                 conn.execute(
                     """INSERT INTO quotation_items
                        (quotation_id, sr_no, product_id, product_name, dimension_mm, hsn_code,
-                        quantity_boxes, quantity_unit, pallets, quantity_value, unit, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, quantity_unit, pallets, quantity_value, unit, price_usd,
+                        fob_price_usd, total_usd)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (quotation_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
                      item.hsn_code, item.quantity_boxes, item.quantity_unit, item.pallets, item.quantity_value,
-                     item.unit, item.price_usd, item.total_usd),
+                     item.unit, item.price_usd, item.fob_price_usd, item.total_usd),
                 )
 
     def delete(self, quotation_id: int) -> None:

@@ -530,6 +530,11 @@ CREATE TABLE IF NOT EXISTS quotations (
     certification            REAL NOT NULL DEFAULT 0,
     other_charges            REAL NOT NULL DEFAULT 0,
     discount_amount         REAL NOT NULL DEFAULT 0,
+    -- 1 = the prices typed on the form are FOB prices, and the charges above
+    -- (discount excluded) are spread evenly over the total alt qty and added
+    -- back onto every line to reach the CIF price that gets printed. See
+    -- QuotationService._apply_fob_uplift.
+    fob_pricing             INTEGER NOT NULL DEFAULT 0,
     bank_name               TEXT,
     bank_account_number     TEXT,
     bank_ifsc_code          TEXT,
@@ -559,7 +564,8 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     pallets             REAL,      -- "Plts" column - same derived-from-boxes pattern as proforma_invoice_items.pallets
     quantity_value       REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
-    price_usd           REAL NOT NULL DEFAULT 0,
+    price_usd           REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
+    fob_price_usd       REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
     total_usd           REAL NOT NULL DEFAULT 0
 );
 

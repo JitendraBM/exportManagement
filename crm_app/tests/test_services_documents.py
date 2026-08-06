@@ -148,6 +148,59 @@ class TestQuotationCrud:
         reloaded = container.quotation_service.get(q.id, seed.company_id)
         assert (reloaded.sea_freight, reloaded.insurance) == (100, 50)
 
+    def test_fob_pricing_spreads_the_charges_over_every_line(self, container, seed):
+        # 300 of charges (the 40 discount is NOT part of the spread) over
+        # 10 + 20 = 30 total qty is 10 per unit added onto each typed price.
+        q = container.quotation_service.create(
+            seed.admin,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
+             "sea_freight": "100", "insurance": "50", "certification": "60",
+             "other_charges": "90", "discount_amount": "40", "fob_pricing": "1"},
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"},
+             {"product_name": "B", "quantity_value": "20", "price_usd": "5"}])
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.fob_pricing is True
+        assert [(i.fob_price_usd, i.price_usd, i.total_usd) for i in reloaded.items] == \
+               [(2.0, 12.0, 120.0), (5.0, 15.0, 300.0)]
+        # CIF less the charges lands back on the FOB total that was typed.
+        assert reloaded.cif_value_usd == 420.0
+        assert reloaded.fob_value_usd == pytest.approx(10 * 2 + 20 * 5 - 40)
+
+    def test_fob_pricing_keeps_the_fob_total_exact_when_it_does_not_divide(self, container, seed):
+        # 100 over 3 units is a recurring per-unit figure: it is carried at
+        # full precision so the FOB value stays exactly the typed goods total.
+        q = container.quotation_service.create(
+            seed.admin,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
+             "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "A", "quantity_value": "3", "price_usd": "7"}])
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.fob_value_usd == pytest.approx(21.0)
+
+    def test_without_fob_pricing_the_typed_price_is_the_cif_price(self, container, seed):
+        q = self._create(container, seed, shipping_terms="CIF", sea_freight="100")
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.fob_pricing is False
+        assert reloaded.items[0].price_usd == 2.0
+        assert reloaded.items[0].fob_price_usd is None
+        assert reloaded.cif_value_usd == 20.0
+
+    def test_turning_fob_pricing_off_reprices_back_to_what_is_typed(self, container, seed):
+        q = container.quotation_service.create(
+            seed.admin,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
+             "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
+        assert container.quotation_service.get(q.id, seed.company_id).items[0].price_usd == 12.0
+        container.quotation_service.update(
+            seed.admin, q.id,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
+             "sea_freight": "100"},
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.items[0].price_usd == 2.0
+        assert reloaded.items[0].fob_price_usd is None
+
     def test_create_records_a_version(self, container, seed):
         q = self._create(container, seed)
         versions = container.document_version_service.list_for_document("quotation", q.id)

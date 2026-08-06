@@ -776,6 +776,12 @@ class CifMoneyLadder:
         return self.cif_value_usd - self.discount_amount
 
     @property
+    def charges_total(self) -> float:
+        """The four charges that sit between FOB and CIF. The discount is NOT
+        one of them - it comes off ABOVE the invoice value line."""
+        return self.insurance + self.sea_freight + self.certification + self.other_charges
+
+    @property
     def fob_value_usd(self) -> float:
         """The invoice value with the carriage/handling charges stripped back
         out. Under FOB terms sea freight and insurance are already held at zero
@@ -801,6 +807,10 @@ class QuotationItem:
     unit: str = "SQM"
     price_usd: float = 0
     total_usd: float = 0
+    # Set only under fob_pricing (see Quotation.fob_pricing): the price as the
+    # user typed it, before the per-unit charge uplift that made price_usd.
+    # NULL on every line priced the normal (CIF-typed) way.
+    fob_price_usd: Optional[float] = None
 
     @staticmethod
     def from_row(row) -> "QuotationItem":
@@ -819,6 +829,7 @@ class QuotationItem:
             unit=row["unit"],
             price_usd=row["price_usd"],
             total_usd=row["total_usd"],
+            fob_price_usd=row["fob_price_usd"] if "fob_price_usd" in row.keys() else None,
         )
 
 
@@ -847,6 +858,11 @@ class Quotation(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
+    # When true the prices typed on the form are FOB prices: the four charges
+    # above (not the discount) are spread evenly over the total alt qty and
+    # added onto every line, so each item's price_usd still ends up being the
+    # CIF price the sheet prints. See QuotationService._apply_fob_uplift.
+    fob_pricing: bool = False
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -889,6 +905,7 @@ class Quotation(CifMoneyLadder):
             certification=row["certification"] if "certification" in row.keys() else 0,
             other_charges=row["other_charges"] if "other_charges" in row.keys() else 0,
             discount_amount=row["discount_amount"],
+            fob_pricing=bool(row["fob_pricing"]) if "fob_pricing" in row.keys() else False,
             bank_name=row["bank_name"],
             bank_account_number=row["bank_account_number"],
             bank_ifsc_code=row["bank_ifsc_code"],
