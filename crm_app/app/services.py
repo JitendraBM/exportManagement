@@ -1843,6 +1843,64 @@ class DocumentVersionService:
 
 
 # ============================================================
+# FOB-TYPED PRICING (shared by quotation / proforma / export invoice)
+# ============================================================
+def is_fob_pricing(fields: dict) -> bool:
+    """Reads the "Prices typed are FOB" checkbox off a posted form. An
+    unticked checkbox posts nothing at all, so anything falsy means off."""
+    return str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off")
+
+
+def apply_fob_uplift(document) -> None:
+    """Turns FOB-typed prices into the CIF prices the document stores.
+
+    Every price this app prints is a CIF price (see CifMoneyLadder) - the ocean
+    leg and handling are already inside the per-unit rate. But a document is
+    often worked out the other way round: the goods have an FOB price, and the
+    freight/insurance/certification/other charges are known only as one lump
+    sum for the whole shipment. With `fob_pricing` ticked, that lump is divided
+    by the total ALT QTY of every line and the resulting per-unit figure is
+    added uniformly onto each line's price - so a heavier line carries
+    proportionally more of the charge, and the buyer sees a single all-in rate
+    per unit.
+
+    The discount is deliberately NOT part of the lump: it comes off above the
+    invoice value line, not between FOB and CIF.
+
+    The uplifted price is rounded to the cent, because it is a price the buyer
+    reads off the sheet and multiplies out: every printed column has to agree.
+    Those rounded lines then can't add up to exactly (FOB total + charges), so
+    the remainder goes to `document.round_off` and prints as its own row just
+    above CIF VALUE - which leaves the FOB VALUE row exactly the goods total
+    that was typed, the figure the user actually reasoned in. `price_usd` stays
+    the CIF price throughout, which is why nothing downstream - the printed
+    sheets, the money ladder, the prefill from one document to the next - needs
+    a special case; `fob_price_usd` only remembers what was typed so reopening
+    the form shows the numbers back.
+
+    Written once for all three document types (they share CifMoneyLadder and
+    the same item shape) so their arithmetic can't drift apart. Mirrored by
+    recalcTotals() in each of the three forms, which previews the same figures.
+    """
+    items = document.items or []
+    document.round_off = 0
+    if not document.fob_pricing:
+        for item in items:
+            item.fob_price_usd = None
+        return
+    total_qty = sum(item.quantity_value for item in items)
+    uplift = (document.charges_total / total_qty) if total_qty else 0
+    fob_total = 0.0
+    for item in items:
+        item.fob_price_usd = item.price_usd
+        item.price_usd = round(item.price_usd + uplift, 2)
+        item.total_usd = round(item.quantity_value * item.price_usd, 2)
+        fob_total += item.quantity_value * item.fob_price_usd
+    document.round_off = round(
+        fob_total + document.charges_total - sum(item.total_usd for item in items), 2)
+
+
+# ============================================================
 # QUOTATION SERVICE
 # ============================================================
 class QuotationService:
@@ -1948,50 +2006,6 @@ class QuotationService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
-    def _apply_fob_uplift(self, quotation: Quotation) -> None:
-        """Turns FOB-typed prices into the CIF prices the document stores.
-
-        Every price this app prints is a CIF price (see CifMoneyLadder) - the
-        ocean leg and handling are already inside the per-unit rate. But a
-        quotation is often worked out the other way round: the goods have an
-        FOB price, and the freight/insurance/certification/other charges are
-        known only as one lump sum for the whole shipment. With `fob_pricing`
-        ticked, that lump is divided by the total ALT QTY of every line and the
-        resulting per-unit figure is added uniformly onto each line's price -
-        so a heavier line carries proportionally more of the charge, and the
-        buyer sees a single all-in rate per unit.
-
-        The discount is deliberately NOT part of the lump: it comes off above
-        the invoice value line, not between FOB and CIF.
-
-        The uplifted price is rounded to the cent, because it is a price the
-        buyer reads off the sheet and multiplies out: every printed column has
-        to agree. Those rounded lines then can't add up to exactly (FOB total +
-        charges), so the remainder goes to `quotation.round_off` and prints as
-        its own row just above CIF VALUE - which leaves the FOB VALUE row
-        exactly the goods total that was typed, the figure the user actually
-        reasoned in. `price_usd` stays the CIF price throughout, which is why
-        nothing downstream - the printed sheet, the money ladder, the
-        proforma-invoice prefill - needs a special case; `fob_price_usd` only
-        remembers what was typed so reopening the form shows the numbers back.
-        """
-        items = quotation.items or []
-        quotation.round_off = 0
-        if not quotation.fob_pricing:
-            for item in items:
-                item.fob_price_usd = None
-            return
-        total_qty = sum(item.quantity_value for item in items)
-        uplift = (quotation.charges_total / total_qty) if total_qty else 0
-        fob_total = 0.0
-        for item in items:
-            item.fob_price_usd = item.price_usd
-            item.price_usd = round(item.price_usd + uplift, 2)
-            item.total_usd = round(item.quantity_value * item.price_usd, 2)
-            fob_total += item.quantity_value * item.fob_price_usd
-        quotation.round_off = round(
-            fob_total + quotation.charges_total - sum(item.total_usd for item in items), 2)
-
     def _build_header(self, current_user: User, fields: dict, items: List[QuotationItem]) -> Quotation:
         buyer_name = (fields.get("buyer_name") or "").strip()
         if not buyer_name:
@@ -2058,7 +2072,7 @@ class QuotationService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            fob_pricing=str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off"),
+            fob_pricing=is_fob_pricing(fields),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -2087,7 +2101,7 @@ class QuotationService:
     def create(self, current_user: User, fields: dict, raw_items: list) -> Quotation:
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
-        self._apply_fob_uplift(quotation)
+        apply_fob_uplift(quotation)
         quotation.quotation_number = self._generate_number(current_user.company_id, quotation.quotation_date)
         created = self.quotation_repo.create(quotation)
         self.version_service.record("quotation", created, current_user.id)
@@ -2099,7 +2113,7 @@ class QuotationService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
-        self._apply_fob_uplift(quotation)
+        apply_fob_uplift(quotation)
         self.quotation_repo.update(quotation_id, quotation)
         updated = self.get(quotation_id, current_user.company_id)
         self.version_service.record("quotation", updated, current_user.id)
@@ -2389,6 +2403,7 @@ class ProformaInvoiceService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
+            fob_pricing=is_fob_pricing(fields),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -2405,6 +2420,7 @@ class ProformaInvoiceService:
     def create(self, current_user: User, fields: dict, raw_items: list) -> ProformaInvoice:
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
+        apply_fob_uplift(invoice)
         invoice.invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
         created = self.invoice_repo.create(invoice)
         self.version_service.record("proforma_invoice", created, current_user.id)
@@ -2417,6 +2433,7 @@ class ProformaInvoiceService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
+        apply_fob_uplift(invoice)
         self.invoice_repo.update(invoice_id, invoice)
         updated = self.get(invoice_id, current_user.company_id)
         self.version_service.record("proforma_invoice", updated, current_user.id)
@@ -3465,6 +3482,7 @@ class ExportInvoiceService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
+            fob_pricing=is_fob_pricing(fields),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -3617,6 +3635,7 @@ class ExportInvoiceService:
     def create(self, current_user: User, fields: dict, raw_items: list, pdf_file=None) -> ExportInvoice:
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
+        apply_fob_uplift(invoice)
         # Examination date defaults to the creation date, not a later edit.
         if not invoice.examination_date:
             invoice.examination_date = invoice.invoice_date
@@ -3636,6 +3655,7 @@ class ExportInvoiceService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
+        apply_fob_uplift(invoice)
 
         # gross_weight/net_weight aren't editable from this form - carry the
         # stored values forward by row position so editing anything else

@@ -113,6 +113,29 @@ class TestProformaCrud:
         assert reloaded.invoice_value_usd == 195.0  # CIF 200 - 5 discount
         assert reloaded.fob_value_usd == 185.0      # 195 - 10 sea freight
 
+    def test_fob_pricing_spreads_the_charges_and_books_a_round_off(self, container, seed):
+        # Same shared uplift the quotation uses (services.apply_fob_uplift):
+        # 100 of charges over 3 units is 33.333..., so the printed price
+        # rounds to 40.33 and the missing cent becomes the ROUND-OFF row.
+        pi = container.proforma_invoice_service.create(
+            seed.admin,
+            {"consignee_name": "Buyer Co", "invoice_date": "2026-02-01",
+             "terms_of_delivery": "CIF", "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "Tiles", "quantity_value": "3", "price_usd": "7"}])
+        reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
+        item = reloaded.items[0]
+        assert (item.fob_price_usd, item.price_usd, item.total_usd) == (7.0, 40.33, 120.99)
+        assert reloaded.round_off == 0.01
+        assert reloaded.cif_value_usd == pytest.approx(121.0)
+        assert reloaded.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+
+    def test_without_fob_pricing_the_proforma_prices_are_untouched(self, container, seed):
+        pi = self._create(container, seed, sea_freight="10")
+        reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
+        assert (reloaded.fob_pricing, reloaded.round_off) == (False, 0)
+        assert reloaded.items[0].price_usd == 2.0
+        assert reloaded.items[0].fob_price_usd is None
+
     def test_fob_terms_drop_sea_freight_and_insurance(self, container, seed):
         # FOB puts the ocean leg on the buyer, so both charges are stored as
         # zero even if the form posts them - which means neither is subtracted

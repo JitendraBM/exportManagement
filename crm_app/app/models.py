@@ -1483,6 +1483,7 @@ class ProformaInvoiceItem:
     unit: str = "SQM"
     price_usd: float = 0
     total_usd: float = 0
+    fob_price_usd: Optional[float] = None  # see QuotationItem.fob_price_usd
 
     @staticmethod
     def from_row(row) -> "ProformaInvoiceItem":
@@ -1502,6 +1503,7 @@ class ProformaInvoiceItem:
             unit=row["unit"],
             price_usd=row["price_usd"],
             total_usd=row["total_usd"],
+            fob_price_usd=row["fob_price_usd"] if "fob_price_usd" in row.keys() else None,
         )
 
 
@@ -1539,6 +1541,8 @@ class ProformaInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
+    fob_pricing: bool = False  # see Quotation.fob_pricing
+    round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -1592,6 +1596,8 @@ class ProformaInvoice(CifMoneyLadder):
             certification=row["certification"],
             other_charges=row["other_charges"],
             discount_amount=row["discount_amount"],
+            fob_pricing=bool(row["fob_pricing"]) if "fob_pricing" in row.keys() else False,
+            round_off=(row["round_off"] if "round_off" in row.keys() else 0) or 0,
             bank_name=row["bank_name"],
             bank_account_number=row["bank_account_number"],
             bank_ifsc_code=row["bank_ifsc_code"],
@@ -1673,6 +1679,7 @@ class ExportInvoiceItem:
     price_usd: float = 0
     total_usd: float = 0
     igst_percent: float = 0
+    fob_price_usd: Optional[float] = None  # see QuotationItem.fob_price_usd
 
     @property
     def tax_usd(self) -> float:
@@ -1697,6 +1704,7 @@ class ExportInvoiceItem:
             price_usd=row["price_usd"],
             total_usd=row["total_usd"],
             igst_percent=row["igst_percent"] if "igst_percent" in row.keys() else 0,
+            fob_price_usd=row["fob_price_usd"] if "fob_price_usd" in row.keys() else None,
         )
 
 
@@ -1748,6 +1756,8 @@ class ExportInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
+    fob_pricing: bool = False  # see Quotation.fob_pricing
+    round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -1830,6 +1840,8 @@ class ExportInvoice(CifMoneyLadder):
             certification=g("certification", 0) or 0,
             other_charges=g("other_charges", 0) or 0,
             discount_amount=g("discount_amount", 0) or 0,
+            fob_pricing=bool(g("fob_pricing", 0)),
+            round_off=g("round_off", 0) or 0,
             bank_name=g("bank_name"),
             bank_account_number=g("bank_account_number"),
             bank_ifsc_code=g("bank_ifsc_code"),

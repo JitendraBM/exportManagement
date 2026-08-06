@@ -136,7 +136,9 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price ({{ chosen_currency }})</th>
+            <th id="price-header">Price ({{ chosen_currency }})</th>
+            {# Only shown with "Prices typed are FOB" ticked - see applyFobPricing. #}
+            <th class="num js-cif-col" hidden>CIF price ({{ chosen_currency }})</th>
             <th class="num">Total ({{ chosen_currency }})</th>
             <th></th>
           </tr>
@@ -165,7 +167,14 @@
                 {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
               </select>
             </td>
-            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
+            {# Under FOB pricing the stored price_usd is the CIF price worked
+               out at save time - what the user typed is fob_price_usd, so
+               that is what has to come back into the input. A re-displayed
+               form row (a dict, after a validation error) carries the typed
+               figure in price_usd either way. #}
+            {% set typed_price = row.fob_price_usd if (data.fob_pricing and row.fob_price_usd) else row.price_usd %}
+            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ typed_price or '' }}"></td>
+            <td class="num js-cif-price js-cif-col" hidden>0.00</td>
             <td class="num js-total">0.00</td>
             <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
           </tr>
@@ -184,11 +193,27 @@
       <div class="field" style="max-width:160px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:160px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
+    {# The prices above are normally CIF prices - the charges are already
+       inside them. Ticking this says they were typed FOB instead, so the
+       charges (NOT the discount) get spread over the total Qty and added onto
+       every line to reach the CIF price the sheet prints. #}
+    <div class="field" style="margin-top:10px;">
+      <label class="flex gap-8" style="align-items:center;">
+        <input type="checkbox" id="fob_pricing" name="fob_pricing" value="1" {{ 'checked' if data.fob_pricing }}>
+        <span>Prices typed above are <strong>FOB</strong> — add the charges into them</span>
+      </label>
+      <div class="hint" id="fob-pricing-hint" hidden>
+        Sea freight + insurance + certification + other = <strong><span id="fob-charges-display">0.00</span></strong>,
+        spread over <span id="fob-qty-display">0.00</span> total Qty
+        = <strong><span id="fob-uplift-display">0.00</span></strong> added to every line's price.
+        The invoice prints the resulting CIF price; the discount is not part of the spread.
+      </div>
+    </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
       {# Same ladder the printed sheet uses: CIF - discount = invoice value,
          then the charges come back out of it to leave FOB. #}
-      <div class="text-sm"><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
+      <div class="text-sm"><span id="round-off-block" hidden><strong>Round-off:</strong> $ <span id="round-off-display">0.00</span> &nbsp;·&nbsp; </span><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
     </div>
   </div>
 
@@ -320,6 +345,7 @@
         </select>
       </td>
       <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required></td>
+      <td class="num js-cif-price js-cif-col" hidden>0.00</td>
       <td class="num js-total">0.00</td>
       <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>`;
     return tr;
@@ -331,20 +357,50 @@
     });
   }
 
+  const fobPricingEl = document.getElementById('fob_pricing');
+
   function recalcTotals() {
-    let subtotal = 0;
-    itemsBody.querySelectorAll('.item-row').forEach((tr) => {
-      const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
-      const price = parseFloat(tr.querySelector('.js-price').value) || 0;
-      const total = qty * price;
-      tr.querySelector('.js-total').textContent = total.toFixed(2);
-      subtotal += total;
-    });
+    const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
     const discount = parseFloat(document.getElementById('discount_amount').value) || 0;
     const seaFreight = parseFloat(document.getElementById('sea_freight').value) || 0;
     const insurance = parseFloat(document.getElementById('insurance').value) || 0;
     const certification = parseFloat(document.getElementById('certification').value) || 0;
     const otherCharges = parseFloat(document.getElementById('other_charges').value) || 0;
+
+    // With FOB pricing on, the charges (never the discount) are one lump for
+    // the whole shipment: divided by the total Qty they give a per-unit figure
+    // added uniformly onto every typed price to reach its CIF price. Mirrors
+    // apply_fob_uplift in app/services.py, which is what actually saves.
+    const charges = seaFreight + insurance + certification + otherCharges;
+    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
+    const uplift = fobPricingEl.checked && totalQty ? charges / totalQty : 0;
+    if (fobPricingEl.checked) {
+      document.getElementById('fob-charges-display').textContent = charges.toFixed(2);
+      document.getElementById('fob-qty-display').textContent = totalQty.toFixed(2);
+      document.getElementById('fob-uplift-display').textContent = uplift.toFixed(4);
+    }
+
+    // The uplifted price is rounded to the cent (it is a price the buyer
+    // multiplies out), and the lines are worked out from that rounded figure,
+    // so the goods total lands a cent or two off the FOB total + the charges.
+    // The gap prints as a ROUND-OFF row above CIF VALUE.
+    let goodsTotal = 0;
+    let fobTotal = 0;
+    rows.forEach((tr) => {
+      const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
+      const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
+      const price = Math.round((typed + uplift) * 100) / 100;
+      const total = Math.round(qty * price * 100) / 100;
+      tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
+      tr.querySelector('.js-total').textContent = total.toFixed(2);
+      goodsTotal += total;
+      fobTotal += qty * typed;
+    });
+    const roundOff = fobPricingEl.checked
+      ? Math.round((fobTotal + charges - goodsTotal) * 100) / 100 : 0;
+    document.getElementById('round-off-display').textContent = (roundOff >= 0 ? '+' : '') + roundOff.toFixed(2);
+    document.getElementById('round-off-block').hidden = !fobPricingEl.checked;
+    const subtotal = goodsTotal + roundOff;
     document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
     const invoiceValue = subtotal - discount;
     const fobValue = invoiceValue - insurance - seaFreight - certification - otherCharges;
@@ -443,6 +499,7 @@
     populatePalletOptions(tr, [], false);
     recalcRowPallets(tr);
     renumber();
+    applyFobPricing();  // the new row's CIF price cell follows the current mode
   });
 
   itemsBody.addEventListener('click', (e) => {
@@ -479,6 +536,21 @@
   ['discount_amount', 'sea_freight', 'insurance', 'certification', 'other_charges'].forEach((id) => {
     document.getElementById(id).addEventListener('input', recalcTotals);
   });
+
+  // ---- FOB-typed prices --------------------------------------------------
+  // Only the display changes here: the Price column is relabelled, the
+  // worked-out CIF price per line is shown beside it, and the spread is
+  // explained under the charges. What gets posted is still the typed price -
+  // the server does the uplift, so the two can't drift apart.
+  function applyFobPricing() {
+    const on = fobPricingEl.checked;
+    document.getElementById('price-header').textContent =
+      (on ? 'FOB price (' : 'Price (') + '{{ chosen_currency }})';
+    document.querySelectorAll('.js-cif-col').forEach((cell) => { cell.hidden = !on; });
+    document.getElementById('fob-pricing-hint').hidden = !on;
+    recalcTotals();
+  }
+  fobPricingEl.addEventListener('change', applyFobPricing);
 
   // ---- the delivery terms decide which charges apply --------------------------
   // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
@@ -661,7 +733,7 @@
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
-  recalcTotals();
+  applyFobPricing();  // ends in recalcTotals()
 })();
 </script>
 

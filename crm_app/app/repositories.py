@@ -1732,9 +1732,10 @@ class ProformaInvoiceRepository:
                 port_of_loading, port_of_discharge, final_destination, transhipment, partial_shipment,
                 variation_in_qty, delivery_period, container_details, terms_of_delivery, payment_terms,
                 remarks, sea_freight, insurance, certification, other_charges, discount_amount,
+                fob_pricing, round_off,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
                 bank_address, display_mode, status, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
@@ -1743,7 +1744,8 @@ class ProformaInvoiceRepository:
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
              invoice.delivery_period, invoice.container_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
-             invoice.certification, invoice.other_charges, invoice.discount_amount, invoice.bank_name,
+             invoice.certification, invoice.other_charges, invoice.discount_amount,
+             int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
              invoice.bank_account_number, invoice.bank_ifsc_code, invoice.bank_swift_code,
              invoice.bank_branch, invoice.bank_address, invoice.display_mode, invoice.status,
              invoice.currency_code, invoice.currency_symbol,
@@ -1766,7 +1768,8 @@ class ProformaInvoiceRepository:
                                              variation_in_qty = ?, delivery_period = ?, container_details = ?,
                                              terms_of_delivery = ?, payment_terms = ?, remarks = ?,
                                              sea_freight = ?, insurance = ?, certification = ?,
-                                             other_charges = ?, discount_amount = ?, bank_name = ?,
+                                             other_charges = ?, discount_amount = ?,
+                                             fob_pricing = ?, round_off = ?, bank_name = ?,
                                              bank_account_number = ?, bank_ifsc_code = ?, bank_swift_code = ?,
                                              bank_branch = ?, bank_address = ?, display_mode = ?,
                                              currency_code = ?, currency_symbol = ?,
@@ -1780,7 +1783,8 @@ class ProformaInvoiceRepository:
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
              invoice.delivery_period, invoice.container_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
-             invoice.certification, invoice.other_charges, invoice.discount_amount, invoice.bank_name,
+             invoice.certification, invoice.other_charges, invoice.discount_amount,
+             int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
              invoice.bank_account_number, invoice.bank_ifsc_code, invoice.bank_swift_code,
              invoice.bank_branch, invoice.bank_address, invoice.display_mode,
              invoice.currency_code, invoice.currency_symbol, invoice_id),
@@ -1814,11 +1818,12 @@ class ProformaInvoiceRepository:
                 conn.execute(
                     """INSERT INTO proforma_invoice_items
                        (proforma_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code,
-                        surface, pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        surface, pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd,
+                        fob_price_usd, total_usd)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
                      item.hsn_code, item.surface, item.pallets, item.quantity_boxes, item.quantity_unit,
-                     item.quantity_value, item.unit, item.price_usd, item.total_usd),
+                     item.quantity_value, item.unit, item.price_usd, item.fob_price_usd, item.total_usd),
                 )
 
     def delete(self, invoice_id: int) -> None:
@@ -1928,7 +1933,8 @@ class ExportInvoiceRepository:
                 notify_name, notify_address, country_of_origin, country_of_destination, place_of_receipt,
                 pre_carriage_by, port_of_loading, port_of_discharge, final_destination, nature_of_contract,
                 payment_terms, buyer_order_no, buyer_order_date, export_under, epcg_number, epcg_date, loading_type, tax_mode, exchange_rate,
-                sea_freight, insurance, certification, other_charges, discount_amount, fob_value, cnf_value,
+                sea_freight, insurance, certification, other_charges, discount_amount,
+                fob_pricing, round_off, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
@@ -1937,7 +1943,7 @@ class ExportInvoiceRepository:
                 total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
                 shipping_bill_date, currency_code, currency_symbol, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1951,7 +1957,7 @@ class ExportInvoiceRepository:
                    final_destination = ?, nature_of_contract = ?, payment_terms = ?, buyer_order_no = ?, buyer_order_date = ?, export_under = ?,
                    epcg_number = ?, epcg_date = ?, loading_type = ?, tax_mode = ?, exchange_rate = ?,
                    sea_freight = ?, insurance = ?, certification = ?, other_charges = ?, discount_amount = ?,
-                   fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
+                   fob_pricing = ?, round_off = ?, fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
                    bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
                    examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
@@ -1982,7 +1988,7 @@ class ExportInvoiceRepository:
             invoice.export_under, invoice.epcg_number,
             invoice.epcg_date, invoice.loading_type, invoice.tax_mode, invoice.exchange_rate, invoice.sea_freight,
             invoice.insurance, invoice.certification, invoice.other_charges, invoice.discount_amount,
-            invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
+            int(bool(invoice.fob_pricing)), invoice.round_off, invoice.fob_value, invoice.cnf_value, invoice.bank_name, invoice.bank_account_number,
             invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
             invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
@@ -2001,11 +2007,12 @@ class ExportInvoiceRepository:
                 conn.execute(
                     """INSERT INTO export_invoice_items
                        (export_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code, surface,
-                        pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd, total_usd, igst_percent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd,
+                        fob_price_usd, total_usd, igst_percent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm, item.hsn_code,
                      item.surface, item.pallets, item.quantity_boxes, item.quantity_unit, item.quantity_value,
-                     item.unit, item.price_usd, item.total_usd, item.igst_percent),
+                     item.unit, item.price_usd, item.fob_price_usd, item.total_usd, item.igst_percent),
                 )
 
             conn.execute("DELETE FROM export_invoice_proforma_links WHERE export_invoice_id = ?", (invoice_id,))

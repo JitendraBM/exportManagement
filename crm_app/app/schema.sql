@@ -612,6 +612,8 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     certification             REAL NOT NULL DEFAULT 0,
     other_charges             REAL NOT NULL DEFAULT 0,
     discount_amount          REAL NOT NULL DEFAULT 0,
+    fob_pricing              INTEGER NOT NULL DEFAULT 0,  -- prices typed are FOB; see quotations.fob_pricing
+    round_off                REAL NOT NULL DEFAULT 0,     -- see quotations.round_off
     bank_name                TEXT,
     bank_account_number      TEXT,
     bank_ifsc_code            TEXT,
@@ -644,7 +646,8 @@ CREATE TABLE IF NOT EXISTS proforma_invoice_items (
     quantity_unit         TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     quantity_value         REAL NOT NULL DEFAULT 0,
     unit                  TEXT NOT NULL DEFAULT 'SQM',
-    price_usd             REAL NOT NULL DEFAULT 0,
+    price_usd             REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
+    fob_price_usd         REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
     total_usd             REAL NOT NULL DEFAULT 0
 );
 
@@ -843,6 +846,8 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     certification               REAL NOT NULL DEFAULT 0,
     other_charges               REAL NOT NULL DEFAULT 0,
     discount_amount             REAL NOT NULL DEFAULT 0,
+    fob_pricing                 INTEGER NOT NULL DEFAULT 0,  -- prices typed are FOB; see quotations.fob_pricing
+    round_off                   REAL NOT NULL DEFAULT 0,     -- see quotations.round_off
     fob_value                   REAL NOT NULL DEFAULT 0,
     cnf_value                   REAL NOT NULL DEFAULT 0,
     bank_name                   TEXT,
@@ -894,7 +899,8 @@ CREATE TABLE IF NOT EXISTS export_invoice_items (
     quantity_unit         TEXT NOT NULL DEFAULT 'PCS',  -- snapshots products.quantity_unit, printed as small text after quantity_boxes
     quantity_value        REAL NOT NULL DEFAULT 0,
     unit                  TEXT NOT NULL DEFAULT 'SQM',
-    price_usd             REAL NOT NULL DEFAULT 0,
+    price_usd             REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
+    fob_price_usd         REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
     total_usd             REAL NOT NULL DEFAULT 0,
     igst_percent          REAL NOT NULL DEFAULT 0   -- snapshot of the product's IGST %, so tax is per-product and stable
 );

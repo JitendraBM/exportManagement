@@ -921,6 +921,31 @@ class TestDeliveryTermChargeRows:
         assert 'rowspan="9"' in sheet             # the 8 ladder rows + ROUND-OFF
         _table_is_rectangular(sheet, "CIF VALUE")
 
+    def test_fob_priced_proforma_sheet_prints_a_round_off_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
+                    "terms_of_delivery": "CIF", "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
+        sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "ROUND-OFF" in sheet and "+0.01" in sheet
+        assert 'rowspan="9"' in sheet             # the 8 ladder rows + ROUND-OFF
+        _table_is_rectangular(sheet, "CIF VALUE")
+
+    def test_fob_priced_export_invoice_sheet_prints_a_round_off_row(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = container.export_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
+                    "export_invoice_number": "1000000003", "tax_mode": "igst",
+                    "exchange_rate": "86.70", "nature_of_contract": "CIF",
+                    "sea_freight": "100", "fob_pricing": "1"},
+            [{"product_name": "P", "quantity_value": "3", "unit": "SQM", "price_usd": "7"}])
+        sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "Round-off" in sheet and "+0.01" in sheet
+        # 9 money rows: the full 8-row ladder plus Round-off.
+        assert 'rowspan="9"' in sheet
+        _table_is_rectangular(sheet, "Sr No")
+
     def test_plain_quotation_sheet_has_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         quotation = container.quotation_service.create(

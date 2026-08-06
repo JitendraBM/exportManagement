@@ -77,6 +77,28 @@ class TestExportCrud:
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
 
+    def test_fob_pricing_spreads_the_charges_and_books_a_round_off(self, container, seed):
+        # The shared uplift (services.apply_fob_uplift): 100 of charges over
+        # 3 units is 33.333..., so the printed price rounds to 40.33 and the
+        # missing cent becomes the ROUND-OFF row. Tax follows the CIF price.
+        inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
+                          fob_pricing="1",
+                          items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
+                                  "price_usd": "7", "igst_percent": "18"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        item = got.items[0]
+        assert (item.fob_price_usd, item.price_usd, item.total_usd) == (7.0, 40.33, 120.99)
+        assert got.round_off == 0.01
+        assert got.cif_value_usd == pytest.approx(121.0)
+        assert got.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+
+    def test_without_fob_pricing_the_export_prices_are_untouched(self, container, seed):
+        got = container.export_invoice_service.get(
+            make_export(container, seed, nature_of_contract="CIF", sea_freight="100").id, seed.company_id)
+        assert (got.fob_pricing, got.round_off) == (False, 0)
+        assert got.items[0].price_usd == 5.92
+        assert got.items[0].fob_price_usd is None
+
     def test_fob_nature_of_contract_drops_sea_freight_and_insurance(self, container, seed):
         # FOB puts the ocean leg on the buyer - neither charge is stored, and
         # the printed sheet drops both rows with them.

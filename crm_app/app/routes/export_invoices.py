@@ -36,6 +36,7 @@ _HEADER_FIELDS = [
     "buyer_order_no", "buyer_order_date",
     "export_under", "epcg_number", "epcg_date", "loading_type", "tax_mode", "exchange_rate",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",
+    "fob_pricing",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
     "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",

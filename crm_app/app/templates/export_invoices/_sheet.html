@@ -267,10 +267,18 @@
          back out of that leaves the FOB value customs works from. Every step
          prints even at zero, so the subtraction can be followed all the way
          down. #}
+      {# Each entry is (label, value, is_total, signed) - `signed` only for
+         ROUND-OFF, which has to read as an amount added or taken back out. #}
       {% set money = [] %}
-      {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false)) %}
-      {% set _ = money.append(('Discount', invoice.discount_amount, false)) %}
-      {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true)) %}
+      {# FOB-priced invoices carry one extra step: the lines are worked out
+         from per-unit prices rounded to the cent, and Round-off is the few
+         cents that leaves between them and the CIF value. #}
+      {% if invoice.fob_pricing %}
+      {% set _ = money.append(('Round-off', invoice.round_off, false, true)) %}
+      {% endif %}
+      {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false, false)) %}
+      {% set _ = money.append(('Discount', invoice.discount_amount, false, false)) %}
+      {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}
       {# The delivery terms decide which of these two apply: FOB puts the whole
          ocean leg on the buyer so both drop out, CFR keeps the freight but
          leaves the buyer to insure the cargo so only the insurance goes. Each
@@ -279,14 +287,14 @@
          below re-derive themselves from whatever ends up in this list - a
          dropped row can't knock the band out of alignment. #}
       {% if not invoice.nature_of_contract | drops_insurance %}
-      {% set _ = money.append(('Insurance', invoice.insurance, false)) %}
+      {% set _ = money.append(('Insurance', invoice.insurance, false, false)) %}
       {% endif %}
       {% if not invoice.nature_of_contract | drops_sea_freight %}
-      {% set _ = money.append(('Sea Freight', invoice.sea_freight, false)) %}
+      {% set _ = money.append(('Sea Freight', invoice.sea_freight, false, false)) %}
       {% endif %}
-      {% set _ = money.append(('Certification', invoice.certification, false)) %}
-      {% set _ = money.append(('Other Charges', invoice.other_charges, false)) %}
-      {% set _ = money.append(('FOB Value', invoice.fob_value_usd, false)) %}
+      {% set _ = money.append(('Certification', invoice.certification, false, false)) %}
+      {% set _ = money.append(('Other Charges', invoice.other_charges, false, false)) %}
+      {% set _ = money.append(('FOB Value', invoice.fob_value_usd, false, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          are split evenly between Net and Gross Weight so the two read as one
@@ -296,7 +304,7 @@
       {% set net_rows = weight_rows // 2 %}
       {% set gross_rows = weight_rows - net_rows %}
 
-      {% for label, value, is_total in money %}
+      {% for label, value, is_total, signed in money %}
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
@@ -335,7 +343,7 @@
         <td rowspan="{{ gross_rows }}" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         {% endif %}
         <td colspan="2" class="ei-r">{{ label }}</td>
-        <td class="ei-num">{{ usd(value) }}</td>
+        <td class="ei-num">{% if signed %}{{ invoice.currency_prefix }}&nbsp;{{ '{:+,.2f}'.format(value) }}{% else %}{{ usd(value) }}{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
