@@ -292,6 +292,32 @@ class TestDocumentRoutes:
         client.post(f"/quotations/{q.id}/delete", data={"delete_password": "wrong"}, follow_redirects=True)
         assert container.quotation_repo.get_by_id(q.id) is not None
 
+    def test_duplicate_quotation_via_post(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        q = self._quotation(container, admin)
+        client.post(f"/quotations/{q.id}/duplicate", data={"duplicate_password": "page-pass-1"},
+                    follow_redirects=True)
+        assert len(container.quotation_repo.list_all(company_id)) == 2
+
+    def test_duplicate_quotation_rejects_wrong_password(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        q = self._quotation(container, admin)
+        client.post(f"/quotations/{q.id}/duplicate", data={"duplicate_password": "wrong"},
+                    follow_redirects=True)
+        assert len(container.quotation_repo.list_all(company_id)) == 1
+
+    def test_employee_cannot_duplicate_a_quotation(self, employee_ctx):
+        client, container, emp, company_id = employee_ctx
+        q = self._quotation(container, emp)
+        resp = client.post(f"/quotations/{q.id}/duplicate", data={"duplicate_password": "emp-pass-1"})
+        assert resp.status_code == 403
+        assert len(container.quotation_repo.list_all(company_id)) == 1
+
+    def test_employee_does_not_see_the_duplicate_button(self, employee_ctx):
+        client, container, emp, _ = employee_ctx
+        q = self._quotation(container, emp)
+        assert f"/quotations/{q.id}/duplicate" not in client.get(f"/quotations/{q.id}").get_data(as_text=True)
+
     def test_purchase_order_form_has_no_nested_form(self, admin_ctx):
         """The admin-only "Add new supplier" panel once shipped as a <form>
         nested inside the purchase order's own form. Browsers drop the inner

@@ -42,9 +42,11 @@
             {% else %}
             <a href="{{ url_for('proforma_invoices.new_proforma_invoice', quotation_id=q.id) }}" class="text-sm">Generate PI →</a>
             {% endif %}
-            <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=q.id) }}" onsubmit="return confirm('Create a second copy of {{ q.quotation_number }}?');">
+            {% if current_user.is_admin %}
+            <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=q.id) }}" onsubmit="return confirmDuplicateWithPassword(this, 'Create a second copy of {{ q.quotation_number }}?');">
               <button type="submit" class="btn-link text-sm">Duplicate</button>
             </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

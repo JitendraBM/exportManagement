@@ -12,7 +12,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.services import pallet_alt_quantity
-from app.utils import login_required, admin_required, verify_delete_password
+from app.utils import login_required, admin_required, verify_delete_password, verify_own_password
 
 quotations_bp = Blueprint("quotations", __name__, url_prefix="/quotations")
 
@@ -241,10 +241,17 @@ def edit_quotation(quotation_id):
 
 
 @quotations_bp.route("/<int:quotation_id>/duplicate", methods=["POST"])
-@login_required
+@admin_required
 def duplicate_quotation(quotation_id):
     """Second copy of an existing quotation, opened straight in the edit form -
-    a duplicate is almost always made in order to change something on it."""
+    a duplicate is almost always made in order to change something on it.
+
+    Admin-only, behind the user's own password: a copy takes a fresh quotation
+    number off the day's sequence and looks identical to the original, so an
+    accidental one is easily mistaken for the real document."""
+    if not verify_own_password(g.user, request.form, "duplicate_password"):
+        flash("Incorrect password. Quotation not duplicated.", "error")
+        return redirect(url_for("quotations.view_quotation", quotation_id=quotation_id))
     try:
         copy = current_app.container.quotation_service.duplicate(g.user, quotation_id)
     except (ValidationError, PermissionDeniedError) as e:

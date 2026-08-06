@@ -83,22 +83,34 @@
   </div>
 
   <script>
-    // Every document delete form calls this instead of a plain confirm() -
-    // deleting a document also deletes any sub-documents made under it, so
-    // the user's own password is required to go through with it.
-    function confirmDeleteWithPassword(form, message) {
+    // Confirm-then-password gate for the actions that can't simply be undone.
+    // The typed password rides along in a hidden field the matching route
+    // checks against the signed-in user's own (app/utils.py).
+    function confirmWithPassword(form, message, promptText, fieldName) {
       if (!window.confirm(message)) return false;
-      var password = window.prompt('Enter your password to confirm deletion:');
+      var password = window.prompt(promptText);
       if (!password) return false;
-      var input = form.querySelector('input[name="delete_password"]');
+      var input = form.querySelector('input[name="' + fieldName + '"]');
       if (!input) {
         input = document.createElement('input');
         input.type = 'hidden';
-        input.name = 'delete_password';
+        input.name = fieldName;
         form.appendChild(input);
       }
       input.value = password;
       return true;
+    }
+
+    // Every document delete form calls this instead of a plain confirm() -
+    // deleting a document also deletes any sub-documents made under it.
+    function confirmDeleteWithPassword(form, message) {
+      return confirmWithPassword(form, message, 'Enter your password to confirm deletion:', 'delete_password');
+    }
+
+    // A duplicate takes a fresh quotation number and looks identical to the
+    // original, so it is gated the same way.
+    function confirmDuplicateWithPassword(form, message) {
+      return confirmWithPassword(form, message, 'Enter your password to confirm the duplicate:', 'duplicate_password');
     }
   </script>
 </body>

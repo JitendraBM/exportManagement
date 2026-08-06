@@ -14,12 +14,18 @@ from flask import session, redirect, url_for, flash, g, abort
 from werkzeug.security import check_password_hash
 
 
-def verify_delete_password(user, form) -> bool:
-    """Confirms `form['delete_password']` matches the signed-in user's own
-    password - required before any document delete goes through, since
-    deleting cascades to every sub-document made under it."""
-    password = form.get("delete_password", "")
+def verify_own_password(user, form, field: str) -> bool:
+    """Confirms the password typed into `form[field]` is the signed-in user's
+    own - the second gate on an action that is admin-only and can't simply be
+    undone."""
+    password = form.get(field, "")
     return bool(password) and check_password_hash(user.password_hash, password)
+
+
+def verify_delete_password(user, form) -> bool:
+    """Required before any document delete goes through, since deleting
+    cascades to every sub-document made under it."""
+    return verify_own_password(user, form, "delete_password")
 
 
 def login_required(view_func):

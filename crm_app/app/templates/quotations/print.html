@@ -30,10 +30,10 @@
       <a href="{{ url_for('packing_lists.new_packing_list', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">📦 Create packing list</a>
       {% endif %}
       <a href="{{ url_for('quotations.edit_quotation', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Edit</a>
-      <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=quotation.id) }}" onsubmit="return confirm('Create a second copy of this quotation?');">
+      {% if current_user.is_admin %}
+      <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=quotation.id) }}" onsubmit="return confirmDuplicateWithPassword(this, 'Create a second copy of this quotation?');">
         <button type="submit" class="btn btn-ghost btn-sm">⧉ Duplicate</button>
       </form>
-      {% if current_user.is_admin %}
       <a href="{{ url_for('quotations.quotation_versions', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Version history</a>
       {% endif %}
       {% if existing_pi %}
@@ -67,19 +67,29 @@
   {% include '_page_filler.html' %}
 
   <script>
-    function confirmDeleteWithPassword(form, message) {
+    // This page doesn't extend base.html, so it carries its own copy of the
+    // confirm-then-password gate (see the comments there).
+    function confirmWithPassword(form, message, promptText, fieldName) {
       if (!window.confirm(message)) return false;
-      var password = window.prompt('Enter your password to confirm deletion:');
+      var password = window.prompt(promptText);
       if (!password) return false;
-      var input = form.querySelector('input[name="delete_password"]');
+      var input = form.querySelector('input[name="' + fieldName + '"]');
       if (!input) {
         input = document.createElement('input');
         input.type = 'hidden';
-        input.name = 'delete_password';
+        input.name = fieldName;
         form.appendChild(input);
       }
       input.value = password;
       return true;
+    }
+
+    function confirmDeleteWithPassword(form, message) {
+      return confirmWithPassword(form, message, 'Enter your password to confirm deletion:', 'delete_password');
+    }
+
+    function confirmDuplicateWithPassword(form, message) {
+      return confirmWithPassword(form, message, 'Enter your password to confirm the duplicate:', 'duplicate_password');
     }
   </script>
 </body>
