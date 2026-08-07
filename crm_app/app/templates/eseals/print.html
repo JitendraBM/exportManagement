@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ invoice.export_invoice_number }} · E-Seal</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 landscape; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('eseals.list_eseals') }}" class="btn btn-ghost btn-sm">← All e-seal sheets</a>
+      <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 Export invoice {{ invoice.export_invoice_number }}</a>
+    </div>
+    <div class="flex gap-8">
+      <a href="{{ url_for('eseals.download_eseal_xlsx', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">⬇ Excel (.xlsx)</a>
+      <button type="submit" form="eseal-form" class="btn btn-primary btn-sm">Save sealing details</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="window.print()">🖨 Print / PDF</button>
+    </div>
+  </div>
+
+  <div class="sheet-note no-print">
+    This e-seal sheet is generated from export invoice
+    <strong>{{ invoice.export_invoice_number }}</strong>. Shipping bill no./date and the e-way bill number
+    come from that invoice, and the vehicle, container and e-seal numbers from its
+    <strong>Container details (11B)</strong> — the e-seal number is that row's RFID seal. Only
+    <strong>Sealing time</strong> and <strong>Sealing date</strong> are typed here (time is 24-hour, HH:mm);
+    fill them in on each row and press <strong>Save sealing details</strong>. Use
+    <strong>Print / PDF</strong> for the PDF and <strong>Excel (.xlsx)</strong> for the spreadsheet — both
+    show the saved values.
+    {% if not invoice.shipping_bill_no %}
+    <br><strong>This invoice has no shipping bill number yet</strong> — set it on the invoice so the first
+    two columns fill in.
+    {% endif %}
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  <form method="POST" id="eseal-form">
+    {% include 'eseals/_sheet.html' %}
+  </form>
+
+</body>
+</html>

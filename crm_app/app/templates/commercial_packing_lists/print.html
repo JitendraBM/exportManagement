@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ invoice.export_invoice_number }} · Commercial Invoice Packing List</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('commercial_packing_lists.list_commercial_packing_lists') }}" class="btn btn-ghost btn-sm">← All packing lists</a>
+      <a href="{{ url_for('commercial_invoices.view_commercial_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Commercial invoice</a>
+    </div>
+    <div class="flex gap-8">
+      <a href="{{ url_for('commercial_packing_lists.edit_commercial_packing_list', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / PDF</button>
+    </div>
+  </div>
+
+  <div class="sheet-note no-print">
+    This packing list is generated from export invoice
+    <strong>{{ invoice.export_invoice_number }}</strong> — its header from that invoice and its rows from
+    that invoice's export packing list split. The only fields it owns are the
+    <strong>bill of lading number and date</strong>
+    {%- if not invoice.bill_of_lading_no and not invoice.bill_of_lading_date %}, which are not set yet
+    {%- endif %}; use <strong>Edit</strong> for those. Everything else follows the export invoice.
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'commercial_packing_lists/_sheet.html' %}
+  {% include '_page_filler.html' %}
+
+</body>
+</html>

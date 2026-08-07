@@ -1,5 +1,5 @@
 {# Shared form widgets. Import with:
-     {% from "_macros.html" import currency_select %} #}
+     {% from "_macros.html" import currency_select, port_of_loading_select %} #}
 
 {% macro currency_select(chosen, options, label='Currency', hint='') %}
 {# The currency a document is written in. Options come from Administration ->
@@ -16,5 +16,23 @@
     {% endfor %}
   </select>
   {% if hint %}<div class="text-sm text-soft">{{ hint }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro port_of_loading_select(chosen, options, label='Port of loading') %}
+{# The port a shipment loads at. Options come from Administration ->
+   Miscellaneous; a document can hold a port since removed from that list, so
+   the stored value stays selectable rather than silently blanking. #}
+<div class="field">
+  <label for="port_of_loading">{{ label }}</label>
+  <select id="port_of_loading" name="port_of_loading">
+    <option value="">&mdash; none &mdash;</option>
+    {% if chosen and chosen not in options | map(attribute='name') | list %}
+    <option value="{{ chosen }}" selected>{{ chosen }}</option>
+    {% endif %}
+    {% for port in options %}
+    <option value="{{ port.name }}" {{ 'selected' if port.name == chosen }}>{{ port.name }}</option>
+    {% endfor %}
+  </select>
 </div>
 {% endmacro %}

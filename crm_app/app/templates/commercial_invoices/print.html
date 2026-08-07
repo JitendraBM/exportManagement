@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ invoice.export_invoice_number }} · Commercial Invoice</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('commercial_invoices.list_commercial_invoices') }}" class="btn btn-ghost btn-sm">← All commercial invoices</a>
+      <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 Export invoice {{ invoice.export_invoice_number }}</a>
+    </div>
+    <div class="flex gap-8">
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / PDF</button>
+    </div>
+  </div>
+
+  <div class="sheet-note no-print">
+    This commercial invoice is generated from export invoice
+    <strong>{{ invoice.export_invoice_number }}</strong> and has nothing to type — it carries that
+    invoice's own number and date, its header and money, and its export packing list's weight totals.
+    Edit the export invoice to change anything here.
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'commercial_invoices/_sheet.html' %}
+  {% include '_page_filler.html' %}
+
+</body>
+</html>

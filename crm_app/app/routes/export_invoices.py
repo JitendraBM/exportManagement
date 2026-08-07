@@ -39,7 +39,8 @@ _HEADER_FIELDS = [
     "fob_pricing",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
-    "examination_date", "location_code_08b", "booking_no", "issuing_authority", "issuing_authority_address",
+    "examination_date", "location_code_08b", "booking_no", "vessel_voyage_no",
+    "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
     "total_net_weight_kg", "total_gross_weight_kg", "shipping_bill_no", "shipping_bill_date",
@@ -103,8 +104,12 @@ def _extract_container_details(form) -> list:
     line_seals = form.getlist("cd_line_seal_no[]")
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
+    lr_nos = form.getlist("cd_lr_no[]")
+    transporters = form.getlist("cd_transporter_name[]")
+    max_weights = form.getlist("cd_max_permitted_weight[]")
     tares = form.getlist("cd_tare_weight[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles), len(tares))
+    n = max(len(nos), len(line_seals), len(rfids), len(vehicles),
+            len(lr_nos), len(transporters), len(max_weights), len(tares))
     rows = []
     for i in range(n):
         rows.append({
@@ -112,6 +117,9 @@ def _extract_container_details(form) -> list:
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
+            "lr_no": lr_nos[i] if i < len(lr_nos) else "",
+            "transporter_name": transporters[i] if i < len(transporters) else "",
+            "max_permitted_weight": max_weights[i] if i < len(max_weights) else "",
             "tare_weight": tares[i] if i < len(tares) else "",
         })
     return rows
@@ -238,17 +246,21 @@ def _form_context():
     proforma_invoices = container.proforma_invoice_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
     permits = container.permit_service.list_all(g.user.company_id)
-    return leads, proforma_invoices, company, permits
+    # Feeds the 11B table's Transporter name dropdown; only the chosen name is
+    # stored on the row, so this list is display-only.
+    transporters = container.transporter_service.list_all(g.user.company_id)
+    return leads, proforma_invoices, company, permits, transporters
 
 
 def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, allocations=None, status_code=200):
-    leads, proforma_invoices, company, permits = _form_context()
+    leads, proforma_invoices, company, permits, transporters = _form_context()
     rows = form_items if form_items is not None else (invoice.items if invoice else [])
     pallet_types_map, product_meta_map = _product_maps(rows)
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
-        company=company, permits=permits, container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
+        company=company, permits=permits, transporters=transporters,
+        container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
         form_allocations=_allocation_rows(invoice, allocations),

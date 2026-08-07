@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Edit Commercial Invoice Packing List{% endblock %}
+
+{# Everything else on that sheet is derived from the export invoice and its
+   export packing list, so this asks for the two fields the packing list owns
+   and shows the export invoice's own number and date beside them, read-only. #}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Commercial invoice packing list</div>
+    <h1>Edit Bill Of Lading Details</h1>
+  </div>
+</div>
+
+<div class="card" style="max-width:680px;">
+  <form method="POST">
+    <fieldset>
+      <legend>Export invoice</legend>
+      <div class="form-row">
+        <div class="field">
+          <label for="export_invoice_number">Invoice number</label>
+          <input type="text" id="export_invoice_number" value="{{ invoice.export_invoice_number }}" readonly disabled>
+        </div>
+        <div class="field">
+          <label for="export_invoice_date">Invoice date</label>
+          <input type="date" id="export_invoice_date" value="{{ (invoice.invoice_date or '')[:10] }}" readonly disabled>
+        </div>
+      </div>
+      <p class="hint">Shown for reference — edit these on the export invoice itself.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Bill of lading</legend>
+      <div class="form-row">
+        <div class="field">
+          <label for="bill_of_lading_no">Bill Of Lading No</label>
+          <input type="text" id="bill_of_lading_no" name="bill_of_lading_no"
+                 value="{{ data.bill_of_lading_no }}">
+        </div>
+        <div class="field">
+          <label for="bill_of_lading_date">Bill Of Lading Date</label>
+          <input type="date" id="bill_of_lading_date" name="bill_of_lading_date"
+                 value="{{ (data.bill_of_lading_date or '')[:10] }}">
+        </div>
+      </div>
+      <p class="hint">Left blank, these print empty on the sheet.</p>
+    </fieldset>
+
+    <button type="submit" class="btn btn-primary">Save changes</button>
+    <a href="{{ url_for('commercial_packing_lists.view_commercial_packing_list', export_invoice_id=invoice.id) }}"
+       class="btn btn-ghost">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

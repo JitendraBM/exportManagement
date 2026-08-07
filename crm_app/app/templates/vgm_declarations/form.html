@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Edit VGM Declaration{% endblock %}
+
+{# Only the reference's shaded rows - everything else on that sheet is derived
+   from the export invoice, its containers or Our Company. Each field's
+   placeholder shows the default it falls back to while left blank. #}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">VGM declaration · {{ invoice.export_invoice_number }}</div>
+    <h1>Edit VGM Declaration</h1>
+  </div>
+</div>
+
+<div class="card" style="max-width:760px;">
+  <form method="POST">
+    <fieldset>
+      <legend>Shipper's authorised official</legend>
+      <div class="field">
+        <label for="vgm_signatory">Name &amp; designation of the official authorised to sign</label>
+        <input type="text" id="vgm_signatory" name="vgm_signatory"
+               placeholder="{{ invoice.vgm_signatory_printed(company) }}"
+               value="{{ data.vgm_signatory }}">
+      </div>
+      <div class="field">
+        <label for="vgm_contact_24x7">24 x 7 contact details of that official</label>
+        <input type="text" id="vgm_contact_24x7" name="vgm_contact_24x7"
+               value="{{ data.vgm_contact_24x7 }}">
+      </div>
+      <p class="hint">
+        Left blank, these fall back to the invoice's authorised signatory and Our Company's phone number.
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Weighing &amp; cargo</legend>
+      <div class="form-row">
+        <div class="field">
+          <label for="vgm_weighing_method">Weighing method</label>
+          <input type="text" id="vgm_weighing_method" name="vgm_weighing_method"
+                 placeholder="METHOD-1" value="{{ data.vgm_weighing_method }}">
+        </div>
+        <div class="field">
+          <label for="vgm_cargo_type">Type (Normal / Reefer / Hazardous / Others)</label>
+          <input type="text" id="vgm_cargo_type" name="vgm_cargo_type"
+                 placeholder="NORMAL" value="{{ data.vgm_cargo_type }}">
+        </div>
+      </div>
+      <div class="field">
+        <label for="vgm_hazardous_details">If hazardous — UN No, IMDG Class</label>
+        <input type="text" id="vgm_hazardous_details" name="vgm_hazardous_details"
+               placeholder="N/A" value="{{ data.vgm_hazardous_details }}">
+      </div>
+      <p class="hint">Left blank, these print the defaults shown above.</p>
+    </fieldset>
+
+    <button type="submit" class="btn btn-primary">Save changes</button>
+    <a href="{{ url_for('vgm_declarations.view_vgm_declaration', export_invoice_id=invoice.id) }}"
+       class="btn btn-ghost">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

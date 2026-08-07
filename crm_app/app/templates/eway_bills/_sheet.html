@@ -1,0 +1,67 @@
+{# The EWAYBILL MULTI VEHICLE sheet. Expects `invoice`, `rows`, `totals` and
+   `columns` (assembled in routes/eway_bills.py).
+
+   Nothing is typed on this document and nothing is derived in this template -
+   the route decides every value. Two bands sharing one column grid: the
+   e-way bill reference across the top, then a row per vehicle x goods line
+   with a totals row underneath. #}
+<style>
+  .ewb-sheet {
+    background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
+    padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.35;
+  }
+  .ewb-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .ewb-sheet th, .ewb-sheet td { border: 1px solid #000; padding: 3px 5px; }
+  .ewb-sheet th { font-weight: bold; text-align: center; vertical-align: middle; }
+  .ewb-c { text-align: center; }
+  .ewb-num { text-align: right; white-space: nowrap; }
+  .ewb-tot td { font-weight: bold; }
+  @media print { .ewb-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+</style>
+
+<div class="ewb-sheet js-page-sheet">
+  <table>
+    <colgroup>
+      <col style="width:15%"><col style="width:12%"><col style="width:31%">
+      <col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:10%">
+    </colgroup>
+    <thead>
+      {# The e-way bill this whole sheet is filed under. #}
+      <tr>
+        <th>EwayBill no</th>
+        <th colspan="2" style="font-weight:normal;">{{ invoice.eway_bill_no or '-' }}</th>
+        <th>EwayBill Date</th>
+        <th colspan="3" style="font-weight:normal;">{{ eway_bill_date or '-' }}</th>
+      </tr>
+      <tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.vehicle_no or '-' }}</td>
+        <td>{{ row.lr_no or '-' }}</td>
+        <td>{{ row.description }}</td>
+        <td class="ewb-c">{{ row.hsn_code }}</td>
+        <td class="ewb-c">{{ '{:,.0f}'.format(row.pallets) }}</td>
+        <td class="ewb-c">{{ '{:,.0f}'.format(row.quantity_boxes) }}</td>
+        <td class="ewb-num">{{ '{:,.2f}'.format(row.quantity_value) }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="{{ columns|length }}">
+          No container split yet — fill in the export packing list allocation on the invoice.
+        </td>
+      </tr>
+      {% endfor %}
+      {% if rows %}
+      <tr class="ewb-tot">
+        <td colspan="4">TOTAL</td>
+        <td class="ewb-c">{{ '{:,.2f}'.format(totals.pallets) }}</td>
+        <td class="ewb-c">{{ '{:,.2f}'.format(totals.quantity_boxes) }}</td>
+        <td class="ewb-num">{{ '{:,.2f}'.format(totals.quantity_value) }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

@@ -178,9 +178,9 @@
           <tr><td class="ei-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Destination</td><td>{{ (invoice.country_of_destination or '-')|upper }}</td></tr>
-          {# No vessel field on an export invoice (it lives on the packing
-             list) - the reference prints N/A here too. #}
-          <tr><td class="ei-lbl">Vessel / Flight Name &amp; No</td><td>N/A</td></tr>
+          {# Typed on the form's Container details card; the reference prints
+             N/A when there is no vessel yet. #}
+          <tr><td class="ei-lbl">Vessel / Flight Name &amp; No</td><td>{{ (invoice.vessel_voyage_no or 'N/A')|upper }}</td></tr>
           <tr><td class="ei-lbl">Port Of Loading</td><td>{{ (invoice.port_of_loading or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Port Of Discharge</td><td>{{ (invoice.port_of_discharge or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Final Destination</td><td>{{ (invoice.final_destination or '-')|upper }}</td></tr>

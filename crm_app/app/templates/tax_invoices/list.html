@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Tax Invoices{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>Tax Invoices</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has a tax invoice — there is nothing to create here. It restates that invoice
+    in INR at its exchange rate. The only fields of its own are its number and date (which start out as
+    the export invoice's until you set them) and the e-way bill number and date; open one and use
+    <strong>Edit</strong> to fill them in. Everything else comes from the export invoice.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Tax invoice</th>
+          <th>Date</th>
+          <th>Export invoice</th>
+          <th>Consignee</th>
+          <th class="num">Exchange rate</th>
+          <th>Created by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.tax_invoice_number_printed }}</td>
+          <td class="text-sm">{{ invoice.tax_invoice_date_printed }}</td>
+          <td class="mono text-sm">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="num text-sm">{% if invoice.exchange_rate %}₹ {{ '{:,.2f}'.format(invoice.exchange_rate) }}{% else %}<span class="text-soft">not set</span>{% endif %}</td>
+          <td class="text-sm">{{ invoice.created_by_name }}</td>
+          <td><a href="{{ url_for('tax_invoices.view_tax_invoice', export_invoice_id=invoice.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}VGM Attachments{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>VGM Attachments</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has a VGM attachment — there is nothing to create here. It lists one row per
+    physical container, with the booking no., container no./size, max permitted and tare weight from the
+    invoice's <strong>Container details</strong>, the cargo weight from its export packing list, and
+    Total VGM Weight as tare + cargo. Open one to type each container's weighbridge and slip number.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Export invoice</th>
+          <th>Date</th>
+          <th>Consignee</th>
+          <th>Booking no.</th>
+          <th class="num">Containers</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.invoice_date }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="text-sm">{{ invoice.booking_no or '—' }}</td>
+          <td class="num text-sm">{{ invoice.total_containers }}</td>
+          <td><a href="{{ url_for('vgm_attachments.view_vgm_attachment', export_invoice_id=invoice.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

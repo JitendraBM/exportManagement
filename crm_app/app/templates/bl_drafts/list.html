@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}BL Drafts{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>BL Drafts</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has a BL draft — there is nothing to create here. Its header comes from the
+    export invoice (shipper, consignee, notify, booking no., vessel &amp; voyage, ports) and its container
+    table from that invoice's export packing list split. Each one can be printed to PDF or downloaded
+    as a Word file.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Export invoice</th>
+          <th>Date</th>
+          <th>Consignee</th>
+          <th>Booking no.</th>
+          <th>Created by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.invoice_date }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="text-sm">{{ invoice.booking_no or '—' }}</td>
+          <td class="text-sm">{{ invoice.created_by_name }}</td>
+          <td class="text-sm">
+            <a href="{{ url_for('bl_drafts.view_bl_draft', export_invoice_id=invoice.id) }}">Open →</a>
+            &nbsp;·&nbsp;
+            <a href="{{ url_for('bl_drafts.download_bl_draft_docx', export_invoice_id=invoice.id) }}">.docx</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

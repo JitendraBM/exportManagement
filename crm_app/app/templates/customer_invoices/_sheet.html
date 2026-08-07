@@ -1,0 +1,168 @@
+{# The COMMERCIAL INVOICE (customer's copy) A4 sheet. Expects `invoice`,
+   `company`, `lines` (the FOB-priced goods lines) and optionally
+   `packing_list` for the weight totals.
+
+   Same header band and styling as the BRC commercial invoice - both come from
+   templates/commercial/ - but priced the other way round: Rate quotes the FOB
+   rate and each Total Amount follows from it, so the goods column adds up to
+   the FOB value. The totals block then runs UPWARDS from FOB, adding the
+   charges and the discount back on to reach the CIF total.
+
+   Quantity columns map as: Packing = pallets, Qty = boxes,
+   Alt. Qty = quantity_value (the unit the line is priced in). #}
+{% from "commercial/_macros.html" import money with context %}
+{% include "commercial/_style.html" %}
+
+{% set ns = namespace(plts=0, boxes=0, qty=0) %}
+{% for item in invoice.items %}
+  {% set ns.plts = ns.plts + (item.pallets or 0) %}
+  {% set ns.boxes = ns.boxes + (item.quantity_boxes or 0) %}
+  {% set ns.qty = ns.qty + (item.quantity_value or 0) %}
+{% endfor %}
+
+<div class="ci-sheet js-page-sheet">
+  <div class="ci-title">COMMERCIAL INVOICE</div>
+
+  {% include "commercial/_header.html" %}
+
+  <!-- ============ GOODS (FOB-priced) + TOTALS ============ -->
+  <table class="ci-items">
+    <colgroup>
+      <col style="width:5%"><col style="width:34%"><col style="width:9%">
+      <col style="width:6%"><col style="width:6%"><col style="width:9%">
+      <col style="width:9%"><col style="width:5%"><col style="width:17%">
+    </colgroup>
+    <thead>
+      <tr>
+        <td>Sr No</td>
+        <td>Description Of Goods</td>
+        <td>HSNC</td>
+        <td>Packing</td>
+        <td>Qty</td>
+        <td>Alt. Qty</td>
+        <td>Rate</td>
+        <td>Unit</td>
+        <td>Total Amount</td>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in lines %}
+      {% set item = line.item %}
+      <tr class="ci-goods">
+        <td class="ci-c">{{ loop.index }}</td>
+        <td>
+          {{ item.product_name }}
+          {%- if item.dimension_mm %}<br>{{ item.dimension_mm }}{% endif -%}
+        </td>
+        <td class="ci-c">{{ item.hsn_code or '' }}</td>
+        <td class="ci-cnum">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
+        <td class="ci-cnum">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ci-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="ci-unit-sm">{{ item.unit }}</span></td>
+        {# The FOB rate, and the total that follows from it. #}
+        <td class="ci-cnum">{{ money(line.rate) }}</td>
+        <td class="ci-c">{{ item.unit }}</td>
+        <td class="ci-num">{{ money(line.total) }}</td>
+      </tr>
+      {% endfor %}
+      {# Blank filler, stretched by _page_filler.html so the sheet fills its A4
+         page exactly however few goods lines there are. #}
+      <tr class="js-page-filler">
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+
+      {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
+      {% set order_gross_weight = (packing_list.total_gross_weight if packing_list and packing_list.items else None) or invoice.total_gross_weight_kg %}
+
+      {# The ladder runs UPWARDS on this sheet: it opens on the FOB value the
+         goods column adds up to, adds back the charges that were spread out
+         of the rate and the discount, and closes on the CIF total. The two
+         delivery-terms questions are the same as everywhere else - FOB terms
+         put the whole ocean leg on the buyer so both rows drop, CFR keeps the
+         freight but leaves the buyer to insure - and Certification appears
+         only when it is non-zero, as on the BRC copy. #}
+      {% set money_rows = [] %}
+      {% set _ = money_rows.append(('FOB Value', invoice.fob_priced_total)) %}
+      {% set _ = money_rows.append(('Other Charges', invoice.other_charges)) %}
+      {% if invoice.certification %}
+      {% set _ = money_rows.append(('Certification', invoice.certification)) %}
+      {% endif %}
+      {% if not invoice.nature_of_contract | drops_insurance %}
+      {% set _ = money_rows.append(('Insurance', invoice.insurance)) %}
+      {% endif %}
+      {% if not invoice.nature_of_contract | drops_sea_freight %}
+      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight)) %}
+      {% endif %}
+      {% set _ = money_rows.append(('Discount', invoice.discount_amount)) %}
+      {% set _ = money_rows.append(('Total CIF Invoice Value', invoice.fob_priced_cif_total)) %}
+
+      {# Rows 0-1 carry the quantity totals and their column labels; the rest
+         split evenly between Net and Gross Weight, an odd remainder going to
+         Gross so it closes the column flush. Both re-derive from whatever
+         ended up in the list, so a dropped charge row can't knock the band
+         out of alignment. #}
+      {% set weight_rows = money_rows|length - 2 %}
+      {% set net_rows = weight_rows // 2 %}
+      {% set gross_rows = weight_rows - net_rows %}
+
+      {% for label, value in money_rows %}
+      <tr class="ci-tot">
+        {% if loop.first %}
+        <td colspan="3" rowspan="{{ money_rows|length }}" style="font-weight:normal;">
+          <span class="ci-lbl">Invoice Value In Word</span><br>
+          <span class="ci-lbl">{{ invoice.fob_priced_cif_total | amount_in_words(invoice.currency_name) }}</span>
+        </td>
+        <td class="ci-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
+        <td class="ci-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(ns.qty) }}</td>
+        {% elif loop.index0 == 1 %}
+        <td class="ci-c">Packing</td>
+        <td class="ci-c">Qty</td>
+        <td class="ci-c">Alt. Qty</td>
+        {% elif loop.index0 == 2 %}
+        <td colspan="2" rowspan="{{ net_rows }}" class="ci-mid">Net Weight</td>
+        <td rowspan="{{ net_rows }}" class="ci-num ci-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
+        {% elif loop.index0 == 2 + net_rows %}
+        <td colspan="2" rowspan="{{ gross_rows }}" class="ci-mid">Gross Weight</td>
+        <td rowspan="{{ gross_rows }}" class="ci-num ci-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
+        {% endif %}
+        <td colspan="2" class="ci-r">{{ label }}</td>
+        <td class="ci-num">{{ money(value) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- ============ REMARKS ============ -->
+  <table>
+    <tr>
+      <td style="height:34px;">
+        <span class="ci-lbl">Remarks</span>
+        {%- if invoice.remarks %}<br>{{ invoice.remarks|replace('\n', '<br>')|safe }}{% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- ============ DECLARATION | SIGNATORY ============ -->
+  <table>
+    <colgroup><col style="width:47%"><col style="width:16%"><col style="width:37%"></colgroup>
+    <tr>
+      <td>
+        <span class="ci-lbl">Declaration:</span>
+        We Declare That This Invoice Shows The Actual Price Of The Goods Described &amp; That All Particulars Are True And Correct
+      </td>
+      <td class="ci-c ci-lbl ci-mid">CERTIFY THAT GOODS ARE OF "INDIAN ORIGIN"</td>
+      <td class="ci-r ci-sign">
+        <div class="ci-lbl">For {{ company.company_name|upper if company else '' }}</div>
+        <div style="margin-top:26px;">
+          <span class="ci-lbl">Authorised Signatury</span>
+          {%- if invoice.authorised_person_name %}<br>
+            <span class="ci-lbl">
+              {{ invoice.authorised_person_name }}
+              {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif %}
+            </span>
+          {%- endif %}
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>
