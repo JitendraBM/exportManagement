@@ -16,7 +16,7 @@
    Packing / Qty / Alt. Qty totals sit exactly under their columns. Quantity
    columns map as: Packing = pallets, Qty = boxes, Alt. Qty = quantity_value
    (the unit the line is priced in). #}
-{% from "commercial/_macros.html" import money with context %}
+{% from "commercial/_macros.html" import money, money_signed with context %}
 {% include "commercial/_style.html" %}
 
 {% set ns = namespace(plts=0, boxes=0, qty=0) %}
@@ -87,24 +87,34 @@
          Value line, so the discount and the charges come off in one run and
          FOB is still the bottom. Certification appears only when it is
          non-zero - the reference has no such row, but silently dropping a real
-         charge would leave the subtraction not reconciling. #}
+         charge would leave the subtraction not reconciling.
+
+         Each entry is (label, value, signed) - `signed` only for ROUND-OFF,
+         which has to read as an amount added or taken back out. #}
       {% set money_rows = [] %}
-      {% set _ = money_rows.append(('CIF Invoice Value', invoice.cif_value_usd)) %}
-      {% set _ = money_rows.append(('Discount', invoice.discount_amount)) %}
+      {# An FOB-priced invoice carries one extra step above the CIF line: its
+         goods lines are worked out from per-unit prices rounded to the cent,
+         and Round-off is the few cents that leaves between them and the CIF
+         value. Same row, same place, as on the export invoice itself. #}
+      {% if invoice.fob_pricing %}
+      {% set _ = money_rows.append(('Round-off', invoice.round_off, true)) %}
+      {% endif %}
+      {% set _ = money_rows.append(('CIF Invoice Value', invoice.cif_value_usd, false)) %}
+      {% set _ = money_rows.append(('Discount', invoice.discount_amount, false)) %}
       {# FOB terms put the whole ocean leg on the buyer so both drop out; CFR
          keeps the freight but leaves the buyer to insure, so only insurance
          goes. Each is appended on its own question. #}
       {% if not invoice.nature_of_contract | drops_insurance %}
-      {% set _ = money_rows.append(('Insurance', invoice.insurance)) %}
+      {% set _ = money_rows.append(('Insurance', invoice.insurance, false)) %}
       {% endif %}
       {% if not invoice.nature_of_contract | drops_sea_freight %}
-      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight)) %}
+      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight, false)) %}
       {% endif %}
       {% if invoice.certification %}
-      {% set _ = money_rows.append(('Certification', invoice.certification)) %}
+      {% set _ = money_rows.append(('Certification', invoice.certification, false)) %}
       {% endif %}
-      {% set _ = money_rows.append(('Other Charges', invoice.other_charges)) %}
-      {% set _ = money_rows.append(('FOB Value', invoice.fob_value_usd)) %}
+      {% set _ = money_rows.append(('Other Charges', invoice.other_charges, false)) %}
+      {% set _ = money_rows.append(('FOB Value', invoice.fob_value_usd, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          split evenly between Net and Gross Weight, an odd remainder going to
@@ -115,7 +125,7 @@
       {% set net_rows = weight_rows // 2 %}
       {% set gross_rows = weight_rows - net_rows %}
 
-      {% for label, value in money_rows %}
+      {% for label, value, signed in money_rows %}
       <tr class="ci-tot">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money_rows|length }}" style="font-weight:normal;">
@@ -137,7 +147,7 @@
         <td rowspan="{{ gross_rows }}" class="ci-num ci-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         {% endif %}
         <td colspan="2" class="ci-r">{{ label }}</td>
-        <td class="ci-num">{{ money(value) }}</td>
+        <td class="ci-num">{% if signed %}{{ money_signed(value) }}{% else %}{{ money(value) }}{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

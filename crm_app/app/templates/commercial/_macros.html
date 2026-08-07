@@ -36,3 +36,12 @@
 {% macro money(v) -%}
   {%- if v %}{{ invoice.currency_prefix }}&nbsp;{{ ind(v) }}{% else %}{{ invoice.currency_prefix }}&nbsp;-{% endif -%}
 {%- endmacro %}
+
+{# As above, but always carrying its sign - for ROUND-OFF, which has to read as
+   an amount added or taken back out rather than as a charge in its own right.
+   A zero prints as +0.00, not a dash: on a sheet that shows the row at all the
+   point is that the column foots, and a dash would leave that unproven. #}
+{% macro money_signed(v) -%}
+  {%- set n = v or 0 -%}
+  {{ invoice.currency_prefix }}&nbsp;{% if n >= 0 %}+{% endif %}{{ ind(n) }}
+{%- endmacro %}

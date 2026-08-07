@@ -2004,8 +2004,22 @@ class ExportInvoice(CifMoneyLadder):
     def fob_priced_cif_total(self) -> float:
         """The CIF total built back UP from the FOB-priced column: the charges
         and the discount that were spread out are added back on. Equals
-        cif_value_usd but for the rate rounding above."""
+        cif_value_usd but for the rate rounding above - the gap between the two
+        is `fob_priced_round_off`, which the sheet prints as its own row."""
         return round(self.fob_priced_total + self.charges_total + self.discount_amount, 2)
+
+    @property
+    def fob_priced_round_off(self) -> float:
+        """The cents the FOB-priced column can't carry.
+
+        `fob_priced_lines` rounds each rate to the two decimals the sheet
+        prints and takes the line total FROM that rounded rate, so the column
+        adds up to a hair either side of the exact ladder. This is that hair.
+        Printed as its own ROUND-OFF row, it lets the customer's copy close on
+        the SAME cif_value_usd every other document quotes while every column
+        on it still multiplies and adds out - the same bargain
+        Quotation.round_off strikes for FOB-typed prices."""
+        return round(self.cif_value_usd - self.fob_priced_cif_total, 2)
 
     @property
     def tax_invoice_number_printed(self) -> str:

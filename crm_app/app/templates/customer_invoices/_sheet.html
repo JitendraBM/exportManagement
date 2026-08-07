@@ -10,7 +10,7 @@
 
    Quantity columns map as: Packing = pallets, Qty = boxes,
    Alt. Qty = quantity_value (the unit the line is priced in). #}
-{% from "commercial/_macros.html" import money with context %}
+{% from "commercial/_macros.html" import money, money_signed with context %}
 {% include "commercial/_style.html" %}
 
 {% set ns = namespace(plts=0, boxes=0, qty=0) %}
@@ -79,21 +79,32 @@
          delivery-terms questions are the same as everywhere else - FOB terms
          put the whole ocean leg on the buyer so both rows drop, CFR keeps the
          freight but leaves the buyer to insure - and Certification appears
-         only when it is non-zero, as on the BRC copy. #}
+         only when it is non-zero, as on the BRC copy.
+
+         Each entry is (label, value, signed) - `signed` only for ROUND-OFF,
+         which has to read as an amount added or taken back out. #}
       {% set money_rows = [] %}
-      {% set _ = money_rows.append(('FOB Value', invoice.fob_priced_total)) %}
-      {% set _ = money_rows.append(('Other Charges', invoice.other_charges)) %}
+      {% set _ = money_rows.append(('FOB Value', invoice.fob_priced_total, false)) %}
+      {% set _ = money_rows.append(('Other Charges', invoice.other_charges, false)) %}
       {% if invoice.certification %}
-      {% set _ = money_rows.append(('Certification', invoice.certification)) %}
+      {% set _ = money_rows.append(('Certification', invoice.certification, false)) %}
       {% endif %}
       {% if not invoice.nature_of_contract | drops_insurance %}
-      {% set _ = money_rows.append(('Insurance', invoice.insurance)) %}
+      {% set _ = money_rows.append(('Insurance', invoice.insurance, false)) %}
       {% endif %}
       {% if not invoice.nature_of_contract | drops_sea_freight %}
-      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight)) %}
+      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight, false)) %}
       {% endif %}
-      {% set _ = money_rows.append(('Discount', invoice.discount_amount)) %}
-      {% set _ = money_rows.append(('Total CIF Invoice Value', invoice.fob_priced_cif_total)) %}
+      {% set _ = money_rows.append(('Discount', invoice.discount_amount, false)) %}
+      {# The FOB rates above are rounded to the cent and each line total follows
+         from the rounded rate, so adding the charges back on lands a hair off
+         the CIF value every other document quotes. That hair prints here, which
+         lets this sheet close on the SAME total as the export invoice while its
+         own column still adds up. Shown only when there is one to carry. #}
+      {% if invoice.fob_priced_round_off %}
+      {% set _ = money_rows.append(('Round-off', invoice.fob_priced_round_off, true)) %}
+      {% endif %}
+      {% set _ = money_rows.append(('Total CIF Invoice Value', invoice.cif_value_usd, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          split evenly between Net and Gross Weight, an odd remainder going to
@@ -104,12 +115,12 @@
       {% set net_rows = weight_rows // 2 %}
       {% set gross_rows = weight_rows - net_rows %}
 
-      {% for label, value in money_rows %}
+      {% for label, value, signed in money_rows %}
       <tr class="ci-tot">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money_rows|length }}" style="font-weight:normal;">
           <span class="ci-lbl">Invoice Value In Word</span><br>
-          <span class="ci-lbl">{{ invoice.fob_priced_cif_total | amount_in_words(invoice.currency_name) }}</span>
+          <span class="ci-lbl">{{ invoice.cif_value_usd | amount_in_words(invoice.currency_name) }}</span>
         </td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
@@ -126,7 +137,7 @@
         <td rowspan="{{ gross_rows }}" class="ci-num ci-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         {% endif %}
         <td colspan="2" class="ci-r">{{ label }}</td>
-        <td class="ci-num">{{ money(value) }}</td>
+        <td class="ci-num">{% if signed %}{{ money_signed(value) }}{% else %}{{ money(value) }}{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
