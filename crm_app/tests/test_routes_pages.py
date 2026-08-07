@@ -2035,8 +2035,15 @@ class TestCustomerInvoiceRoutes:
         """144 SQM @ 5.92 = 852.48 CIF. Charges + discount = 100 + 50 + 20 =
         170, spread over 144 SQM = 1.18055../unit, so the FOB rate is
         5.92 - 1.1806 = 4.7394 -> 4.74 rounded, and the line total follows:
-        4.74 * 144 = 682.56. Adding the 170 back gives 852.56 - four cents
-        away from the exact 852.48, which is the rate rounding."""
+        4.74 * 144 = 682.56. Adding the 170 back gives 852.56 - eight cents
+        away from the exact 852.48, which is the rate rounding.
+
+        That eight cents is `fob_priced_round_off`: it prints as its own
+        ROUND-OFF row so the sheet closes on 852.48, the SAME CIF value the
+        export invoice and every other document quotes, while its own column
+        still multiplies and adds out. This sheet used to close on 852.56
+        instead - footing internally but disagreeing with the ladder
+        elsewhere - which is the trade the round-off row removes."""
         return self._create_export_invoice(
             client, container, admin, company_id,
             extra={"nature_of_contract": "CIF", "sea_freight": "100",
@@ -2063,8 +2070,11 @@ class TestCustomerInvoiceRoutes:
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "FOB Value" in body
         assert "Total CIF Invoice Value" in body
-        # FOB 682.56 + sea freight 100 + insurance 50 + discount 20 = 852.56
-        assert "852.56" in body
+        # FOB 682.56 + sea freight 100 + insurance 50 + discount 20 = 852.56,
+        # then the -0.08 round-off brings it back onto the exact CIF value.
+        assert "852.48" in body
+        assert "Round-off" in body
+        assert "-0.08" in body
         for charge in ("Sea Freight", "Insurance", "Discount", "Other Charges"):
             assert charge in body
 
@@ -2087,7 +2097,7 @@ class TestCustomerInvoiceRoutes:
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "Invoice Value In Word" in body
         assert "EIGHT HUNDRED FIFTY-TWO" in body
-        assert "CENTS FIFTY-SIX" in body           # 852.56, the CIF total
+        assert "CENTS FORTY-EIGHT" in body         # 852.48, the shared CIF total
 
     def test_it_is_read_only(self, app, admin_ctx):
         client, container, admin, company_id = admin_ctx
