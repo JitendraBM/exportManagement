@@ -47,13 +47,25 @@ def tmp_config(tmp_path, monkeypatch):
     real `app/static/uploads/products/` folder. Patching the class attribute
     keeps every code path - however it reaches Config - pointed at the tmp dir.
     monkeypatch restores the originals after each test.
+
+    EVERY upload folder is patched, not just the product one: ServiceContainer
+    hands all four to BackupService, whose restore path moves each folder aside
+    and `shutil.rmtree`s it. A single unpatched entry means a test that reaches
+    restore DELETES that real folder out of the working tree, so leaving one
+    behind is a data-loss bug, not an untidiness.
     """
     schema_path = os.path.join(CRM_APP_DIR, "app", "schema.sql")
     db_path = str(tmp_path / "instance" / "test.db")
     uploads = str(tmp_path / "uploads" / "products")
+    purchase_invoice_uploads = str(tmp_path / "uploads" / "purchase_invoices")
+    export_invoice_uploads = str(tmp_path / "uploads" / "export_invoices")
+    permit_uploads = str(tmp_path / "uploads" / "permits")
 
     monkeypatch.setattr(Config, "DATABASE_PATH", db_path)
     monkeypatch.setattr(Config, "PRODUCT_UPLOAD_FOLDER", uploads)
+    monkeypatch.setattr(Config, "PURCHASE_INVOICE_UPLOAD_FOLDER", purchase_invoice_uploads)
+    monkeypatch.setattr(Config, "EXPORT_INVOICE_UPLOAD_FOLDER", export_invoice_uploads)
+    monkeypatch.setattr(Config, "PERMIT_UPLOAD_FOLDER", permit_uploads)
 
     class TestConfig(Config):
         TESTING = True
@@ -61,6 +73,9 @@ def tmp_config(tmp_path, monkeypatch):
         DATABASE_PATH = db_path
         SCHEMA_PATH = schema_path
         PRODUCT_UPLOAD_FOLDER = uploads
+        PURCHASE_INVOICE_UPLOAD_FOLDER = purchase_invoice_uploads
+        EXPORT_INVOICE_UPLOAD_FOLDER = export_invoice_uploads
+        PERMIT_UPLOAD_FOLDER = permit_uploads
         WTF_CSRF_ENABLED = False
 
     return TestConfig

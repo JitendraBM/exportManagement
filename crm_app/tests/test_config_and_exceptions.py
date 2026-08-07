@@ -6,6 +6,8 @@ default change from silently breaking currency conversion / auth flows that
 read these values.
 """
 
+import os
+
 from config import Config
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 
@@ -41,8 +43,16 @@ class TestTestIsolation:
 
     def test_container_uploads_point_at_the_tmp_folder(self, container, tmp_config):
         assert container.product_service.upload_folder == tmp_config.PRODUCT_UPLOAD_FOLDER
-        assert "uploads/products" in container.product_service.upload_folder
-        assert "app/static" not in container.product_service.upload_folder
+        assert "uploads/products" in container.product_service.upload_folder.replace(os.sep, "/")
+        assert "app/static" not in container.product_service.upload_folder.replace(os.sep, "/")
+
+    def test_every_backup_upload_folder_points_at_the_tmp_folder(self, container, tmp_path):
+        """The one that matters most: BackupService's restore moves each of
+        these folders aside and rmtrees it. A real path here deletes the
+        developer's working tree, so every entry must sit under tmp."""
+        for arcprefix, folder in container.backup_service.uploads_folders.items():
+            assert os.path.abspath(folder).startswith(str(tmp_path)), \
+                f"{arcprefix} points at a real folder: {folder}"
 
     def test_company_service_uploads_point_at_the_tmp_folder(self, container, tmp_config):
         assert container.company_service.upload_folder == tmp_config.PRODUCT_UPLOAD_FOLDER

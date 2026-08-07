@@ -1,0 +1,125 @@
+{# The BL DRAFT A4 sheet - the draft bill of lading for the shipping line.
+   Expects `invoice`, `company`, `draft` (assembled in routes/bl_drafts.py) and
+   `columns`.
+
+   Every value printed here comes out of that one `draft` dict, which the .docx
+   download is built from too - so the Word file and this sheet can never
+   disagree. Nothing is derived in the template.
+
+   Two bands: the bill-of-lading header box, then the per-container table whose
+   rows are the parent invoice's Export Packing List container split. #}
+<style>
+  .bl-sheet {
+    background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
+    padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.35;
+  }
+  .bl-title { text-align: center; font-size: 13px; font-weight: bold; padding-bottom: 6px; }
+  .bl-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .bl-sheet td, .bl-sheet th { border: 1px solid #000; padding: 3px 5px; vertical-align: top; word-wrap: break-word; }
+  .bl-lbl { font-weight: bold; }
+  .bl-mid { vertical-align: middle; }
+  .bl-c { text-align: center; }
+  .bl-box { min-height: 46px; }
+  /* The container table's header band, the green of the reference. */
+  .bl-grid { margin-top: 14px; }
+  .bl-grid th { background: #d9e2d0; font-weight: bold; text-align: center; }
+  .bl-grid td { text-align: center; }
+  .bl-grid tr.bl-tot td { font-weight: bold; }
+  @media print { .bl-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+</style>
+
+{% macro block(lines) -%}
+  {%- for line in lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor -%}
+{%- endmacro %}
+
+<div class="bl-sheet js-page-sheet">
+  <div class="bl-title">BL DRAFT</div>
+
+  <!-- ============ BILL OF LADING HEADER BOX ============ -->
+  <table>
+    <colgroup><col style="width:26%"><col style="width:26%"><col style="width:24%"><col style="width:24%"></colgroup>
+    <tr>
+      <td colspan="2" class="bl-lbl">SHIPPER (MAX 5 LINE)</td>
+      {# One box spanning the shipper and consignee rows, as the reference has it. #}
+      <td colspan="2" rowspan="4" class="bl-c bl-mid bl-lbl">
+        BOOKING NO<br><br>{{ draft.booking_no }}
+      </td>
+    </tr>
+    <tr><td colspan="2" class="bl-box">{{ block(draft.shipper) }}</td></tr>
+    <tr><td colspan="2" class="bl-lbl">Consignee</td></tr>
+    <tr><td colspan="2" class="bl-box">{{ block(draft.consignee) }}</td></tr>
+
+    <tr>
+      <td colspan="2" class="bl-lbl">Notify party</td>
+      <td colspan="2" class="bl-lbl">Notify party (MAX 5 LINE)</td>
+    </tr>
+    <tr>
+      <td colspan="2" class="bl-box">{{ block(draft.notify) }}</td>
+      <td colspan="2"></td>
+    </tr>
+
+    <tr>
+      <td colspan="2" class="bl-lbl">VESSEL AND VOYAGE NO:</td>
+      <td colspan="2" class="bl-lbl">PLACE OF RECEIPT:</td>
+    </tr>
+    <tr>
+      <td colspan="2">{{ draft.vessel_voyage_no }}</td>
+      <td colspan="2">{{ draft.place_of_receipt }}</td>
+    </tr>
+
+    <tr>
+      <td class="bl-lbl">PORT OF LOADING:</td>
+      <td class="bl-lbl">PORT OF DISCHARGE</td>
+      <td colspan="2" class="bl-lbl">PLACE OF DELIVERY:</td>
+    </tr>
+    <tr>
+      <td>{{ draft.port_of_loading }}</td>
+      <td>{{ draft.port_of_discharge }}</td>
+      <td colspan="2">{{ draft.place_of_delivery }}</td>
+    </tr>
+
+    <tr>
+      <td class="bl-lbl">CONTAINER NOS. MARKS &amp; NUMBERS</td>
+      <td colspan="2" class="bl-lbl">NUMBER AND KIND OF PACKAGES<br>DESCRIPTION OF GOODS</td>
+      <td class="bl-lbl bl-c">GROSS WEIGHT</td>
+    </tr>
+    <tr>
+      <td class="bl-mid" style="height:120px;">{{ draft.marks }}</td>
+      <td colspan="2">{{ block(draft.description) }}</td>
+      <td class="bl-c bl-mid">{{ draft.gross_weight_label }}</td>
+    </tr>
+  </table>
+
+  <!-- ============ CONTAINER TABLE (the packing list's split) ============ -->
+  <table class="bl-grid">
+    <thead>
+      <tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in draft.rows %}
+      <tr>
+        <td>{{ row.container_no or '' }}</td>
+        <td>{{ row.seal_no or '' }}</td>
+        <td>{{ '{:,.0f}'.format(row.pallets) }}</td>
+        <td>{{ '{:,.0f}'.format(row.quantity_boxes) }}</td>
+        <td>{{ '{:,.2f}'.format(row.quantity_value) }}</td>
+        <td>{{ '{:,.2f}'.format(row.gross_weight_kg) }}</td>
+        <td>{{ '{:,.2f}'.format(row.net_weight_kg) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ columns|length }}">No container split yet — save the export invoice's packing allocation to fill this in.</td></tr>
+      {% endfor %}
+      {% if draft.rows %}
+      <tr class="bl-tot">
+        <td colspan="2"></td>
+        <td>{{ '{:,.0f}'.format(draft.totals.pallets) }}</td>
+        <td>{{ '{:,.0f}'.format(draft.totals.quantity_boxes) }}</td>
+        <td>{{ '{:,.2f}'.format(draft.totals.quantity_value) }}</td>
+        <td>{{ '{:,.2f}'.format(draft.totals.gross_weight_kg) }}</td>
+        <td>{{ '{:,.2f}'.format(draft.totals.net_weight_kg) }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

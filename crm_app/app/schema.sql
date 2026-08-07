@@ -397,6 +397,17 @@ CREATE TABLE IF NOT EXISTS misc_nature_of_contracts (
 );
 CREATE INDEX IF NOT EXISTS idx_misc_noc_company ON misc_nature_of_contracts(company_id);
 
+CREATE TABLE IF NOT EXISTS misc_ports_of_loading (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "Port of Loading", e.g. MUNDRA
+    pin_code     TEXT NOT NULL,   -- "Port of loading Pincode", e.g. 370421
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_pol_company ON misc_ports_of_loading(company_id);
+
 -- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
 -- Company" area. Each permit records a stuffing-place name + place of
@@ -864,6 +875,30 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     examination_date            TEXT,          -- defaults to the creation date
     location_code_08b           TEXT,          -- section 08B, free text
     booking_no                  TEXT,          -- shipping line booking number, printed above the 11B container table
+    vessel_voyage_no            TEXT,          -- vessel name + voyage number, printed in the "Vessel / Flight Name & No" cell of both sheets
+    -- The four columns the Tax Invoice attachment owns. All are typed on that
+    -- document's own edit form, never on the export invoice form, so they are
+    -- written by ExportInvoiceRepository.update_tax_invoice_details rather
+    -- than the shared header tuple. tax_invoice_number/_date fall back to the
+    -- export invoice's own number/date while blank, which is how every tax
+    -- invoice starts out.
+    eway_bill_no                TEXT,          -- e-way bill number + date, printed on the Tax Invoice only
+    eway_bill_date              TEXT,
+    tax_invoice_number          TEXT,
+    tax_invoice_date            TEXT,
+    -- The VGM declaration's manual-entry cells (the shaded rows of the
+    -- reference). Everything else on that sheet is derived from this invoice,
+    -- its containers or Our Company. Typed on the VGM declaration's own edit
+    -- form, so they too bypass the shared header tuple. Blank means "use the
+    -- default" - see the ExportInvoice.vgm_* properties.
+    vgm_signatory               TEXT,          -- name & designation of the official signing
+    vgm_contact_24x7            TEXT,          -- 24x7 contact for that official
+    vgm_weighing_method         TEXT,          -- Method-1 / Method-2
+    vgm_cargo_type              TEXT,          -- Normal / Reefer / Hazardous / Others
+    vgm_hazardous_details       TEXT,          -- UN No, IMDG Class when hazardous
+    -- The commercial invoice packing list's only two typed cells.
+    bill_of_lading_no           TEXT,
+    bill_of_lading_date         TEXT,
     issuing_authority           TEXT,
     issuing_authority_address   TEXT,
     permission_no               TEXT,
@@ -936,9 +971,24 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     line_seal_no          TEXT,
     rfid_seal_no          TEXT,
     vehicle_no            TEXT,
+    lr_no                 TEXT,          -- lorry receipt / consignment note number for that container's road leg
+    transporter_name      TEXT,          -- snapshot of the chosen transporters.name, so renaming/deleting a transporter can't rewrite a saved invoice
+    max_permitted_weight  TEXT,
     tare_weight           TEXT,
     gross_weight          TEXT,
-    net_weight            TEXT
+    net_weight            TEXT,
+    -- Typed on the VGM attachment, which is a row per physical container:
+    -- everything else on that sheet is derived, these two are weighed facts.
+    -- Like gross_weight/net_weight they have no input on the export invoice
+    -- form, so ExportInvoiceService.update carries them forward by row
+    -- position rather than letting a re-save of that form blank them.
+    weighbridge_name      TEXT,
+    weighing_slip_no      TEXT,
+    -- Typed on the E-Seal sheet, the other per-container document: when this
+    -- container's e-seal was applied. Carried forward on an export invoice
+    -- save the same way the weighbridge pair is.
+    sealing_time          TEXT,          -- HH:mm
+    sealing_date          TEXT           -- yyyy-mm-dd, printed dd/mm/yyyy
 );
 
 -- Purchase Details: supplier GSTIN + invoice-no rows imported from the

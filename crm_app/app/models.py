@@ -500,6 +500,32 @@ class MiscNatureOfContract:
         )
 
 
+@dataclass
+class MiscPortOfLoading:
+    """One row of the PORT OF LOADING drop list maintained under
+    Administration -> Miscellaneous: the port a shipment leaves from and that
+    port's PIN code (the figure the GST/e-way-bill paperwork asks for)."""
+    id: Optional[int]
+    company_id: int
+    name: str        # "Port of Loading", e.g. MUNDRA
+    pin_code: str    # "Port of loading Pincode", e.g. 370421
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        """How the port reads where both halves are shown: `MUNDRA - 370421`."""
+        return f"{self.name} - {self.pin_code}"
+
+    @staticmethod
+    def from_row(row) -> "MiscPortOfLoading":
+        return MiscPortOfLoading(
+            id=row["id"], company_id=row["company_id"],
+            name=row["name"], pin_code=row["pin_code"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
 # The currency dropdowns used to be a hard-coded list on the payment form.
 # Until an admin adds a row under Administration -> Miscellaneous, that same
 # list is what the dropdowns fall back to, so nothing breaks on upgrade.
@@ -1771,6 +1797,23 @@ class ExportInvoice(CifMoneyLadder):
     examination_date: Optional[str] = None
     location_code_08b: Optional[str] = None
     booking_no: Optional[str] = None
+    vessel_voyage_no: Optional[str] = None  # printed in the "Vessel / Flight Name & No" cell of both sheets
+    eway_bill_no: Optional[str] = None  # printed on the Tax Invoice attachment only
+    eway_bill_date: Optional[str] = None
+    # The Tax Invoice attachment's own number/date. Blank means "the export
+    # invoice's own" - see tax_invoice_number_printed / _date_printed below.
+    tax_invoice_number: Optional[str] = None
+    tax_invoice_date: Optional[str] = None
+    # The VGM declaration's manual-entry cells. Blank means "use the default"
+    # - see the vgm_*_printed properties below.
+    vgm_signatory: Optional[str] = None
+    vgm_contact_24x7: Optional[str] = None
+    vgm_weighing_method: Optional[str] = None
+    vgm_cargo_type: Optional[str] = None
+    vgm_hazardous_details: Optional[str] = None
+    # The commercial invoice packing list's only two typed cells.
+    bill_of_lading_no: Optional[str] = None
+    bill_of_lading_date: Optional[str] = None
     issuing_authority: Optional[str] = None
     issuing_authority_address: Optional[str] = None
     permission_no: Optional[str] = None
@@ -1796,7 +1839,7 @@ class ExportInvoice(CifMoneyLadder):
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight, gross_weight, net_weight}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
@@ -1855,6 +1898,18 @@ class ExportInvoice(CifMoneyLadder):
             examination_date=g("examination_date"),
             location_code_08b=g("location_code_08b"),
             booking_no=g("booking_no"),
+            vessel_voyage_no=g("vessel_voyage_no"),
+            eway_bill_no=g("eway_bill_no"),
+            eway_bill_date=g("eway_bill_date"),
+            tax_invoice_number=g("tax_invoice_number"),
+            tax_invoice_date=g("tax_invoice_date"),
+            vgm_signatory=g("vgm_signatory"),
+            vgm_contact_24x7=g("vgm_contact_24x7"),
+            vgm_weighing_method=g("vgm_weighing_method"),
+            vgm_cargo_type=g("vgm_cargo_type"),
+            vgm_hazardous_details=g("vgm_hazardous_details"),
+            bill_of_lading_no=g("bill_of_lading_no"),
+            bill_of_lading_date=g("bill_of_lading_date"),
             issuing_authority=g("issuing_authority"),
             issuing_authority_address=g("issuing_authority_address"),
             permission_no=g("permission_no"),
@@ -1914,9 +1969,114 @@ class ExportInvoice(CifMoneyLadder):
         """Invoice value less insurance / sea freight / certification / other."""
         return self.fob_value_usd
 
+    # ---- FOB-priced view of the goods lines -----------------------------
+    # The customer's copy of the commercial invoice quotes an FOB rate rather
+    # than the CIF rate every other document shows. This is the exact inverse
+    # of the quotation's FOB uplift (see v39): the gap between CIF and FOB -
+    # the four charges plus the discount - is spread uniformly over the total
+    # alternate quantity and taken off each line's rate.
+    def fob_priced_lines(self) -> List[dict]:
+        """[{item, rate, total}] - each goods line at its FOB rate.
+
+        The rate is rounded to the two decimals the sheet prints and the line
+        total follows FROM the rounded rate, so a customer multiplying the
+        printed rate by the printed quantity gets the printed total. That
+        makes the FOB and CIF figures on this sheet differ very slightly from
+        the exact ladder elsewhere - the price of a sheet that foots."""
+        total_qty = sum(i.quantity_value or 0 for i in self.items)
+        reduction = ((self.cif_value_usd - self.fob_value_usd) / total_qty) if total_qty else 0
+        lines = []
+        for item in self.items:
+            rate = round((item.price_usd or 0) - reduction, 2)
+            lines.append({
+                "item": item,
+                "rate": rate,
+                "total": round(rate * (item.quantity_value or 0), 2),
+            })
+        return lines
+
+    @property
+    def fob_priced_total(self) -> float:
+        """What the FOB-priced goods column adds up to."""
+        return round(sum(line["total"] for line in self.fob_priced_lines()), 2)
+
+    @property
+    def fob_priced_cif_total(self) -> float:
+        """The CIF total built back UP from the FOB-priced column: the charges
+        and the discount that were spread out are added back on. Equals
+        cif_value_usd but for the rate rounding above - the gap between the two
+        is `fob_priced_round_off`, which the sheet prints as its own row."""
+        return round(self.fob_priced_total + self.charges_total + self.discount_amount, 2)
+
+    @property
+    def fob_priced_round_off(self) -> float:
+        """The cents the FOB-priced column can't carry.
+
+        `fob_priced_lines` rounds each rate to the two decimals the sheet
+        prints and takes the line total FROM that rounded rate, so the column
+        adds up to a hair either side of the exact ladder. This is that hair.
+        Printed as its own ROUND-OFF row, it lets the customer's copy close on
+        the SAME cif_value_usd every other document quotes while every column
+        on it still multiplies and adds out - the same bargain
+        Quotation.round_off strikes for FOB-typed prices."""
+        return round(self.cif_value_usd - self.fob_priced_cif_total, 2)
+
+    @property
+    def tax_invoice_number_printed(self) -> str:
+        """What the Tax Invoice attachment prints in its Invoice No cell. Its
+        own number once given one, otherwise this export invoice's - a tax
+        invoice starts out numbered exactly as its parent."""
+        return self.tax_invoice_number or self.export_invoice_number
+
+    @property
+    def tax_invoice_date_printed(self) -> str:
+        """As above, for the Invoice Date cell."""
+        return self.tax_invoice_date or self.invoice_date
+
+    # ---- VGM declaration defaults ---------------------------------------
+    # The manual-entry cells are optional; each falls back to what the app
+    # already knows (or to the value the reference form carries), so the sheet
+    # is complete before anyone opens its edit form.
+    VGM_DEFAULT_WEIGHING_METHOD = "METHOD-1"
+    VGM_DEFAULT_CARGO_TYPE = "NORMAL"
+    VGM_DEFAULT_HAZARDOUS_DETAILS = "N/A"
+
+    def vgm_signatory_printed(self, company=None) -> str:
+        """Falls back to this invoice's own authorised signatory, worded the
+        way the sheets already word it ('<name> <designation> of <company>')."""
+        if self.vgm_signatory:
+            return self.vgm_signatory
+        if not self.authorised_person_name:
+            return "-"
+        parts = [self.authorised_person_name]
+        if self.authorised_person_designation:
+            parts.append(self.authorised_person_designation)
+        if company and company.company_name:
+            parts.append(f"of {company.company_name.upper()}")
+        return " ".join(parts)
+
+    @property
+    def vgm_weighing_method_printed(self) -> str:
+        return self.vgm_weighing_method or self.VGM_DEFAULT_WEIGHING_METHOD
+
+    @property
+    def vgm_cargo_type_printed(self) -> str:
+        return self.vgm_cargo_type or self.VGM_DEFAULT_CARGO_TYPE
+
+    @property
+    def vgm_hazardous_details_printed(self) -> str:
+        return self.vgm_hazardous_details or self.VGM_DEFAULT_HAZARDOUS_DETAILS
+
+    def in_inr(self, value: float) -> float:
+        """Any of this invoice's own-currency figures at its own exchange
+        rate. The Tax Invoice attachment prints the WHOLE money ladder in INR,
+        so the conversion lives here once rather than being re-multiplied per
+        row in a template."""
+        return (value or 0) * (self.exchange_rate or 0)
+
     @property
     def invoice_value_inr(self) -> float:
-        return self.invoice_value_usd * (self.exchange_rate or 0)
+        return self.in_inr(self.invoice_value_usd)
 
     @property
     def tax_total_inr(self) -> float:
@@ -1943,6 +2103,19 @@ class ExportInvoice(CifMoneyLadder):
     @property
     def total_containers(self) -> int:
         return sum(int(c.get("container_count") or 0) for c in self.containers)
+
+    @property
+    def container_types_expanded(self) -> List[str]:
+        """The booked Container Details list flattened to one TYPE per
+        physical container - `2 x 20FT FCL` becomes ['20FT FCL', '20FT FCL'].
+
+        That total is what drives how many section-11B rows the form asks for,
+        so this list lines up with `container_details` by position, which is
+        how the VGM attachment labels each container's size."""
+        types: List[str] = []
+        for c in self.containers:
+            types += [c.get("container_type") or ""] * int(c.get("container_count") or 0)
+        return types
 
     @property
     def top_costliest_items(self) -> List[ExportInvoiceItem]:
@@ -2069,20 +2242,22 @@ class ExportPackingList:
     @property
     def container_totals(self) -> dict:
         """container_sr_no -> {net_weight_kg, gross_weight_kg, pallets,
-        quantity_boxes} summed across every goods line loaded into that
-        physical container. Lets the Export Invoice's own 11B table show
-        each container's actual weight/pallets/boxes (from what was typed
+        quantity_boxes, quantity_value} summed across every goods line loaded
+        into that physical container. Lets the Export Invoice's own 11B table
+        show each container's actual weight/pallets/boxes (from what was typed
         into the packing list's container split) instead of separately
-        hand-typed figures."""
+        hand-typed figures, and gives the BL draft its per-container line."""
         totals: dict = {}
         for i in self.items:
             t = totals.setdefault(i.container_sr_no, {
-                "net_weight_kg": 0.0, "gross_weight_kg": 0.0, "pallets": 0.0, "quantity_boxes": 0.0,
+                "net_weight_kg": 0.0, "gross_weight_kg": 0.0, "pallets": 0.0,
+                "quantity_boxes": 0.0, "quantity_value": 0.0,
             })
             t["net_weight_kg"] += i.net_weight_kg or 0
             t["gross_weight_kg"] += i.gross_weight_kg or 0
             t["pallets"] += i.pallets or 0
             t["quantity_boxes"] += i.quantity_boxes or 0
+            t["quantity_value"] += i.quantity_value or 0
         return totals
 
     @property
@@ -2111,10 +2286,10 @@ class ExportPackingList:
     def container_rows(self) -> List[dict]:
         """One row per physical container - container_no/seal_no/rfid_seal_no
         (snapshotted identity, from that container's first item) alongside
-        its pallets/quantity_boxes/gross_weight_kg (summed across every goods
-        line loaded into it, via `container_totals`). Feeds the Export
-        Invoice's standalone Annexure-C container table (section 11), whose
-        columns are exactly these six."""
+        every quantity summed across the goods lines loaded into it (via
+        `container_totals`). Feeds the Export Invoice's standalone Annexure-C
+        container table (section 11), which reads six of these keys, and the
+        BL draft's container table, which reads seven."""
         totals = self.container_totals
         rows: List[dict] = []
         seen = set()
@@ -2130,7 +2305,9 @@ class ExportPackingList:
                 "rfid_seal_no": item.rfid_seal_no,
                 "pallets": t.get("pallets", 0.0),
                 "quantity_boxes": t.get("quantity_boxes", 0.0),
+                "quantity_value": t.get("quantity_value", 0.0),
                 "gross_weight_kg": t.get("gross_weight_kg", 0.0),
+                "net_weight_kg": t.get("net_weight_kg", 0.0),
             })
         return rows
 

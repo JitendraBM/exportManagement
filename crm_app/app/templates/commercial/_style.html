@@ -1,0 +1,39 @@
+{# The banded-sheet styling shared by the COMMERCIAL INVOICE and the
+   COMMERCIAL INVOICE PACKING LIST, which print the same header band and so
+   must look identical. Both sheets use the `ci-` prefix. #}
+<style>
+  .ci-sheet {
+    background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
+    padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 8.5px; line-height: 1.3;
+  }
+  .ci-title { text-align: center; font-size: 13px; font-weight: bold; padding-bottom: 4px; }
+  .ci-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
+  .ci-sheet td { border: 1px solid #000; padding: 1px 4px; vertical-align: top; word-wrap: break-word; }
+  /* Nested tables sit flush inside their host cell - the host supplies the
+     outer border, the nested table the interior rules. Every row keeps its
+     own border-bottom: the two header halves have different row counts, so
+     the shorter one must close itself off under its own last line. */
+  .ci-nest > td { padding: 0; }
+  .ci-nest table { margin-top: 0; }
+  .ci-nest table td { border: none; border-bottom: 1px solid #000; }
+  .ci-nest table td + td { border-left: 1px solid #000; }
+  /* Opt out per-row for the Consigner / Consignee / Notify labels, which sit
+     directly above their address block with no rule between them. */
+  .ci-nest table tr.ci-nb td { border-bottom: none; }
+
+  .ci-lbl { font-weight: bold; }
+  .ci-blk { font-weight: bold; }
+  .ci-mid { vertical-align: middle; }
+  .ci-c { text-align: center; }
+  .ci-r { text-align: right; }
+  .ci-num { text-align: right; white-space: nowrap; }
+  .ci-cnum { text-align: center; white-space: nowrap; }
+  .ci-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
+  .ci-items thead td { font-weight: normal; text-align: center; vertical-align: middle; }
+  .ci-items tbody td { vertical-align: top; }
+  .ci-goods { font-weight: bold; }
+  .ci-tot td { font-weight: bold; }
+  .ci-sign { height: 46px; }
+  @media print { .ci-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+</style>

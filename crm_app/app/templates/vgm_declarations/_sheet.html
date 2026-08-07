@@ -1,0 +1,68 @@
+{# The VGM declaration sheet - "INFORMATION ABOUT VERIFIED GROSS MASS OF
+   CONTAINER". Expects `invoice`, `company` and `particulars` (assembled in
+   routes/vgm_declarations.py as (label, value, is_manual) triples).
+
+   Nothing is derived in this template: the route decides every value,
+   including whether a per-container cell lists its containers or just points
+   at the VGM attachment sheet. #}
+<style>
+  .vgmd-sheet {
+    background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
+    padding: 8mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; line-height: 1.4;
+  }
+  .vgmd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .vgmd-head-name { font-size: 15px; font-weight: bold; }
+  .vgmd-head table { border-collapse: collapse; }
+  .vgmd-head td { padding: 0 18px 0 0; font-weight: bold; }
+  .vgmd-logo { max-height: 78px; max-width: 150px; }
+  .vgmd-rule { border-bottom: 1.5px solid #000; margin: 6px 0 16px; }
+
+  .vgmd-sheet table.vgmd-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .vgmd-grid td { border: 1px solid #000; padding: 4px 7px; vertical-align: middle; }
+  .vgmd-title { text-align: center; font-weight: bold; font-size: 11px; text-decoration: underline; }
+  .vgmd-colhead { text-align: center; font-weight: bold; }
+  .vgmd-sr { text-align: center; }
+  @media print { .vgmd-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+</style>
+
+<div class="vgmd-sheet js-page-sheet">
+  <!-- ============ LETTERHEAD ============ -->
+  <div class="vgmd-head">
+    <div>
+      <div class="vgmd-head-name">{{ company.company_name|upper if company else '' }}</div>
+      <div style="font-weight:bold;">
+        {{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}
+      </div>
+      <table>
+        {% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
+        {% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
+        <tr><td>EMAIL</td><td>{{ email.value|upper if email else '-' }}</td></tr>
+        <tr><td>CONTACT</td><td>{{ phone.value if phone else '-' }}</td></tr>
+      </table>
+    </div>
+    {% if company and company.logo_path %}
+    <img class="vgmd-logo" src="{{ url_for('static', filename=company.logo_path) }}" alt="">
+    {% endif %}
+  </div>
+  <div class="vgmd-rule"></div>
+
+  <!-- ============ PARTICULARS ============ -->
+  <table class="vgmd-grid">
+    <colgroup><col style="width:9%"><col style="width:53%"><col style="width:38%"></colgroup>
+    <tr><td colspan="3" class="vgmd-title">INFORMATION ABOUT VERIFIED GROSS MASS OF CONTAINER</td></tr>
+    <tr>
+      <td class="vgmd-colhead">Sr No</td>
+      <td class="vgmd-colhead">Details of Information</td>
+      <td class="vgmd-colhead">Particulars</td>
+    </tr>
+    {% for label, value, is_manual in particulars %}
+    <tr>
+      <td class="vgmd-sr">{{ loop.index }}</td>
+      <td>{{ label }}</td>
+      {# Multi-value cells (up to three containers) arrive newline-separated. #}
+      <td>{{ (value or '-')|replace('\n', '<br>')|safe }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>

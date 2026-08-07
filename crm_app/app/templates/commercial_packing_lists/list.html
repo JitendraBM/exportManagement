@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Commercial Invoice Packing Lists{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>Commercial Invoice Packing Lists</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has one — there is nothing to create here. It pairs the commercial invoice's
+    header with that invoice's export packing list split, a row per container and goods line. The only
+    fields it owns are the bill of lading number and date; open one and use <strong>Edit</strong> for those.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Invoice</th>
+          <th>Date</th>
+          <th>Consignee</th>
+          <th>Bill of lading no.</th>
+          <th class="num">Containers</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.invoice_date }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="text-sm">{{ invoice.bill_of_lading_no or '—' }}</td>
+          <td class="num text-sm">{{ invoice.total_containers }}</td>
+          <td><a href="{{ url_for('commercial_packing_lists.view_commercial_packing_list', export_invoice_id=invoice.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
