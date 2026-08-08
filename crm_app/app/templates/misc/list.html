@@ -136,4 +136,68 @@
   </form>
 </div>
 
+<div class="card">
+  <div class="card-header">
+    <h3>Port of Loading</h3>
+    <span class="text-sm text-soft">The ports shipments leave from, each with the PIN code the GST paperwork asks for</span>
+  </div>
+
+  {% if ports_of_loading %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Port of Loading</th>
+          <th>Port of loading Pincode</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for port in ports_of_loading %}
+        {% if edit_list == 'pol' and edit_id == port.id %}
+        <tr>
+          <form method="POST" action="{{ url_for('misc.edit_port_of_loading', entry_id=port.id) }}" id="edit-pol-{{ port.id }}"></form>
+          <td><input type="text" name="name" value="{{ port.name }}" form="edit-pol-{{ port.id }}" required></td>
+          <td><input type="text" name="pin_code" value="{{ port.pin_code }}" form="edit-pol-{{ port.id }}" required></td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <button type="submit" class="btn btn-primary btn-sm" form="edit-pol-{{ port.id }}">Save</button>
+            <a href="{{ url_for('misc.index') }}" class="btn btn-ghost btn-sm">Cancel</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td>{{ port.name }}</td>
+          <td class="mono">{{ port.pin_code }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <a href="{{ url_for('misc.index', list='pol', edit=port.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('misc.delete_port_of_loading', entry_id=port.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete {{ port.name }} from the port of loading list? Documents already saved keep the port they were printed with.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">Nothing added yet — add the ports your shipments load at, with each port's PIN code.</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('misc.add_port_of_loading') }}" style="margin-top:18px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="pol_name">Port of Loading<span class="required-mark">*</span></label>
+        <input type="text" id="pol_name" name="name" placeholder="e.g. MUNDRA" required>
+      </div>
+      <div class="field">
+        <label for="pol_pin_code">Port of loading Pincode<span class="required-mark">*</span></label>
+        <input type="text" id="pol_pin_code" name="pin_code" placeholder="e.g. 370421" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add port of loading</button>
+  </form>
+</div>
+
 {% endblock %}

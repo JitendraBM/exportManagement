@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}VGM Declarations{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>VGM Declarations</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has a VGM declaration (<em>Information About Verified Gross Mass Of
+    Container</em>) — there is nothing to create here. Booking no. and shipper details come from the
+    invoice and Our Company, and the per-container particulars from its
+    <strong>VGM attachment</strong>: listed here for a single-container shipment, and shown as
+    <strong>VGM ATTACHMENT</strong> beyond that — with the attachment table printed underneath the
+    declaration up to ten containers, past which it prints on its own. Only five particulars are
+    typed, on each declaration's own edit form.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Export invoice</th>
+          <th>Date</th>
+          <th>Consignee</th>
+          <th>Booking no.</th>
+          <th class="num">Containers</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.invoice_date }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="text-sm">{{ invoice.booking_no or '—' }}</td>
+          <td class="num text-sm">{{ invoice.total_containers }}</td>
+          <td><a href="{{ url_for('vgm_declarations.view_vgm_declaration', export_invoice_id=invoice.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

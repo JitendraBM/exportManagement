@@ -25,6 +25,7 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    MiscPortOfLoadingRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
@@ -74,6 +75,7 @@ class ServiceContainer:
         self.permit_repo = PermitRepository(db)
         self.misc_currency_repo = MiscCurrencyRepository(db)
         self.misc_nature_of_contract_repo = MiscNatureOfContractRepository(db)
+        self.misc_port_of_loading_repo = MiscPortOfLoadingRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -121,7 +123,9 @@ class ServiceContainer:
             self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
-        self.misc_list_service = MiscListService(self.misc_currency_repo, self.misc_nature_of_contract_repo)
+        self.misc_list_service = MiscListService(
+            self.misc_currency_repo, self.misc_nature_of_contract_repo, self.misc_port_of_loading_repo,
+        )
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
@@ -220,11 +224,16 @@ def create_app(config_class=Config) -> Flask:
         nature_of_contract_options = (
             app.container.misc_list_service.list_nature_of_contracts(user.company_id) if user else []
         )
+        # ...and for the ports of loading every shipping document picks from.
+        port_of_loading_options = (
+            app.container.misc_list_service.list_ports_of_loading(user.company_id) if user else []
+        )
         return dict(
             current_user=g.get("user"),
             our_company=our_company,
             currency_options=currency_options,
             nature_of_contract_options=nature_of_contract_options,
+            port_of_loading_options=port_of_loading_options,
             LEAD_STATUSES=LEAD_STATUSES,
             CLIENT_STATUSES=CLIENT_STATUSES,
             CLIENT_TYPES=CLIENT_TYPES,
@@ -258,6 +267,15 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.export_invoices import export_invoices_bp
     from app.routes.export_packing_lists import export_packing_lists_bp
     from app.routes.export_annexures import export_annexures_bp
+    from app.routes.tax_invoices import tax_invoices_bp
+    from app.routes.bl_drafts import bl_drafts_bp
+    from app.routes.vgm_attachments import vgm_attachments_bp
+    from app.routes.vgm_declarations import vgm_declarations_bp
+    from app.routes.eseals import eseals_bp
+    from app.routes.eway_bills import eway_bills_bp
+    from app.routes.commercial_invoices import commercial_invoices_bp
+    from app.routes.commercial_packing_lists import commercial_packing_lists_bp
+    from app.routes.customer_invoices import customer_invoices_bp
     from app.routes.packing_lists import packing_lists_bp
     from app.routes.profile import profile_bp
     from app.routes.backup import backup_bp
@@ -286,6 +304,15 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(export_invoices_bp)
     app.register_blueprint(export_packing_lists_bp)
     app.register_blueprint(export_annexures_bp)
+    app.register_blueprint(tax_invoices_bp)
+    app.register_blueprint(bl_drafts_bp)
+    app.register_blueprint(vgm_attachments_bp)
+    app.register_blueprint(vgm_declarations_bp)
+    app.register_blueprint(eseals_bp)
+    app.register_blueprint(eway_bills_bp)
+    app.register_blueprint(commercial_invoices_bp)
+    app.register_blueprint(commercial_packing_lists_bp)
+    app.register_blueprint(customer_invoices_bp)
     app.register_blueprint(packing_lists_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(backup_bp)

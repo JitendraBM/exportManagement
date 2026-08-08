@@ -29,7 +29,7 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, Transporter, Permit, MiscCurrency, MiscNatureOfContract, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Transporter, Permit, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
@@ -48,6 +48,7 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    MiscPortOfLoadingRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 from app.utils import drops_insurance, drops_sea_freight
@@ -172,18 +173,21 @@ class MiscListService:
       - CURRENCY (name of currency + currency symbol),
       - NATURE OF CONTRACT (a name), which fills the delivery-terms field
         on every document whatever that document calls it ("Nature of
-        contract", "Shipping terms", "Terms of delivery").
+        contract", "Shipping terms", "Terms of delivery"),
+      - PORT OF LOADING (a port name + that port's PIN code).
 
     Admin-only to edit (the route enforces that); everything is
     company-scoped. Currency reads fall back to DEFAULT_CURRENCIES while a
     company has not added one of its own, so that dropdown is never empty;
-    nature of contract has no built-in list, since the values are entirely
-    a company's own trade terms."""
+    nature of contract and port of loading have no built-in list, since the
+    values are entirely a company's own trade terms and shipping ports."""
 
     def __init__(self, currency_repo: MiscCurrencyRepository,
-                 nature_of_contract_repo: Optional[MiscNatureOfContractRepository] = None):
+                 nature_of_contract_repo: Optional[MiscNatureOfContractRepository] = None,
+                 port_of_loading_repo: Optional[MiscPortOfLoadingRepository] = None):
         self.currency_repo = currency_repo
         self.nature_of_contract_repo = nature_of_contract_repo
+        self.port_of_loading_repo = port_of_loading_repo
 
     # ---- reads --------------------------------------------------
     def list_currencies(self, company_id: int) -> List[MiscCurrency]:
@@ -293,6 +297,53 @@ class MiscListService:
     def delete_nature_of_contract(self, current_user: User, entry_id: int) -> MiscNatureOfContract:
         entry = self.get_nature_of_contract(entry_id, current_user.company_id)
         self.nature_of_contract_repo.delete(entry_id)
+        return entry
+
+    # ---- port of loading --------------------------------------------------
+    def list_ports_of_loading(self, company_id: int) -> List[MiscPortOfLoading]:
+        return self.port_of_loading_repo.list_all(company_id)
+
+    def get_port_of_loading(self, entry_id: int, company_id: int) -> MiscPortOfLoading:
+        entry = self.port_of_loading_repo.get_by_id(entry_id)
+        if not entry or entry.company_id != company_id:
+            raise NotFoundError(f"Port of loading #{entry_id} not found.")
+        return entry
+
+    def find_port_of_loading(self, company_id: int, name: str) -> Optional[MiscPortOfLoading]:
+        """The saved port matching a submitted name - used to pick up that
+        port's PIN code without asking for it a second time."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        return self.port_of_loading_repo.find_by_name(company_id, name)
+
+    def _clean_port_of_loading(self, current_user: User, fields: dict) -> MiscPortOfLoading:
+        name = (fields.get("name") or "").strip()
+        pin_code = (fields.get("pin_code") or "").strip()
+        if not name:
+            raise ValidationError("Port of Loading is compulsory.")
+        if not pin_code:
+            raise ValidationError("Port of loading Pincode is compulsory.")
+        return MiscPortOfLoading(id=None, company_id=current_user.company_id, name=name, pin_code=pin_code)
+
+    def create_port_of_loading(self, current_user: User, fields: dict) -> MiscPortOfLoading:
+        entry = self._clean_port_of_loading(current_user, fields)
+        if self.port_of_loading_repo.find_by_name(current_user.company_id, entry.name):
+            raise ValidationError(f"'{entry.name}' is already on the port of loading list.")
+        return self.port_of_loading_repo.create(entry)
+
+    def update_port_of_loading(self, current_user: User, entry_id: int, fields: dict) -> MiscPortOfLoading:
+        self.get_port_of_loading(entry_id, current_user.company_id)
+        entry = self._clean_port_of_loading(current_user, fields)
+        clash = self.port_of_loading_repo.find_by_name(current_user.company_id, entry.name)
+        if clash and clash.id != entry_id:
+            raise ValidationError(f"'{entry.name}' is already on the port of loading list.")
+        self.port_of_loading_repo.update(entry_id, entry)
+        return self.get_port_of_loading(entry_id, current_user.company_id)
+
+    def delete_port_of_loading(self, current_user: User, entry_id: int) -> MiscPortOfLoading:
+        entry = self.get_port_of_loading(entry_id, current_user.company_id)
+        self.port_of_loading_repo.delete(entry_id)
         return entry
 
 
@@ -3495,11 +3546,13 @@ class ExportInvoiceService:
             examination_date=(fields.get("examination_date") or "").strip() or None,
             location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
             booking_no=(fields.get("booking_no") or "").strip() or None,
+            vessel_voyage_no=(fields.get("vessel_voyage_no") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
             issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
             permission_no=(fields.get("permission_no") or "").strip() or None,
             permission_date=(fields.get("permission_date") or "").strip() or None,
             permission_expiry=(fields.get("permission_expiry") or "").strip() or None,
+            permission_is_one_time=(fields.get("permission_is_one_time") or "").strip() in ("1", "true", "on"),
             manufacturer_name=(fields.get("manufacturer_name") or "").strip() or None,
             manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
             stuffing_location=(fields.get("stuffing_location") or "").strip() or None,
@@ -3553,16 +3606,17 @@ class ExportInvoiceService:
 
     @staticmethod
     def _clean_container_details(raw) -> List[dict]:
-        # gross_weight/net_weight have no form field (unlike tare_weight and
-        # the other typed fields below) - they default to None here and
-        # update() carries the stored values forward by row position so an
-        # edit doesn't wipe them.
+        # CARRIED_CONTAINER_FIELDS have no input on the export invoice form
+        # (unlike tare_weight and the other typed fields above), so they
+        # default to None here and update() carries the stored values forward
+        # by row position - see the comment on that constant.
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no", "tare_weight")}
-            values["gross_weight"] = None
-            values["net_weight"] = None
+                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no",
+                                "lr_no", "transporter_name", "max_permitted_weight", "tare_weight")}
+            for key in ExportInvoiceService.CARRIED_CONTAINER_FIELDS:
+                values[key] = None
             if any(values.values()):
                 rows.append(values)
         return rows
@@ -3657,13 +3711,14 @@ class ExportInvoiceService:
         invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
         apply_fob_uplift(invoice)
 
-        # gross_weight/net_weight aren't editable from this form - carry the
-        # stored values forward by row position so editing anything else
-        # doesn't wipe them.
+        # None of CARRIED_CONTAINER_FIELDS is editable from this form - carry
+        # the stored values forward by row position so editing anything else
+        # doesn't wipe them. Saving this form rewrites the 11B rows wholesale,
+        # so without this they would be lost.
         for i, cd in enumerate(invoice.container_details):
             if i < len(existing.container_details):
-                cd["gross_weight"] = existing.container_details[i].get("gross_weight")
-                cd["net_weight"] = existing.container_details[i].get("net_weight")
+                for key in self.CARRIED_CONTAINER_FIELDS:
+                    cd[key] = existing.container_details[i].get(key)
 
         # Exchange rate is set once by anyone; changing it later is admin-only.
         # (The form disables the field for non-admins, so a normal edit
@@ -3695,6 +3750,124 @@ class ExportInvoiceService:
         if self.party_repos:
             advance_client_status(self.party_repos, self.lead_repo, updated.lead_id, "export_invoice")
         return updated
+
+    def update_tax_invoice_details(self, current_user: User, invoice_id: int, fields: dict) -> ExportInvoice:
+        """Everything the Tax Invoice attachment owns: its own number and
+        date, and the e-way bill number and date (which appear on that sheet
+        and nowhere else, so they are asked for there rather than on the
+        export invoice form). Every other field on the sheet derives from this
+        invoice, so its form asks for nothing more.
+
+        All four are optional. A blank tax invoice number/date falls back to
+        this invoice's own (see ExportInvoice.tax_invoice_*_printed), which is
+        how a tax invoice starts out.
+
+        Unlike the export invoice number the tax invoice number is not checked
+        for uniqueness: it is a reference typed to match the physical
+        paperwork, and nothing looks an invoice up by it."""
+        # Ownership first, so a too-long number posted at another company's
+        # invoice still 404s rather than answering with a validation message.
+        self._assert_can_modify(self.get(invoice_id, current_user.company_id), current_user)
+        if len((fields.get("tax_invoice_number") or "").strip()) > 16:
+            raise ValidationError("Tax invoice number must be at most 16 characters.")
+        return self._update_document_fields(
+            current_user, invoice_id, fields, ExportInvoiceRepository.TAX_INVOICE_FIELDS)
+
+    def _update_document_fields(self, current_user: User, invoice_id: int, fields: dict,
+                                names) -> ExportInvoice:
+        """Shared by the attachments that own a handful of columns on the
+        export invoice each (tax invoice, VGM declaration, commercial packing
+        list): check ownership, blank-to-NULL, and write only `names`."""
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        cleaned = {name: (fields.get(name) or "").strip() or None for name in names}
+        self.export_invoice_repo.update_document_fields(invoice_id, cleaned, names)
+        return self.get(invoice_id, current_user.company_id)
+
+    def update_packing_list_details(self, current_user: User, invoice_id: int,
+                                    fields: dict) -> ExportInvoice:
+        """The commercial invoice packing list's bill of lading number and
+        date - the only two cells on that sheet that aren't derived."""
+        return self._update_document_fields(
+            current_user, invoice_id, fields, ExportInvoiceRepository.PACKING_LIST_FIELDS)
+
+    # 11B columns with no input on the export invoice form: gross/net weight
+    # are set elsewhere, and the rest are typed on the per-container documents
+    # (VGM attachment, E-Seal sheet). Saving the export invoice rewrites its
+    # 11B rows wholesale, so _clean_container_details leaves these None and
+    # update() carries the stored values forward by row position. One list, so
+    # the two halves of that rule can never drift apart.
+    CARRIED_CONTAINER_FIELDS = (
+        "gross_weight", "net_weight",
+        "weighbridge_name", "weighing_slip_no",
+        "sealing_time", "sealing_date",
+    )
+    # Which of them each per-container document owns.
+    VGM_CONTAINER_FIELDS = ("weighbridge_name", "weighing_slip_no")
+    ESEAL_CONTAINER_FIELDS = ("sealing_time", "sealing_date")
+
+    def _update_container_fields(self, current_user: User, invoice_id: int,
+                                 rows: List[dict], fields) -> ExportInvoice:
+        """Shared by the per-container documents: validate ownership, keep
+        only rows naming a usable sr_no, and write just `fields`."""
+        existing = self.get(invoice_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        cleaned = []
+        for row in rows or []:
+            try:
+                sr_no = int(row.get("sr_no"))
+            except (TypeError, ValueError):
+                continue
+            entry = {"sr_no": sr_no}
+            entry.update({name: (row.get(name) or "").strip() or None for name in fields})
+            cleaned.append(entry)
+        self.export_invoice_repo.update_container_detail_fields(invoice_id, cleaned, fields)
+        return self.get(invoice_id, current_user.company_id)
+
+    @staticmethod
+    def _normalise_sealing_time(value: Optional[str]) -> Optional[str]:
+        """The E-Seal sheet is always 24-hour. Accept the forms people
+        actually type (9:5, 09.05, 0905) and store the padded HH:mm; reject
+        anything that is not a time rather than printing it as typed, since a
+        customs form carrying '25:99' is worse than a rejected save."""
+        raw = (value or "").strip()
+        if not raw:
+            return None
+        text = raw.replace(".", ":").replace(" ", "")
+        if ":" not in text and text.isdigit() and len(text) in (3, 4):
+            text = f"{text[:-2]}:{text[-2:]}"
+        parts = text.split(":")
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            hours, minutes = int(parts[0]), int(parts[1])
+            if 0 <= hours <= 23 and 0 <= minutes <= 59:
+                return f"{hours:02d}:{minutes:02d}"
+        raise ValidationError(f"Sealing time '{raw}' is not a 24-hour time (HH:mm).")
+
+    def update_eseal_details(self, current_user: User, invoice_id: int, rows: List[dict]) -> ExportInvoice:
+        """The E-Seal sheet's sealing time and date, one pair per physical
+        container. Every other cell on that sheet is derived."""
+        # Ownership first: a malformed time posted at another company's
+        # invoice must still 404 rather than answer with a validation message.
+        self._assert_can_modify(self.get(invoice_id, current_user.company_id), current_user)
+        normalised = [dict(row, sealing_time=self._normalise_sealing_time(row.get("sealing_time")))
+                      for row in rows or []]
+        return self._update_container_fields(
+            current_user, invoice_id, normalised, self.ESEAL_CONTAINER_FIELDS)
+
+    def update_vgm_declaration(self, current_user: User, invoice_id: int, fields: dict) -> ExportInvoice:
+        """The VGM declaration's manual-entry cells. Every other cell on that
+        sheet is derived, so these are all its form asks for. All optional:
+        blank falls back to the default (see the ExportInvoice.vgm_* helpers),
+        which is what an invoice nobody has edited prints."""
+        return self._update_document_fields(
+            current_user, invoice_id, fields, ExportInvoiceRepository.VGM_DECLARATION_FIELDS)
+
+    def update_vgm_details(self, current_user: User, invoice_id: int, rows: List[dict]) -> ExportInvoice:
+        """The VGM attachment's weighbridge name/address and weighing slip
+        number, one pair per physical container. Every other cell on that
+        sheet is derived, so these two are all it asks for."""
+        return self._update_container_fields(
+            current_user, invoice_id, rows, self.VGM_CONTAINER_FIELDS)
 
     def delete(self, current_user: User, invoice_id: int) -> None:
         existing = self.get(invoice_id, current_user.company_id)

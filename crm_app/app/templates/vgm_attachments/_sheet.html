@@ -1,0 +1,111 @@
+{# The VGM ATTACHMENT sheet - one row per physical container. Expects
+   `rows` (assembled by app/vgm.py:container_rows), and optionally `embedded`.
+
+   Unlike the other export attachments this sheet is also its own form: the
+   derived figures print as text and the two typed cells (weighbridge, slip
+   no.) are inputs sitting in the same row. The inputs carry a `no-print`
+   twin so the printed copy shows the saved TEXT rather than a form control -
+   a browser prints an <input> as an empty box, which would defeat the point.
+
+   `embedded` is the same sheet quoted underneath the VGM declaration, which
+   is A4 portrait and has no form around it: the two typed cells become plain
+   text and the sheet narrows to the declaration's width. The figures come
+   from the same helper either way, so the two copies cannot disagree - the
+   attachment page remains the one place they are edited.
+
+   Total VGM Weight is tare + cargo. A container whose tare hasn't been typed,
+   or which has no packing list allocation, has no total to show and prints a
+   dash rather than a wrong number. #}
+<style>
+  .vgm-sheet {
+    background: #fff; color: #000; width: 275mm; max-width: 100%; margin: 24px auto 48px;
+    padding: 6mm; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif; font-size: 9px; line-height: 1.35;
+  }
+  .vgm-title { text-align: center; font-size: 13px; font-weight: bold; padding-bottom: 8px; }
+  .vgm-sheet table { width: 100%; border-collapse: collapse; }
+  .vgm-sheet th, .vgm-sheet td { border: 1px solid #000; padding: 3px 5px; text-align: center; }
+  .vgm-sheet th { font-weight: bold; vertical-align: middle; }
+  .vgm-sheet input[type="text"] {
+    width: 100%; box-sizing: border-box; border: 1px solid #bbb; padding: 2px 4px;
+    font: inherit; text-align: center; background: #fff;
+  }
+  /* Riding under the declaration: same table, A4 portrait's width instead of
+     landscape's, and small enough that nine columns still fit across it. It
+     keeps the sheet shadow, so on screen it reads as the second page it is.
+     The declaration above already leaves the gap, hence no top margin. */
+  .vgm-sheet--embedded {
+    width: 205mm; margin: 0 auto 48px; font-size: 8px;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .vgm-sheet--embedded th, .vgm-sheet--embedded td { padding: 3px 3px; }
+  @media print {
+    .vgm-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
+    /* Print the saved values, not empty input boxes. */
+    .vgm-input { display: none !important; }
+    .vgm-printed { display: inline !important; }
+  }
+  .vgm-printed { display: none; }
+</style>
+
+{% macro num(v) -%}{%- if v is not none %}{{ '{:,.2f}'.format(v) }}{% else %}-{% endif -%}{%- endmacro %}
+
+<div class="vgm-sheet js-page-sheet{{ ' vgm-sheet--embedded' if embedded }}">
+  <div class="vgm-title">VGM ATTACHMENT</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Booking No</th>
+        <th>Container No</th>
+        <th>Container size</th>
+        <th>Max Permited Weight</th>
+        <th>Tare Weight</th>
+        <th>Cargo Weight</th>
+        <th>Total VGM Weight</th>
+        <th>WeighBridge Name &amp; Address</th>
+        <th>Weighing Slip No.</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.booking_no or '-' }}</td>
+        <td>{{ row.container_no or '-' }}</td>
+        <td>{{ row.container_size or '-' }}</td>
+        {# The weights are transcribed free text, so an unparseable one is
+           shown exactly as typed instead of being silently dropped. #}
+        <td>{% if row.max_permitted_weight is not none %}{{ num(row.max_permitted_weight) }}{% else %}{{ row.max_permitted_weight_raw or '-' }}{% endif %}</td>
+        <td>{% if row.tare_weight is not none %}{{ num(row.tare_weight) }}{% else %}{{ row.tare_weight_raw or '-' }}{% endif %}</td>
+        <td>{{ num(row.cargo_weight) }}</td>
+        <td>{{ num(row.total_vgm_weight) }}</td>
+        {% if embedded %}
+        <td>{{ row.weighbridge_name or '-' }}</td>
+        <td>{{ row.weighing_slip_no or '-' }}</td>
+        {% else %}
+        <td>
+          <input type="hidden" name="vgm_sr_no[]" value="{{ row.sr_no }}">
+          <span class="vgm-input">
+            <input type="text" name="vgm_weighbridge_name[]" value="{{ row.weighbridge_name }}">
+          </span>
+          <span class="vgm-printed">{{ row.weighbridge_name or '' }}</span>
+        </td>
+        <td>
+          <span class="vgm-input">
+            <input type="text" name="vgm_weighing_slip_no[]" value="{{ row.weighing_slip_no }}">
+          </span>
+          <span class="vgm-printed">{{ row.weighing_slip_no or '' }}</span>
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="9">
+          No containers on this export invoice yet — add them under
+          <strong>Container details (11B)</strong> on the invoice.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

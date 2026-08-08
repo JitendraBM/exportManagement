@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import currency_select %}
+{% from "_macros.html" import currency_select, port_of_loading_select %}
 {% block title %}{{ 'Edit proforma invoice' if invoice else 'New proforma invoice' }}{% endblock %}
 {% block content %}
 
@@ -90,7 +90,8 @@
       <div class="field"><label for="delivery_period">Delivery period</label><input type="text" id="delivery_period" name="delivery_period" value="{{ data.delivery_period | default('', true) }}"></div>
     </div>
     <div class="form-row">
-      <div class="field"><label for="port_of_loading">Port of loading</label><input type="text" id="port_of_loading" name="port_of_loading" value="{{ data.port_of_loading | default('', true) }}"></div>
+      {# Options come from Administration -> Miscellaneous (port_of_loading_options). #}
+      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options) }}
       <div class="field"><label for="port_of_discharge">Port of discharge</label><input type="text" id="port_of_discharge" name="port_of_discharge" value="{{ data.port_of_discharge | default('', true) }}"></div>
       <div class="field"><label for="final_destination">Final destination</label><input type="text" id="final_destination" name="final_destination" value="{{ data.final_destination | default('', true) }}"></div>
     </div>

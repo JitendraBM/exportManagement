@@ -1,0 +1,120 @@
+{# The COMMERCIAL INVOICE PACKING LIST A4 sheet. Expects `invoice`, `company`,
+   `rows` and `totals` (assembled in routes/commercial_packing_lists.py).
+
+   Same header band and styling as the commercial invoice it travels with -
+   both come from templates/commercial/ so they cannot drift apart - over the
+   export packing list's container split: a row per container and goods line.
+
+   Only the bill of lading number and date are typed (on this document's own
+   edit form); everything else is derived. #}
+{% from "commercial/_macros.html" import dmy with context %}
+{% include "commercial/_style.html" %}
+
+<div class="ci-sheet js-page-sheet">
+  <div class="ci-title">COMMERCIAL INVOICE PACKING LIST</div>
+
+  {% include "commercial/_header.html" %}
+
+  <!-- ============ CONTAINER SPLIT + TOTALS (one shared column grid) ============ -->
+  <table class="ci-items">
+    <colgroup>
+      <col style="width:11%"><col style="width:11%"><col style="width:11%">
+      <col style="width:22%"><col style="width:9%">
+      <col style="width:6%"><col style="width:6%"><col style="width:8%">
+      <col style="width:8%"><col style="width:8%">
+    </colgroup>
+    <thead>
+      <tr>
+        <td>Container No</td>
+        <td>Line Seal No</td>
+        <td>RFID Seal No</td>
+        <td>Description Of Goods</td>
+        <td>HSNC</td>
+        <td>Packing</td>
+        <td>Qty</td>
+        <td>Alt. Qty</td>
+        <td>Net Weight<br>(KG)</td>
+        <td>Gross Weight<br>(KG)</td>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="ci-c">{{ row.container_no }}</td>
+        <td class="ci-c">{{ row.seal_no }}</td>
+        <td class="ci-c">{{ row.rfid_seal_no }}</td>
+        <td>{{ row.description }}</td>
+        <td class="ci-c">{{ row.hsn_code }}</td>
+        <td class="ci-cnum">{{ '{:,.0f}'.format(row.pallets) }}</td>
+        <td class="ci-cnum">{{ '{:,.0f}'.format(row.quantity_boxes) }}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(row.quantity_value) }}</td>
+        <td class="ci-num">{{ '{:,.2f}'.format(row.net_weight_kg) }}</td>
+        <td class="ci-num">{{ '{:,.2f}'.format(row.gross_weight_kg) }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="10">
+          No container split yet — fill in the export packing list allocation on the invoice.
+        </td>
+      </tr>
+      {% endfor %}
+      {# Blank filler, stretched by _page_filler.html so the sheet fills its A4
+         page exactly however few container rows there are. #}
+      <tr class="js-page-filler">
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+
+      {# The bill of lading pair sits under the container columns, with the
+         quantity and weight totals under their own - one row across the band,
+         exactly as the reference has it. #}
+      <tr class="ci-tot">
+        <td colspan="2" rowspan="2" class="ci-mid ci-lbl">Bill Of Lading No</td>
+        <td rowspan="2" class="ci-mid">{{ invoice.bill_of_lading_no or '' }}</td>
+        <td rowspan="2" class="ci-mid ci-c ci-lbl">Bill Of Lading Date</td>
+        <td rowspan="2" class="ci-mid ci-c">{{ dmy(invoice.bill_of_lading_date) if invoice.bill_of_lading_date else '' }}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(totals.pallets) }}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(totals.quantity_boxes) }}</td>
+        <td class="ci-cnum">{{ '{:,.2f}'.format(totals.quantity_value) }}</td>
+        <td class="ci-num">{{ '{:,.2f}'.format(totals.net_weight_kg) }}</td>
+        <td class="ci-num">{{ '{:,.2f}'.format(totals.gross_weight_kg) }}</td>
+      </tr>
+      <tr class="ci-tot">
+        <td class="ci-c">Packing</td>
+        <td class="ci-c">Qty</td>
+        <td class="ci-c">Alt. Qty</td>
+        <td class="ci-c">Net Weight(KG)</td>
+        <td class="ci-c">Gross Weight(KG)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ============ REMARKS ============ -->
+  <table>
+    <tr>
+      <td style="height:34px;">
+        <span class="ci-lbl">Remarks</span>
+        {%- if invoice.remarks %}<br>{{ invoice.remarks|replace('\n', '<br>')|safe }}{% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- ============ ORIGIN STAMP | SIGNATORY ============ -->
+  <table>
+    <colgroup><col style="width:63%"><col style="width:37%"></colgroup>
+    <tr>
+      <td class="ci-c ci-lbl ci-mid">CERTIFY THAT GOODS ARE OF "INDIAN ORIGIN"</td>
+      <td class="ci-r ci-sign">
+        <div class="ci-lbl">For {{ company.company_name|upper if company else '' }}</div>
+        <div style="margin-top:26px;">
+          <span class="ci-lbl">Authorised Signatury</span>
+          {%- if invoice.authorised_person_name %}<br>
+            <span class="ci-lbl">
+              {{ invoice.authorised_person_name }}
+              {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif %}
+            </span>
+          {%- endif %}
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import port_of_loading_select %}
 {% block title %}{{ 'Edit export invoice' if invoice else 'New export invoice' }}{% endblock %}
 {% block content %}
 
@@ -138,7 +139,8 @@
                   data-date-of-issue="{{ p.date_of_issue or '' }}"
                   data-stuffing-place-name="{{ p.stuffing_place_name or '' }}"
                   data-place-of-stuffing="{{ p.place_of_stuffing or '' }}"
-                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
+                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}"
+                  data-is-one-time="{{ '1' if p.is_one_time else '0' }}">
             {{ p.permission_number }}{% if p.stuffing_place_name %} — {{ p.stuffing_place_name }}{% endif %}
           </option>
         {% endfor %}
@@ -163,7 +165,15 @@
     <div class="form-row">
       <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
       <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
-      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
+      <div class="field">
+        <label for="permission_expiry">Permission expiry</label>
+        {% set is_one_time = data.permission_is_one_time in (true, 1, '1') %}
+        <input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}" {{ 'disabled' if is_one_time }}>
+        <input type="hidden" id="permission_is_one_time" name="permission_is_one_time" value="{{ '1' if is_one_time else '0' }}">
+        <label class="text-sm text-soft" style="display:flex; align-items:center; gap:.3rem; margin-top:.3rem;">
+          <input type="checkbox" id="permission_is_one_time_toggle" {{ 'checked' if is_one_time }}> One time (no expiry)
+        </label>
+      </div>
     </div>
     <div class="field">
       <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list and as the Annexure-C's Factory/Place of Stuffing)</span></label>
@@ -202,7 +212,8 @@
       <div class="field"><label for="place_of_receipt">Place of receipt</label><input type="text" id="place_of_receipt" name="place_of_receipt" value="{{ data.place_of_receipt | default('', true) }}"></div>
     </div>
     <div class="form-row">
-      <div class="field"><label for="port_of_loading">Port of loading</label><input type="text" id="port_of_loading" name="port_of_loading" value="{{ data.port_of_loading | default('', true) }}"></div>
+      {# Options come from Administration -> Miscellaneous (port_of_loading_options). #}
+      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options) }}
       <div class="field"><label for="port_of_discharge">Port of discharge</label><input type="text" id="port_of_discharge" name="port_of_discharge" value="{{ data.port_of_discharge | default('', true) }}"></div>
       <div class="field"><label for="final_destination">Final destination</label><input type="text" id="final_destination" name="final_destination" value="{{ data.final_destination | default('', true) }}"></div>
     </div>
@@ -229,13 +240,16 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-container-btn">+ Add container type</button>
     <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) below asks for.</p>
 
-    <div class="field" style="margin-top:14px;"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
+    <div class="form-row" style="margin-top:14px;">
+      <div class="field"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
+      <div class="field"><label for="vessel_voyage_no">Vessel and voyage no. <span class="text-soft text-sm">(printed as "Vessel / Flight Name &amp; No" on the invoice and packing list)</span></label><input type="text" id="vessel_voyage_no" name="vessel_voyage_no" placeholder="e.g. MSC ANNA / VOY 214W" value="{{ data.vessel_voyage_no | default('', true) }}"></div>
+    </div>
 
     <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>Tare weight</th><th></th></tr>
+          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>LR no.</th><th>Transporter name</th><th>Max permitted weight</th><th>Tare weight</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
           {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
@@ -246,6 +260,21 @@
             <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
             <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
             <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
+            <td><input type="text" name="cd_lr_no[]" value="{{ cd.lr_no or '' }}"></td>
+            {# Options are the tenant's Transporters; a row can hold a name since
+               removed from that list, so the stored value stays selectable. #}
+            <td>
+              <select name="cd_transporter_name[]">
+                <option value="">&mdash; none &mdash;</option>
+                {% if cd.transporter_name and cd.transporter_name not in transporters | map(attribute='name') | list %}
+                <option value="{{ cd.transporter_name }}" selected>{{ cd.transporter_name }}</option>
+                {% endif %}
+                {% for t in transporters %}
+                <option value="{{ t.name }}" {{ 'selected' if t.name == cd.transporter_name }}>{{ t.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}"></td>
             <td><input type="text" name="cd_tare_weight[]" value="{{ cd.tare_weight or '' }}"></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
@@ -874,6 +903,9 @@
   bindRemove('purchase-detail-rows', 'purchase-detail-row', 'js-remove-pd');
 
   // ---- 11B container-detail rows --------------------------------------------------
+  // Same Transporters list the server-rendered rows above offer, so a row added
+  // here gets the same dropdown (blank by default, like every other new cell).
+  const cdTransporterOptions = `<option value="">&mdash; none &mdash;</option>{% for t in transporters %}<option value="{{ t.name }}">{{ t.name }}</option>{% endfor %}`;
   const cdBody = document.getElementById('cd-body');
   function cdRenumber() { cdBody.querySelectorAll('.cd-row').forEach((tr, i) => { tr.querySelector('.cd-sr').textContent = i + 1; }); }
   function cdRowTemplate() {
@@ -885,6 +917,9 @@
       <td><input type="text" name="cd_line_seal_no[]"></td>
       <td><input type="text" name="cd_rfid_seal_no[]"></td>
       <td><input type="text" name="cd_vehicle_no[]"></td>
+      <td><input type="text" name="cd_lr_no[]"></td>
+      <td><select name="cd_transporter_name[]">${cdTransporterOptions}</select></td>
+      <td><input type="text" name="cd_max_permitted_weight[]"></td>
       <td><input type="text" name="cd_tare_weight[]"></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
@@ -920,12 +955,22 @@
   });
 
   // ---- permit dropdown prefill --------------------------------------------------
+  const permissionExpiryInput = document.getElementById('permission_expiry');
+  const permissionIsOneTimeInput = document.getElementById('permission_is_one_time');
+  const permissionIsOneTimeToggle = document.getElementById('permission_is_one_time_toggle');
+  function setPermissionOneTime(isOneTime) {
+    permissionIsOneTimeToggle.checked = isOneTime;
+    permissionIsOneTimeInput.value = isOneTime ? '1' : '0';
+    permissionExpiryInput.disabled = isOneTime;
+    if (isOneTime) permissionExpiryInput.value = '';
+  }
   document.getElementById('permit_select').addEventListener('change', (e) => {
     const opt = e.target.selectedOptions[0];
     if (!opt.value) return;
     document.getElementById('permission_no').value = opt.dataset.permissionNumber || '';
     document.getElementById('permission_date').value = (opt.dataset.dateOfIssue || '').slice(0, 10);
-    document.getElementById('permission_expiry').value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
+    setPermissionOneTime(opt.dataset.isOneTime === '1');
+    permissionExpiryInput.value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
     document.getElementById('issuing_authority').value = opt.dataset.issuingAuthority || '';
     document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
     const stuffAt = [opt.dataset.stuffingPlaceName, opt.dataset.placeOfStuffing].filter(Boolean).join(', ');
@@ -933,6 +978,7 @@
     if (opt.dataset.stuffingPlaceName) document.getElementById('manufacturer_name').value = opt.dataset.stuffingPlaceName;
     if (opt.dataset.placeOfStuffing) document.getElementById('manufacturer_address').value = opt.dataset.placeOfStuffing;
   });
+  permissionIsOneTimeToggle.addEventListener('change', (e) => setPermissionOneTime(e.target.checked));
 
   // ---- product picker --------------------------------------------------
   const overlay = document.getElementById('product-picker-overlay');

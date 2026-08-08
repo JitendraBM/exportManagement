@@ -13,12 +13,12 @@ no idea what a Lead is, a LeadRepository has no idea how payments work, etc.
 
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import Optional, List, Sequence
 
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
@@ -1040,6 +1040,48 @@ class MiscNatureOfContractRepository:
         self.db.execute("DELETE FROM misc_nature_of_contracts WHERE id = ?", (row_id,))
 
 
+class MiscPortOfLoadingRepository:
+    """The PORT OF LOADING drop list (Administration -> Miscellaneous): a
+    port name plus that port's PIN code."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscPortOfLoading]:
+        row = self.db.query_one("SELECT * FROM misc_ports_of_loading WHERE id = ?", (row_id,))
+        return MiscPortOfLoading.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscPortOfLoading]:
+        rows = self.db.query(
+            "SELECT * FROM misc_ports_of_loading WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscPortOfLoading.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscPortOfLoading]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_ports_of_loading WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscPortOfLoading.from_row(row) if row else None
+
+    def create(self, entry: MiscPortOfLoading) -> MiscPortOfLoading:
+        new_id = self.db.execute(
+            "INSERT INTO misc_ports_of_loading (company_id, name, pin_code) VALUES (?, ?, ?)",
+            (entry.company_id, entry.name, entry.pin_code),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscPortOfLoading) -> None:
+        self.db.execute(
+            "UPDATE misc_ports_of_loading SET name = ?, pin_code = ?, updated_at = datetime('now') WHERE id = ?",
+            (entry.name, entry.pin_code, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_ports_of_loading WHERE id = ?", (row_id,))
+
+
 # ============================================================
 # PRODUCT CATALOG (products -> folders -> designs)
 # ============================================================
@@ -1894,7 +1936,9 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, gross_weight, net_weight "
+                "SELECT sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, "
+                "max_permitted_weight, tare_weight, gross_weight, net_weight, "
+                "weighbridge_name, weighing_slip_no, sealing_time, sealing_date "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -1937,13 +1981,15 @@ class ExportInvoiceRepository:
                 fob_pricing, round_off, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
-                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, issuing_authority,
+                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, vessel_voyage_no,
+                issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
+                permission_is_one_time,
                 manufacturer_name, manufacturer_address, stuffing_location, remarks,
                 total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
                 shipping_bill_date, currency_code, currency_symbol, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -1960,8 +2006,9 @@ class ExportInvoiceRepository:
                    fob_pricing = ?, round_off = ?, fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
                    bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
-                   examination_date = ?, location_code_08b = ?, booking_no = ?, issuing_authority = ?, issuing_authority_address = ?,
-                   permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
+                   examination_date = ?, location_code_08b = ?, booking_no = ?, vessel_voyage_no = ?,
+                   issuing_authority = ?, issuing_authority_address = ?,
+                   permission_no = ?, permission_date = ?, permission_expiry = ?, permission_is_one_time = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
                    total_net_weight_kg = ?, total_gross_weight_kg = ?, shipping_bill_no = ?,
                    shipping_bill_date = ?, currency_code = ?, currency_symbol = ?,
@@ -1970,6 +2017,53 @@ class ExportInvoiceRepository:
             (invoice.export_invoice_number,) + self._header_params(invoice) + (invoice_id,),
         )
         self._replace_children(invoice_id, invoice)
+
+    # Columns on export_invoices that belong to one of its ATTACHMENTS rather
+    # than to the export invoice form: each attachment has its own small form
+    # and writes only its own columns, via update_document_fields below.
+    #
+    # None of them may join the header tuple further down. The export invoice
+    # form never posts them, and _build_header turns an absent field into
+    # None - so carrying them through the shared create/update path would
+    # blank them every time that form is saved.
+    TAX_INVOICE_FIELDS = (
+        "tax_invoice_number", "tax_invoice_date", "eway_bill_no", "eway_bill_date",
+    )
+    VGM_DECLARATION_FIELDS = (
+        "vgm_signatory", "vgm_contact_24x7", "vgm_weighing_method",
+        "vgm_cargo_type", "vgm_hazardous_details",
+    )
+    PACKING_LIST_FIELDS = ("bill_of_lading_no", "bill_of_lading_date")
+
+    def update_document_fields(self, invoice_id: int, fields: dict, names: Sequence[str]) -> None:
+        """Write just `names` onto this invoice - see the note above."""
+        assignments = ", ".join(f"{name} = ?" for name in names)
+        self.db.execute(
+            f"UPDATE export_invoices SET {assignments}, updated_at = datetime('now') WHERE id = ?",
+            tuple(fields.get(name) for name in names) + (invoice_id,),
+        )
+
+    def update_container_detail_fields(self, invoice_id: int, rows: List[dict],
+                                       fields: Sequence[str]) -> None:
+        """Write `fields` onto this invoice's 11B rows, matched on sr_no.
+
+        Used by the per-container documents that own a couple of columns each
+        (the VGM attachment's weighbridge pair, the E-Seal sheet's sealing
+        time/date). A targeted write for the same reason
+        update_tax_invoice_details is one: the export invoice form has no
+        input for any of them, so they must not travel on the path that
+        rewrites the 11B rows wholesale.
+
+        An sr_no this invoice doesn't have matches nothing, so a stale form
+        can neither create rows nor reach another invoice's."""
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        with self.db.get_connection() as conn:
+            for row in rows:
+                conn.execute(
+                    f"UPDATE export_invoice_container_details SET {assignments} "
+                    "WHERE export_invoice_id = ? AND sr_no = ?",
+                    tuple(row.get(name) for name in fields) + (invoice_id, row.get("sr_no")),
+                )
 
     def _header_params(self, invoice: ExportInvoice) -> tuple:
         """The EDITABLE header column values, in the exact order both INSERT
@@ -1992,8 +2086,8 @@ class ExportInvoiceRepository:
             invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
             invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
-            invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
-            invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
+            invoice.vessel_voyage_no, invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
+            invoice.permission_date, invoice.permission_expiry, int(bool(invoice.permission_is_one_time)), invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
             invoice.shipping_bill_no, invoice.shipping_bill_date,
@@ -2034,12 +2128,18 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, tare_weight, "
-                    "gross_weight, net_weight) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, "
+                    "lr_no, transporter_name, max_permitted_weight, tare_weight, "
+                    "gross_weight, net_weight, weighbridge_name, weighing_slip_no, "
+                    "sealing_time, sealing_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (invoice_id, i, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
-                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None),
+                     cd.get("lr_no") or None, cd.get("transporter_name") or None,
+                     cd.get("max_permitted_weight") or None,
+                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None,
+                     cd.get("weighbridge_name") or None, cd.get("weighing_slip_no") or None,
+                     cd.get("sealing_time") or None, cd.get("sealing_date") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_purchase_details WHERE export_invoice_id = ?", (invoice_id,))

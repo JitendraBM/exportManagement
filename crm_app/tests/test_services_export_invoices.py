@@ -444,6 +444,21 @@ class TestExportChildLists:
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.booking_no == "BKG/12345"
 
+    def test_11b_lr_transporter_and_max_weight_round_trip(self, container, seed):
+        inv = make_export(container, seed, container_details_list=[
+            {"container_no": "BLJU2253726", "vehicle_no": "GJ01AB1234", "lr_no": "LR/2026/88",
+             "transporter_name": "SHREE ROAD LINES", "max_permitted_weight": "36000"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        cd = got.container_details[0]
+        assert cd["lr_no"] == "LR/2026/88"
+        assert cd["transporter_name"] == "SHREE ROAD LINES"
+        assert cd["max_permitted_weight"] == "36000"
+
+    def test_vessel_voyage_no_round_trip(self, container, seed):
+        inv = make_export(container, seed, vessel_voyage_no="MSC ANNA / VOY 214W")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.vessel_voyage_no == "MSC ANNA / VOY 214W"
+
     def test_weight_totals_and_shipping_bill_round_trip(self, container, seed):
         inv = make_export(
             container, seed, total_net_weight_kg="244019.00", total_gross_weight_kg="248099.00",

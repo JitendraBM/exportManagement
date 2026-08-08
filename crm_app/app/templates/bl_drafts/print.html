@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ invoice.export_invoice_number }} · BL Draft</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('bl_drafts.list_bl_drafts') }}" class="btn btn-ghost btn-sm">← All BL drafts</a>
+      <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 Export invoice {{ invoice.export_invoice_number }}</a>
+    </div>
+    <div class="flex gap-8">
+      <a href="{{ url_for('bl_drafts.download_bl_draft_docx', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">⬇ Word (.docx)</a>
+      <a href="{{ url_for('export_invoices.edit_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Edit export invoice</a>
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / PDF</button>
+    </div>
+  </div>
+
+  <div class="sheet-note no-print">
+    This BL draft is generated from export invoice
+    <strong>{{ invoice.export_invoice_number }}</strong> and has no form of its own — the header comes from
+    that invoice and the container table from its export packing list, so edit the invoice to change it.
+    Use <strong>Print / PDF</strong> for the PDF and <strong>Word (.docx)</strong> for the editable copy;
+    both are built from the same data.
+    {% if not draft.rows %}
+    <br><strong>This invoice has no container split yet</strong>, so the container table is empty — fill in
+    the export packing list allocation on the invoice.
+    {% endif %}
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'bl_drafts/_sheet.html' %}
+
+</body>
+</html>

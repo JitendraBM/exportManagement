@@ -102,6 +102,8 @@
 
 {% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
 {% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
+{% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
+{% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else {}) or {}).get('lut_number') %}
 
 {% set ns = namespace(plts=0, boxes=0, qty=0, amount=0) %}
 {% for item in invoice.items %}
@@ -113,7 +115,10 @@
 
 <div class="ei-sheet js-page-sheet">
   <div class="ei-title">EXPORT INVOICE</div>
-  <div class="ei-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</div>
+  <div class="ei-subtitle">
+    SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
+    {%- if invoice.tax_mode == 'lut' and lut_no %} - LUT NO : {{ lut_no }}{% endif -%}
+  </div>
 
   <!-- ============ HEADER: consigner/consignee | invoice references ============ -->
   <table>
@@ -178,9 +183,9 @@
           <tr><td class="ei-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Destination</td><td>{{ (invoice.country_of_destination or '-')|upper }}</td></tr>
-          {# No vessel field on an export invoice (it lives on the packing
-             list) - the reference prints N/A here too. #}
-          <tr><td class="ei-lbl">Vessel / Flight Name &amp; No</td><td>N/A</td></tr>
+          {# Typed on the form's Container details card; the reference prints
+             N/A when there is no vessel yet. #}
+          <tr><td class="ei-lbl">Vessel / Flight Name &amp; No</td><td>{{ (invoice.vessel_voyage_no or 'N/A')|upper }}</td></tr>
           <tr><td class="ei-lbl">Port Of Loading</td><td>{{ (invoice.port_of_loading or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Port Of Discharge</td><td>{{ (invoice.port_of_discharge or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Final Destination</td><td>{{ (invoice.final_destination or '-')|upper }}</td></tr>
@@ -319,8 +324,6 @@
                   one or it was typed straight onto this invoice,
                4. the company's current LUT number.
              Nothing else belongs in this cell. #}
-          {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
-          {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else {}) or {}).get('lut_number') %}
           {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
           <span class="ei-lbl">Export Under</span><br>
           {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}

@@ -30,6 +30,15 @@
       {% if not historical_version %}
       <a href="{{ url_for('export_packing_lists.view_for_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Export packing list</a>
       <a href="{{ url_for('export_annexures.view_annexure', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📋 Annexure-C</a>
+      <a href="{{ url_for('tax_invoices.view_tax_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Tax invoice</a>
+      <a href="{{ url_for('commercial_invoices.view_commercial_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Commercial invoice</a>
+      <a href="{{ url_for('commercial_packing_lists.view_commercial_packing_list', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Commercial packing list</a>
+      <a href="{{ url_for('customer_invoices.view_customer_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Customer invoice</a>
+      <a href="{{ url_for('bl_drafts.view_bl_draft', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🚢 BL draft</a>
+      <a href="{{ url_for('vgm_declarations.view_vgm_declaration', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">⚖ VGM</a>
+      <a href="{{ url_for('vgm_attachments.view_vgm_attachment', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">⚖ VGM attachment</a>
+      <a href="{{ url_for('eseals.view_eseal', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🔒 E-seal</a>
+      <a href="{{ url_for('eway_bills.view_eway_bill', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🚚 E-way bill</a>
       {% if invoice.shipping_bill_pdf_path %}
       <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank" class="btn btn-ghost btn-sm">📎 Shipping bill</a>
       {% endif %}

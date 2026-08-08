@@ -1,0 +1,93 @@
+{# The header band shared by the COMMERCIAL INVOICE and the COMMERCIAL
+   INVOICE PACKING LIST - consigner / consignee / notify on the left, the
+   invoice references, routing, containers and bank on the right.
+
+   Both sheets print it identically, so it lives here rather than in each: a
+   change to the buyer's or the bank's details cannot end up on one sheet and
+   not the other. Expects `invoice` and `company`. #}
+{% from "commercial/_macros.html" import dmy with context %}
+
+{% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
+{% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
+
+<table>
+  <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+  <tr class="ci-nest">
+    <!-- Left half: consigner, its contact details, consignee, notify -->
+    <td>
+      <table>
+        <colgroup><col style="width:22%"><col style="width:78%"></colgroup>
+        <tr class="ci-nb"><td colspan="2" class="ci-lbl">Consigner</td></tr>
+        <tr>
+          <td colspan="2" class="ci-blk">
+            {{ company.company_name|upper if company else '' }}<br>
+            {{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}
+          </td>
+        </tr>
+        <tr><td class="ci-lbl">EMAIL</td><td class="ci-blk">{{ email.value|upper if email else '-' }}</td></tr>
+        <tr><td class="ci-lbl">CONTACT</td><td class="ci-blk">{{ phone.value if phone else '-' }}</td></tr>
+        <tr class="ci-nb"><td colspan="2" class="ci-lbl">Consignee</td></tr>
+        <tr>
+          <td colspan="2" class="ci-blk">
+            {{ (invoice.consignee_name or '')|upper }}<br>
+            {{ (invoice.consignee_address or '')|upper|replace('\n', '<br>')|safe }}
+          </td>
+        </tr>
+        <tr class="ci-nb"><td colspan="2" class="ci-lbl">Buyer If Other Then Consignee[Notify]</td></tr>
+        <tr>
+          <td colspan="2" class="ci-blk">
+            {% if invoice.notify_name or invoice.notify_address %}
+              {{ (invoice.notify_name or '')|upper }}<br>
+              {{ (invoice.notify_address or '')|upper|replace('\n', '<br>')|safe }}
+            {% else %}-{% endif %}
+          </td>
+        </tr>
+      </table>
+    </td>
+
+    <!-- Right half: invoice references, routing, containers, bank -->
+    <td>
+      <table>
+        <colgroup><col style="width:40%"><col style="width:60%"></colgroup>
+        {# The parent export invoice's own number and date. #}
+        <tr><td class="ci-lbl">Invoice No</td><td>{{ invoice.export_invoice_number }}</td></tr>
+        <tr><td class="ci-lbl">Invoice Date</td><td>{{ dmy(invoice.invoice_date) }}</td></tr>
+        <tr>
+          <td class="ci-lbl">Proforma Invoice No</td>
+          <td>{% for pi in invoice.linked_proformas %}{{ pi.invoice_number }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+        </tr>
+        <tr>
+          <td class="ci-lbl">Proforma Invoice Date</td>
+          <td>{% for pi in invoice.linked_proformas %}{{ dmy(pi.invoice_date) }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor %}</td>
+        </tr>
+        <tr>
+          <td class="ci-lbl">Buyer Order No &amp; Date</td>
+          <td>{{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}</td>
+        </tr>
+        <tr><td class="ci-lbl">Currency</td><td>{{ invoice.currency_label }}</td></tr>
+        <tr><td class="ci-lbl">Pre Carriage By</td><td>{{ (invoice.pre_carriage_by or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Country of Destination</td><td>{{ (invoice.country_of_destination or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Vessel / Flight Name &amp; No</td><td>{{ (invoice.vessel_voyage_no or 'N/A')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Port Of Loading</td><td>{{ (invoice.port_of_loading or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Port Of Discharge</td><td>{{ (invoice.port_of_discharge or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Final Destination</td><td>{{ (invoice.final_destination or '-')|upper }}</td></tr>
+        <tr>
+          <td class="ci-lbl">Container Details</td>
+          <td>
+            {% for c in invoice.containers %}
+              {{ c.container_count }} &nbsp;x&nbsp; {{ c.container_type }}{% if not loop.last %}<br>{% endif %}
+            {% else %}-{% endfor %}
+          </td>
+        </tr>
+        <tr><td class="ci-lbl">Nature Of Contract</td><td>{{ (invoice.nature_of_contract or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Payment Terms</td><td>{{ invoice.payment_terms or '-' }}</td></tr>
+        <tr><td class="ci-lbl">Bank Name</td><td>{{ (invoice.bank_name or '-')|upper }}</td></tr>
+        <tr><td class="ci-lbl">Bank Address</td><td>{{ (invoice.bank_address or '-')|upper|replace('\n', '<br>')|safe }}</td></tr>
+        <tr><td class="ci-lbl">Bank Account No</td><td>{{ invoice.bank_account_number or '-' }}</td></tr>
+        <tr><td class="ci-lbl">SWIFT Code</td><td>{{ (invoice.bank_swift_code or '-')|upper }}</td></tr>
+      </table>
+    </td>
+  </tr>
+</table>

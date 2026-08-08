@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Commercial Invoices (Customer){% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>Commercial Invoices — Customer Copy</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="hint">
+    Every export invoice has a customer copy — there is nothing to create, type or edit here. It is the
+    same commercial invoice priced the other way round: the <strong>Rate</strong> column quotes the FOB
+    rate, the goods column adds up to the FOB value, and the totals block adds the charges and discount
+    back on to reach the CIF total.
+  </p>
+  {% if invoices %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Invoice</th>
+          <th>Date</th>
+          <th>Consignee</th>
+          <th>Currency</th>
+          <th>Created by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for invoice in invoices %}
+        <tr>
+          <td class="mono">{{ invoice.export_invoice_number }}</td>
+          <td class="text-sm">{{ invoice.invoice_date }}</td>
+          <td class="text-sm">{{ invoice.consignee_name }}</td>
+          <td class="text-sm">{{ invoice.currency_label }}</td>
+          <td class="text-sm">{{ invoice.created_by_name }}</td>
+          <td><a href="{{ url_for('customer_invoices.view_customer_invoice', export_invoice_id=invoice.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No export invoices yet — <a href="{{ url_for('export_invoices.list_export_invoices') }}">create one →</a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

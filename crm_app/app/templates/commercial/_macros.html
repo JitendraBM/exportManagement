@@ -1,0 +1,47 @@
+{# Formatting shared by the COMMERCIAL INVOICE and the COMMERCIAL INVOICE
+   PACKING LIST. Import with context - `money` reads `invoice`:
+
+     {% from "commercial/_macros.html" import dmy, ind, money with context %}
+#}
+
+{# dd-mm-yyyy, matching the reference's date cells. #}
+{% macro dmy(val) -%}
+  {%- if val -%}
+    {%- set p = (val|string)[:10].split('-') -%}
+    {%- if p|length == 3 %}{{ '%02d'|format(p[2]|int) }}-{{ '%02d'|format(p[1]|int) }}-{{ p[0] }}{% else %}{{ val }}{% endif -%}
+  {%- else -%}-{%- endif -%}
+{%- endmacro %}
+
+{# Indian digit grouping (1,99,987.20): last three digits, then pairs. Built
+   in-template so this stays a presentation concern - no new Python filter. #}
+{% macro ind(v) -%}
+  {%- set n = v or 0 -%}
+  {%- set s = '{:.2f}'.format(n|abs) -%}
+  {%- set intp = s.split('.')[0] -%}
+  {%- set dec = s.split('.')[1] -%}
+  {%- if n < 0 %}-{% endif -%}
+  {%- if intp|length <= 3 -%}
+    {{ intp }}.{{ dec }}
+  {%- else -%}
+    {%- set rest = intp[:-3] -%}
+    {%- set rev = rest|reverse|join('') -%}
+    {%- set pairs = [] -%}
+    {%- for i in range(0, rev|length, 2) -%}{%- set _ = pairs.append(rev[i:i+2]) -%}{%- endfor -%}
+    {{ (pairs|join(','))|reverse|join('') }},{{ intp[-3:] }}.{{ dec }}
+  {%- endif -%}
+{%- endmacro %}
+
+{# Money in the invoice's own currency. A zero prints as a dash so a ladder
+   can still be followed all the way down. #}
+{% macro money(v) -%}
+  {%- if v %}{{ invoice.currency_prefix }}&nbsp;{{ ind(v) }}{% else %}{{ invoice.currency_prefix }}&nbsp;-{% endif -%}
+{%- endmacro %}
+
+{# As above, but always carrying its sign - for ROUND-OFF, which has to read as
+   an amount added or taken back out rather than as a charge in its own right.
+   A zero prints as +0.00, not a dash: on a sheet that shows the row at all the
+   point is that the column foots, and a dash would leave that unproven. #}
+{% macro money_signed(v) -%}
+  {%- set n = v or 0 -%}
+  {{ invoice.currency_prefix }}&nbsp;{% if n >= 0 %}+{% endif %}{{ ind(n) }}
+{%- endmacro %}
