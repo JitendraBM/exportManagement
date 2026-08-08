@@ -56,7 +56,7 @@ def container_rows(invoice, packing_list) -> List[dict]:
     rows = []
     for index, detail in enumerate(invoice.container_details):
         sr_no = detail.get("sr_no") or index + 1
-        tare = to_number(detail.get("tare_weight"))
+        tare = to_number(detail.get("tare_weight_kg"))
         cargo = cargo_by_sr.get(sr_no)
         rows.append({
             "sr_no": sr_no,
@@ -66,7 +66,7 @@ def container_rows(invoice, packing_list) -> List[dict]:
             "max_permitted_weight": to_number(detail.get("max_permitted_weight")),
             "max_permitted_weight_raw": detail.get("max_permitted_weight") or "",
             "tare_weight": tare,
-            "tare_weight_raw": detail.get("tare_weight") or "",
+            "tare_weight_raw": detail.get("tare_weight_kg") if detail.get("tare_weight_kg") is not None else "",
             "cargo_weight": cargo,
             "total_vgm_weight": (tare + cargo) if (tare is not None and cargo is not None) else None,
             "weighbridge_name": detail.get("weighbridge_name") or "",

@@ -172,16 +172,23 @@ class TestQuotation:
         q.items = [self._item(1)]  # ignored because precomputed is set
         assert q.subtotal_usd == 999
 
-    def test_the_ladder_runs_down_from_cif_to_fob(self):
-        # Prices are CIF, so the charges are already inside the line totals:
-        # the discount comes off to give the invoice value, and the charges
-        # come out of THAT to leave the FOB value.
+    def test_the_ladder_runs_up_from_fob_to_cif(self):
+        # A quotation's price is always the absolute FOB price - the line
+        # totals ARE the FOB invoice total, and CIF is built by adding the
+        # charges back onto it (see Quotation.cif_value_usd, which overrides
+        # CifMoneyLadder for this one document type).
         q = self._quotation(sea_freight=10, insurance=5, certification=2,
                             other_charges=3, discount_amount=4)
         q.items = [self._item(100)]
-        assert q.cif_value_usd == 100
-        assert q.invoice_value_usd == 96          # 100 - 4
-        assert q.fob_value_usd == 76              # 96 - 5 - 10 - 2 - 3
+        assert q.subtotal_usd == 100              # the FOB invoice total
+        assert q.cif_value_usd == 120              # 100 + 10 + 5 + 2 + 3
+        assert q.invoice_value_usd == 116          # 120 - 4
+        assert q.fob_value_usd == 96               # 116 - 5 - 10 - 2 - 3
+
+    def test_cif_adjust_usd_lands_on_top_of_fob_plus_charges(self):
+        q = self._quotation(sea_freight=10, cif_adjust_usd=7)
+        q.items = [self._item(100)]
+        assert q.cif_value_usd == 117              # 100 + 10 + 7
 
 
 # --------------------------------------------------------------------------

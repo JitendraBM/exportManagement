@@ -253,20 +253,6 @@
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
 
-      {# An FOB-priced invoice works its goods lines out from per-unit prices
-         rounded to the cent, so the column above adds up a few cents short of
-         the CIF value this sheet totals to. That remainder prints on its own
-         ROUND-OFF line - without it the goods column would visibly not foot to
-         Total Invoice Value, and this is the copy the tax is claimed against.
-         Shown only when there is one to carry. #}
-      {% if invoice.fob_pricing and invoice.round_off %}
-      <tr class="ti-tot">
-        <td colspan="6"></td>
-        <td colspan="2" class="ti-r">Round-off</td>
-        <td class="ti-num">{{ rs_signed(invoice.round_off) }}</td>
-      </tr>
-      {% endif %}
-
       {# Totals: two money rows only. This document is not the charges ladder -
          it states what the goods came to and the tax due on that. The quantity
          totals sit under their own columns, and the e-way bill fills the width

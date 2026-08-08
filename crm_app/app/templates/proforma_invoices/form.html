@@ -214,7 +214,7 @@
       <div></div>
       {# Same ladder the printed sheet uses: CIF - discount = invoice value,
          then the charges come back out of it to leave FOB. #}
-      <div class="text-sm"><span id="round-off-block" hidden><strong>Round-off:</strong> $ <span id="round-off-display">0.00</span> &nbsp;·&nbsp; </span><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
+      <div class="text-sm"><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
     </div>
   </div>
 
@@ -381,27 +381,19 @@
       document.getElementById('fob-uplift-display').textContent = uplift.toFixed(4);
     }
 
-    // The uplifted price is rounded to the cent (it is a price the buyer
-    // multiplies out), and the lines are worked out from that rounded figure,
-    // so the goods total lands a cent or two off the FOB total + the charges.
-    // The gap prints as a ROUND-OFF row above CIF VALUE.
+    // The uplift is kept at full precision and only the line total is rounded
+    // to the cent - any gap that leaves lands silently in the Total column.
     let goodsTotal = 0;
-    let fobTotal = 0;
     rows.forEach((tr) => {
       const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
       const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
-      const price = Math.round((typed + uplift) * 100) / 100;
+      const price = typed + uplift;
       const total = Math.round(qty * price * 100) / 100;
       tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
       goodsTotal += total;
-      fobTotal += qty * typed;
     });
-    const roundOff = fobPricingEl.checked
-      ? Math.round((fobTotal + charges - goodsTotal) * 100) / 100 : 0;
-    document.getElementById('round-off-display').textContent = (roundOff >= 0 ? '+' : '') + roundOff.toFixed(2);
-    document.getElementById('round-off-block').hidden = !fobPricingEl.checked;
-    const subtotal = goodsTotal + roundOff;
+    const subtotal = goodsTotal;
     document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
     const invoiceValue = subtotal - discount;
     const fobValue = invoiceValue - insurance - seaFreight - certification - otherCharges;

@@ -107,7 +107,7 @@ def _extract_container_details(form) -> list:
     lr_nos = form.getlist("cd_lr_no[]")
     transporters = form.getlist("cd_transporter_name[]")
     max_weights = form.getlist("cd_max_permitted_weight[]")
-    tares = form.getlist("cd_tare_weight[]")
+    tares = form.getlist("cd_tare_weight_kg[]")
     n = max(len(nos), len(line_seals), len(rfids), len(vehicles),
             len(lr_nos), len(transporters), len(max_weights), len(tares))
     rows = []
@@ -120,7 +120,7 @@ def _extract_container_details(form) -> list:
             "lr_no": lr_nos[i] if i < len(lr_nos) else "",
             "transporter_name": transporters[i] if i < len(transporters) else "",
             "max_permitted_weight": max_weights[i] if i < len(max_weights) else "",
-            "tare_weight": tares[i] if i < len(tares) else "",
+            "tare_weight_kg": tares[i] if i < len(tares) else "",
         })
     return rows
 

@@ -124,23 +124,26 @@ class TestQuotationCrud:
                 [{"product_name": "P", "quantity_value": "1", "price_usd": "1"}])
 
     def test_fob_shipping_terms_drop_sea_freight_and_insurance(self, container, seed):
-        # FOB puts the ocean leg on the buyer - neither charge is stored.
+        # FOB puts the ocean leg on the buyer - neither charge is stored, so
+        # nothing is added onto the FOB total to reach CIF.
         q = self._create(container, seed, shipping_terms="FOB",
                          sea_freight="100", insurance="50")
         reloaded = container.quotation_service.get(q.id, seed.company_id)
         assert reloaded.sea_freight == 0
         assert reloaded.insurance == 0
+        assert reloaded.cif_value_usd == 20.0
         assert reloaded.invoice_value_usd == 20.0  # goods only
 
     def test_cfr_shipping_terms_drop_only_the_insurance(self, container, seed):
         # Under CFR the seller still pays the freight - only the cargo
-        # insurance moves to the buyer.
+        # insurance moves to the buyer, so freight still adds onto CIF.
         q = self._create(container, seed, shipping_terms="CFR BEIRA",
                          sea_freight="100", insurance="50")
         reloaded = container.quotation_service.get(q.id, seed.company_id)
         assert reloaded.sea_freight == 100
         assert reloaded.insurance == 0
-        assert reloaded.fob_value_usd == -80.0  # CIF 20 - 100 freight
+        assert reloaded.cif_value_usd == 120.0  # 20 goods + 100 freight
+        assert reloaded.fob_value_usd == 20.0   # the freight comes back out again
 
     def test_non_fob_terms_keep_sea_freight_and_insurance(self, container, seed):
         q = self._create(container, seed, shipping_terms="CIF",
@@ -148,70 +151,88 @@ class TestQuotationCrud:
         reloaded = container.quotation_service.get(q.id, seed.company_id)
         assert (reloaded.sea_freight, reloaded.insurance) == (100, 50)
 
-    def test_fob_pricing_spreads_the_charges_over_every_line(self, container, seed):
-        # 300 of charges (the 40 discount is NOT part of the spread) over
-        # 10 + 20 = 30 total qty is 10 per unit added onto each typed price.
+    # ---- CIF is built UPWARDS from the absolute FOB total --------------------
+    def test_fob_total_is_quantity_times_price_summed(self, container, seed):
+        q = container.quotation_service.create(
+            seed.admin,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01"},
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"},
+             {"product_name": "B", "quantity_value": "20", "price_usd": "5"}])
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert [(i.price_usd, i.total_usd) for i in reloaded.items] == [(2.0, 20.0), (5.0, 100.0)]
+        assert reloaded.subtotal_usd == 120.0  # the FOB invoice total
+
+    def test_cif_value_is_fob_total_plus_charges(self, container, seed):
+        # Charges add onto the FOB total to reach CIF - the discount is NOT
+        # one of them, it comes off further down the ladder.
         q = container.quotation_service.create(
             seed.admin,
             {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
              "sea_freight": "100", "insurance": "50", "certification": "60",
-             "other_charges": "90", "discount_amount": "40", "fob_pricing": "1"},
+             "other_charges": "90", "discount_amount": "40"},
             [{"product_name": "A", "quantity_value": "10", "price_usd": "2"},
              {"product_name": "B", "quantity_value": "20", "price_usd": "5"}])
         reloaded = container.quotation_service.get(q.id, seed.company_id)
-        assert reloaded.fob_pricing is True
-        assert [(i.fob_price_usd, i.price_usd, i.total_usd) for i in reloaded.items] == \
-               [(2.0, 12.0, 120.0), (5.0, 15.0, 300.0)]
-        # CIF less the charges lands back on the FOB total that was typed.
-        assert reloaded.cif_value_usd == 420.0
-        assert reloaded.fob_value_usd == pytest.approx(10 * 2 + 20 * 5 - 40)
+        assert reloaded.subtotal_usd == 120.0                        # 10x2 + 20x5, untouched
+        assert reloaded.cif_value_usd == 420.0                       # 120 + 300 charges
+        assert reloaded.invoice_value_usd == 380.0                   # 420 - 40 discount
+        assert reloaded.fob_value_usd == pytest.approx(120.0 - 40)   # charges stripped back out, discount stays off
 
-    def test_fob_pricing_rounds_the_price_and_books_the_rest_as_round_off(self, container, seed):
-        # 100 over 3 units is 33.333...: the printed price rounds to 40.33, so
-        # the line total (120.99) carries 99c of charge instead of 100 - the
-        # missing cent prints as ROUND-OFF, leaving CIF and FOB both exact.
+    def test_fob_total_is_the_same_whatever_the_shipping_terms(self, container, seed):
+        # The goods lines themselves never change with the terms picked -
+        # only which charge fields are non-zero (and so added to CIF) does.
+        for terms in ("FOB", "CFR BEIRA", "CIF"):
+            q = self._create(container, seed, shipping_terms=terms, sea_freight="100", insurance="50")
+            reloaded = container.quotation_service.get(q.id, seed.company_id)
+            assert reloaded.subtotal_usd == 20.0
+
+    def test_typed_price_is_never_adjusted_even_if_fob_pricing_is_posted(self, container, seed):
+        """A stale client (or a direct API call) posting the old fob_pricing
+        checkbox must not revive the removed uplift - the typed price is
+        always absolute for a quotation."""
         q = container.quotation_service.create(
             seed.admin,
             {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
              "sea_freight": "100", "fob_pricing": "1"},
-            [{"product_name": "A", "quantity_value": "3", "price_usd": "7"}])
-        reloaded = container.quotation_service.get(q.id, seed.company_id)
-        item = reloaded.items[0]
-        assert (item.price_usd, item.total_usd) == (40.33, 120.99)
-        assert item.total_usd == round(item.quantity_value * item.price_usd, 2)  # columns multiply out
-        assert reloaded.round_off == 0.01
-        assert reloaded.cif_value_usd == pytest.approx(121.0)
-        assert reloaded.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
-
-    def test_round_off_is_zero_without_fob_pricing(self, container, seed):
-        q = self._create(container, seed, shipping_terms="CIF", sea_freight="100")
-        reloaded = container.quotation_service.get(q.id, seed.company_id)
-        assert reloaded.round_off == 0
-        assert reloaded.cif_value_usd == 20.0  # the lines are the CIF value, untouched
-
-    def test_without_fob_pricing_the_typed_price_is_the_cif_price(self, container, seed):
-        q = self._create(container, seed, shipping_terms="CIF", sea_freight="100")
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
         reloaded = container.quotation_service.get(q.id, seed.company_id)
         assert reloaded.fob_pricing is False
         assert reloaded.items[0].price_usd == 2.0
         assert reloaded.items[0].fob_price_usd is None
-        assert reloaded.cif_value_usd == 20.0
+        assert reloaded.items[0].total_usd == 20.0
+        assert reloaded.cif_value_usd == 120.0  # 20 goods + 100 sea freight
 
-    def test_turning_fob_pricing_off_reprices_back_to_what_is_typed(self, container, seed):
+    # ---- cif_adjust_usd: a document-level override, price is never touched --
+    def test_cif_adjust_usd_is_a_document_level_override(self, container, seed):
+        """Mirrors what the form's subtotal-input handler submits: the typed
+        price and every line's total are untouched, and the manual gap
+        between the typed CIF value and (FOB total + charges) is posted as
+        its own header field."""
         q = container.quotation_service.create(
             seed.admin,
-            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
-             "sea_freight": "100", "fob_pricing": "1"},
-            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
-        assert container.quotation_service.get(q.id, seed.company_id).items[0].price_usd == 12.0
-        container.quotation_service.update(
-            seed.admin, q.id,
-            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "shipping_terms": "CIF",
-             "sea_freight": "100"},
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
+             "sea_freight": "100", "cif_adjust_usd": "5"},
             [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
         reloaded = container.quotation_service.get(q.id, seed.company_id)
-        assert reloaded.items[0].price_usd == 2.0
-        assert reloaded.items[0].fob_price_usd is None
+        assert reloaded.items[0].price_usd == 2.0   # the typed price, untouched
+        assert reloaded.items[0].total_usd == 20.0  # qty x price, untouched
+        assert reloaded.cif_adjust_usd == 5.0
+        assert reloaded.cif_value_usd == 125.0      # 20 goods + 100 sea freight + 5 adjust
+
+    def test_cif_adjust_usd_survives_a_reload(self, container, seed):
+        q = container.quotation_service.create(
+            seed.admin,
+            {"buyer_name": "Buyer", "quotation_date": "2026-01-01", "cif_adjust_usd": "-3.5"},
+            [{"product_name": "A", "quantity_value": "10", "price_usd": "2"}])
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.cif_adjust_usd == -3.5
+        assert reloaded.cif_value_usd == 16.5   # 20 goods - 3.5 adjust
+
+    def test_cif_adjust_usd_defaults_to_zero(self, container, seed):
+        q = self._create(container, seed)
+        reloaded = container.quotation_service.get(q.id, seed.company_id)
+        assert reloaded.cif_adjust_usd == 0
+        assert reloaded.cif_value_usd == 20.0
 
     def test_create_records_a_version(self, container, seed):
         q = self._create(container, seed)

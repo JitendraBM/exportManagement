@@ -275,7 +275,7 @@
               </select>
             </td>
             <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}"></td>
-            <td><input type="text" name="cd_tare_weight[]" value="{{ cd.tare_weight or '' }}"></td>
+            <td><input type="number" step="any" name="cd_tare_weight_kg[]" value="{{ cd.tare_weight_kg if cd.tare_weight_kg is not none else '' }}"></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
@@ -372,9 +372,7 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th id="price-header">Price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
-            {# Only shown with "Prices typed are FOB" ticked - see applyFobPricing. #}
-            <th class="num js-cif-col" hidden>CIF price</th>
+            <th>Price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th>IGST %</th>
             <th class="num">Total (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th></th>
@@ -408,14 +406,7 @@
                 {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
               </select>
             </td>
-            {# Under FOB pricing the stored price_usd is the CIF price worked
-               out at save time - what the user typed is fob_price_usd, so
-               that is what has to come back into the input. A re-displayed
-               form row (a dict, after a validation error) carries the typed
-               figure in price_usd either way. #}
-            {% set typed_price = row.fob_price_usd if (data.fob_pricing and row.fob_price_usd) else row.price_usd %}
-            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ typed_price or '' }}"></td>
-            <td class="num js-cif-price js-cif-col" hidden>0.00</td>
+            <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
             <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
             <td class="num js-total">0.00</td>
             <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
@@ -435,30 +426,19 @@
       <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
-    {# The prices above are normally CIF prices - the charges are already
-       inside them. Ticking this says they were typed FOB instead, so the
-       charges (NOT the discount) get spread over the total Qty and added onto
-       every line to reach the CIF price the sheet prints - and the per-line
-       tax follows that CIF price, as it always has. #}
-    <div class="field" style="margin-top:10px;">
-      <label class="flex gap-8" style="align-items:center;">
-        <input type="checkbox" id="fob_pricing" name="fob_pricing" value="1" {{ 'checked' if data.fob_pricing }}>
-        <span>Prices typed above are <strong>FOB</strong> — add the charges into them</span>
-      </label>
-      <div class="hint" id="fob-pricing-hint" hidden>
-        Sea freight + insurance + certification + other = <strong><span id="fob-charges-display">0.00</span></strong>,
-        spread over <span id="fob-qty-display">0.00</span> total Qty
-        = <strong><span id="fob-uplift-display">0.00</span></strong> added to every line's price.
-        The invoice prints the resulting CIF price; the discount is not part of the spread.
-      </div>
-    </div>
     <div class="form-row">
-      <div class="field" style="max-width:180px;"><label for="total_net_weight_kg">Total net weight (KG)</label><input type="number" step="0.01" id="total_net_weight_kg" name="total_net_weight_kg" value="{{ data.total_net_weight_kg | default('', true) }}"></div>
-      <div class="field" style="max-width:180px;"><label for="total_gross_weight_kg">Total gross weight (KG)</label><input type="number" step="0.01" id="total_gross_weight_kg" name="total_gross_weight_kg" value="{{ data.total_gross_weight_kg | default('', true) }}"></div>
+      {# Display only - worked out from each line's Boxes x its catalog
+         product's per-box net/gross weight, the same figures the export
+         packing list's container split uses. Not typed in. #}
+      <div class="field" style="max-width:180px;"><label for="total_net_weight_kg">Total net weight (KG)</label><input type="number" step="0.01" id="total_net_weight_kg" name="total_net_weight_kg" value="{{ data.total_net_weight_kg | default('', true) }}" readonly tabindex="-1"></div>
+      <div class="field" style="max-width:180px;"><label for="total_gross_weight_kg">Total gross weight (KG)</label><input type="number" step="0.01" id="total_gross_weight_kg" name="total_gross_weight_kg" value="{{ data.total_gross_weight_kg | default('', true) }}" readonly tabindex="-1"></div>
     </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
-      <div class="text-sm"><span id="round-off-block" hidden><strong>Round-off:</strong> $ <span id="round-off-display">0.00</span> &nbsp;·&nbsp; </span><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span></div>
+      <div class="text-sm flex gap-8" style="align-items:center; flex-wrap:wrap;">
+        <strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span>
+      </div>
     </div>
   </div>
 
@@ -545,8 +525,7 @@
           {% for u in PRODUCT_UNITS %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
         </select>
       </td>
-      <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required></td>
-      <td class="num js-cif-price js-cif-col" hidden>0.00</td>
+      <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required></td>
       <td class="js-igst-cell text-sm">—</td>
       <td class="num js-total">0.00</td>
       <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>`;
@@ -557,51 +536,38 @@
     itemsBody.querySelectorAll('.item-row').forEach((tr, i) => { tr.querySelector('.js-sr').textContent = i + 1; });
   }
 
-  const fobPricingEl = document.getElementById('fob_pricing');
+  const subtotalDisplay = document.getElementById('subtotal-display');
 
   function recalcTotals() {
     const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
     const rate = parseFloat(document.getElementById('exchange_rate').value) || 0;
     const num = (id) => parseFloat(document.getElementById(id).value) || 0;
 
-    // With FOB pricing on, the charges (never the discount) are one lump for
-    // the whole shipment: divided by the total Qty they give a per-unit figure
-    // added uniformly onto every typed price to reach its CIF price. Mirrors
-    // apply_fob_uplift in app/services.py, which is what actually saves. The
-    // uplifted price is rounded to the cent (the buyer multiplies it out), so
-    // the lines land a cent or two off the FOB total + the charges - that gap
-    // prints as a ROUND-OFF row above CIF VALUE.
-    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
-    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
-    const uplift = fobPricingEl.checked && totalQty ? charges / totalQty : 0;
-    if (fobPricingEl.checked) {
-      document.getElementById('fob-charges-display').textContent = charges.toFixed(2);
-      document.getElementById('fob-qty-display').textContent = totalQty.toFixed(2);
-      document.getElementById('fob-uplift-display').textContent = uplift.toFixed(4);
-    }
-
-    let goodsTotal = 0, fobTotal = 0, tax = 0;
+    let goodsTotal = 0, tax = 0, netWeight = 0, grossWeight = 0;
     rows.forEach((tr) => {
       const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
-      const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
-      const price = Math.round((typed + uplift) * 100) / 100;
+      const price = parseFloat(tr.querySelector('.js-price').value) || 0;
       const total = Math.round(qty * price * 100) / 100;
-      tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
       goodsTotal += total;
-      fobTotal += qty * typed;
       const igst = parseFloat(tr.dataset.igst) || 0;
       tr.querySelector('.js-igst-cell').textContent = tr.dataset.igst ? igst : '—';
       tax += total * rate * igst / 100;   // tax follows the CIF price, as always
+
+      // Total net/gross weight: display-only, worked out from each line's
+      // Boxes x its catalog product's per-box weight (the same figures the
+      // export packing list's container split reads off this row).
+      const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
+      netWeight += boxes * (parseFloat(tr.dataset.netWeight) || 0);
+      grossWeight += boxes * (parseFloat(tr.dataset.grossWeight) || 0);
     });
-    const roundOff = fobPricingEl.checked
-      ? Math.round((fobTotal + charges - goodsTotal) * 100) / 100 : 0;
-    document.getElementById('round-off-display').textContent = (roundOff >= 0 ? '+' : '') + roundOff.toFixed(2);
-    document.getElementById('round-off-block').hidden = !fobPricingEl.checked;
+    document.getElementById('total_net_weight_kg').value = netWeight ? (Math.round(netWeight * 100) / 100) : '';
+    document.getElementById('total_gross_weight_kg').value = grossWeight ? (Math.round(grossWeight * 100) / 100) : '';
+
     // Same ladder the printed sheet uses: CIF - discount = invoice value,
     // then the charges come back out of it to leave FOB.
-    const subtotal = goodsTotal + roundOff;
-    document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
+    const subtotal = goodsTotal;
+    subtotalDisplay.textContent = subtotal.toFixed(2);
     const invoiceValue = subtotal - num('discount_amount');
     const fobValue = invoiceValue - num('insurance') - num('sea_freight') - num('certification') - num('other_charges');
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
@@ -673,7 +639,7 @@
     populatePalletOptions(tr, [], false);
     recalcRowPallets(tr);
     renumber();
-    applyFobPricing();  // the new row's CIF price cell follows the current mode
+    recalcTotals();
   });
 
   itemsBody.addEventListener('click', (e) => {
@@ -691,20 +657,6 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', recalcTotals);
   });
-
-  // ---- FOB-typed prices --------------------------------------------------
-  // Only the display changes here: the Price column is relabelled, the
-  // worked-out CIF price per line is shown beside it, and the spread is
-  // explained under the charges. What gets posted is still the typed price -
-  // the server does the uplift, so the two can't drift apart.
-  function applyFobPricing() {
-    const on = fobPricingEl.checked;
-    document.getElementById('price-header').firstChild.textContent = on ? 'FOB price (' : 'Price (';
-    document.querySelectorAll('.js-cif-col').forEach((cell) => { cell.hidden = !on; });
-    document.getElementById('fob-pricing-hint').hidden = !on;
-    recalcTotals();
-  }
-  fobPricingEl.addEventListener('change', applyFobPricing);
 
   // ---- the delivery terms decide which charges apply --------------------------
   // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
@@ -835,7 +787,7 @@
       initRowPalletSelection(tr);
     });
     renumber();
-    applyFobPricing();  // the imported rows' CIF price cells, then recalcTotals()
+    recalcTotals();
 
     const pdWrap = document.getElementById('purchase-detail-rows');
     pdWrap.innerHTML = '';
@@ -920,7 +872,7 @@
       <td><input type="text" name="cd_lr_no[]"></td>
       <td><select name="cd_transporter_name[]">${cdTransporterOptions}</select></td>
       <td><input type="text" name="cd_max_permitted_weight[]"></td>
-      <td><input type="text" name="cd_tare_weight[]"></td>
+      <td><input type="number" step="any" name="cd_tare_weight_kg[]"></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
@@ -1043,7 +995,7 @@
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
-  applyFobPricing();  // ends in recalcTotals()
+  recalcTotals();
 })();
 </script>
 
@@ -1094,7 +1046,7 @@
       seal: (tr.querySelector('[name="cd_line_seal_no[]"]').value || '').trim(),
       rfid: (tr.querySelector('[name="cd_rfid_seal_no[]"]').value || '').trim(),
       vehicle: (tr.querySelector('[name="cd_vehicle_no[]"]').value || '').trim(),
-      tare: (tr.querySelector('[name="cd_tare_weight[]"]').value || '').trim(),
+      tare: (tr.querySelector('[name="cd_tare_weight_kg[]"]').value || '').trim(),
     })).filter((c) => c.no || c.seal || c.rfid || c.vehicle || c.tare);
     if (!rows.length) rows.push({ no: '', seal: '', rfid: '', vehicle: '', tare: '' });
     return rows.map((c, index) => ({ ...c, index }));

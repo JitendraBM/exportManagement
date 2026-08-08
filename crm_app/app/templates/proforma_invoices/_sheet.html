@@ -287,13 +287,8 @@
      isn't there. #}
   {% set show_sea_freight = not invoice.terms_of_delivery | drops_sea_freight %}
   {% set show_insurance = not invoice.terms_of_delivery | drops_insurance %}
-  {# FOB-priced invoices carry one more row: the lines are worked out from
-     per-unit prices rounded to the cent, and ROUND-OFF is the few cents that
-     leaves between them and the CIF value. Only that pricing mode can produce
-     one, so a plain invoice's sheet is unchanged. #}
-  {% set show_round_off = invoice.fob_pricing %}
   {% set charge_rows = 6 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
-                         + (1 if show_round_off else 0) + (1 if annex_items else 0) %}
+                         + (1 if annex_items else 0) %}
   <table>
     <colgroup>
       <col style="width:8%"><col style="width:45%"><col style="width:35%"><col style="width:12%">
@@ -304,14 +299,6 @@
       {% if annex_items %}
       <td class="pi-charge-label">ANNEXURE</td>
       <td class="pi-val pi-right">{{ usd(annex_total) }}</td>
-    </tr>
-    <tr>
-      {% endif %}
-      {# Signed on purpose: it says whether the rounded line prices carry a
-         little more or a little less than the charges actually were. #}
-      {% if show_round_off %}
-      <td class="pi-charge-label">ROUND-OFF</td>
-      <td class="pi-val pi-right">{{ invoice.currency_prefix }} {{ '{:+,.2f}'.format(invoice.round_off) }}</td>
     </tr>
     <tr>
       {% endif %}

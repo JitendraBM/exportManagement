@@ -61,7 +61,7 @@
 
 <div class="epl-sheet js-page-sheet">
   <div class="epl-title">PACKING LIST</div>
-  <div class="epl-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}</div>
+  <div class="epl-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }} {% if lut_no %}LUT NO : {{ lut_no }}{% endif %}</div>
 
   <!-- ============ HEADER: consigner/consignee | invoice references ============ -->
   <table>
@@ -228,6 +228,7 @@
         <span class="epl-lbl">Export Under</span><br>
         {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
         SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
+        {% if lut_no %}LUT NO : {{ lut_no }}{% endif %}
         {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
       </td>
       <td rowspan="3" class="epl-lbl epl-mid epl-center" style="font-size:11px;">

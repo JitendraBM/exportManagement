@@ -22,7 +22,9 @@ _HEADER_FIELDS = [
     "shipping_mode", "shipping_terms", "payment_terms",
     "price_validity_days", "remarks",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",
-    "fob_pricing",
+    # The gap between a typed CIF value and what the ladder computes (goods
+    # total + charges) - see Quotation.cif_adjust_usd / cif_value_usd.
+    "cif_adjust_usd",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "currency_code",
 ]
