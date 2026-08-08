@@ -35,12 +35,12 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # with the row key each one reads and a sensible Excel column width.
 _COLUMNS = [
     ("SHIPPING_BILL_NO", "shipping_bill_no", 18),
-    ("SHIPPING BILL DATE", "shipping_bill_date", 18),
+    ("SHIPPING BILL DATE (dd/mm/yyyy)", "shipping_bill_date", 20),
     ("VEHICLE NUMBER", "vehicle_no", 18),
     ("CONTAINER NUMBER", "container_no", 18),
     ("ESEAL NUMBER", "eseal_no", 18),
-    ("SEALING TIME", "sealing_time", 14),
-    ("SEALING DATE", "sealing_date_printed", 16),
+    ("SEALING TIME (HH:mm)", "sealing_time", 16),
+    ("SEALING DATE (dd/mm/yyyy)", "sealing_date_printed", 20),
     ("E-Way Bill No", "eway_bill_no", 18),
 ]
 

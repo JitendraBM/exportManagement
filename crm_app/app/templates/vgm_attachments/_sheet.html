@@ -1,11 +1,17 @@
 {# The VGM ATTACHMENT sheet - one row per physical container. Expects
-   `invoice` and `rows` (assembled in routes/vgm_attachments.py).
+   `rows` (assembled by app/vgm.py:container_rows), and optionally `embedded`.
 
    Unlike the other export attachments this sheet is also its own form: the
    derived figures print as text and the two typed cells (weighbridge, slip
    no.) are inputs sitting in the same row. The inputs carry a `no-print`
    twin so the printed copy shows the saved TEXT rather than a form control -
    a browser prints an <input> as an empty box, which would defeat the point.
+
+   `embedded` is the same sheet quoted underneath the VGM declaration, which
+   is A4 portrait and has no form around it: the two typed cells become plain
+   text and the sheet narrows to the declaration's width. The figures come
+   from the same helper either way, so the two copies cannot disagree - the
+   attachment page remains the one place they are edited.
 
    Total VGM Weight is tare + cargo. A container whose tare hasn't been typed,
    or which has no packing list allocation, has no total to show and prints a
@@ -24,6 +30,15 @@
     width: 100%; box-sizing: border-box; border: 1px solid #bbb; padding: 2px 4px;
     font: inherit; text-align: center; background: #fff;
   }
+  /* Riding under the declaration: same table, A4 portrait's width instead of
+     landscape's, and small enough that nine columns still fit across it. It
+     keeps the sheet shadow, so on screen it reads as the second page it is.
+     The declaration above already leaves the gap, hence no top margin. */
+  .vgm-sheet--embedded {
+    width: 205mm; margin: 0 auto 48px; font-size: 8px;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .vgm-sheet--embedded th, .vgm-sheet--embedded td { padding: 3px 3px; }
   @media print {
     .vgm-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
     /* Print the saved values, not empty input boxes. */
@@ -35,7 +50,7 @@
 
 {% macro num(v) -%}{%- if v is not none %}{{ '{:,.2f}'.format(v) }}{% else %}-{% endif -%}{%- endmacro %}
 
-<div class="vgm-sheet js-page-sheet">
+<div class="vgm-sheet js-page-sheet{{ ' vgm-sheet--embedded' if embedded }}">
   <div class="vgm-title">VGM ATTACHMENT</div>
 
   <table>
@@ -64,6 +79,10 @@
         <td>{% if row.tare_weight is not none %}{{ num(row.tare_weight) }}{% else %}{{ row.tare_weight_raw or '-' }}{% endif %}</td>
         <td>{{ num(row.cargo_weight) }}</td>
         <td>{{ num(row.total_vgm_weight) }}</td>
+        {% if embedded %}
+        <td>{{ row.weighbridge_name or '-' }}</td>
+        <td>{{ row.weighing_slip_no or '-' }}</td>
+        {% else %}
         <td>
           <input type="hidden" name="vgm_sr_no[]" value="{{ row.sr_no }}">
           <span class="vgm-input">
@@ -77,6 +96,7 @@
           </span>
           <span class="vgm-printed">{{ row.weighing_slip_no or '' }}</span>
         </td>
+        {% endif %}
       </tr>
       {% else %}
       <tr>

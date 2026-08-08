@@ -60,7 +60,7 @@
     <tr>
       <td class="vgmd-sr">{{ loop.index }}</td>
       <td>{{ label }}</td>
-      {# Multi-value cells (up to three containers) arrive newline-separated. #}
+      {# Cells that can hold several lines arrive newline-separated. #}
       <td>{{ (value or '-')|replace('\n', '<br>')|safe }}</td>
     </tr>
     {% endfor %}

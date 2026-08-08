@@ -139,7 +139,8 @@
                   data-date-of-issue="{{ p.date_of_issue or '' }}"
                   data-stuffing-place-name="{{ p.stuffing_place_name or '' }}"
                   data-place-of-stuffing="{{ p.place_of_stuffing or '' }}"
-                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}">
+                  data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}"
+                  data-is-one-time="{{ '1' if p.is_one_time else '0' }}">
             {{ p.permission_number }}{% if p.stuffing_place_name %} — {{ p.stuffing_place_name }}{% endif %}
           </option>
         {% endfor %}
@@ -164,7 +165,15 @@
     <div class="form-row">
       <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
       <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
-      <div class="field"><label for="permission_expiry">Permission expiry</label><input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}"></div>
+      <div class="field">
+        <label for="permission_expiry">Permission expiry</label>
+        {% set is_one_time = data.permission_is_one_time in (true, 1, '1') %}
+        <input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}" {{ 'disabled' if is_one_time }}>
+        <input type="hidden" id="permission_is_one_time" name="permission_is_one_time" value="{{ '1' if is_one_time else '0' }}">
+        <label class="text-sm text-soft" style="display:flex; align-items:center; gap:.3rem; margin-top:.3rem;">
+          <input type="checkbox" id="permission_is_one_time_toggle" {{ 'checked' if is_one_time }}> One time (no expiry)
+        </label>
+      </div>
     </div>
     <div class="field">
       <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list and as the Annexure-C's Factory/Place of Stuffing)</span></label>
@@ -946,12 +955,22 @@
   });
 
   // ---- permit dropdown prefill --------------------------------------------------
+  const permissionExpiryInput = document.getElementById('permission_expiry');
+  const permissionIsOneTimeInput = document.getElementById('permission_is_one_time');
+  const permissionIsOneTimeToggle = document.getElementById('permission_is_one_time_toggle');
+  function setPermissionOneTime(isOneTime) {
+    permissionIsOneTimeToggle.checked = isOneTime;
+    permissionIsOneTimeInput.value = isOneTime ? '1' : '0';
+    permissionExpiryInput.disabled = isOneTime;
+    if (isOneTime) permissionExpiryInput.value = '';
+  }
   document.getElementById('permit_select').addEventListener('change', (e) => {
     const opt = e.target.selectedOptions[0];
     if (!opt.value) return;
     document.getElementById('permission_no').value = opt.dataset.permissionNumber || '';
     document.getElementById('permission_date').value = (opt.dataset.dateOfIssue || '').slice(0, 10);
-    document.getElementById('permission_expiry').value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
+    setPermissionOneTime(opt.dataset.isOneTime === '1');
+    permissionExpiryInput.value = (opt.dataset.dateOfExpiry || '').slice(0, 10);
     document.getElementById('issuing_authority').value = opt.dataset.issuingAuthority || '';
     document.getElementById('issuing_authority_address').value = opt.dataset.issuingAuthorityAddress || '';
     const stuffAt = [opt.dataset.stuffingPlaceName, opt.dataset.placeOfStuffing].filter(Boolean).join(', ');
@@ -959,6 +978,7 @@
     if (opt.dataset.stuffingPlaceName) document.getElementById('manufacturer_name').value = opt.dataset.stuffingPlaceName;
     if (opt.dataset.placeOfStuffing) document.getElementById('manufacturer_address').value = opt.dataset.placeOfStuffing;
   });
+  permissionIsOneTimeToggle.addEventListener('change', (e) => setPermissionOneTime(e.target.checked));
 
   // ---- product picker --------------------------------------------------
   const overlay = document.getElementById('product-picker-overlay');

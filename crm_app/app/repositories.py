@@ -1984,11 +1984,12 @@ class ExportInvoiceRepository:
                 shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, vessel_voyage_no,
                 issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
+                permission_is_one_time,
                 manufacturer_name, manufacturer_address, stuffing_location, remarks,
                 total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
                 shipping_bill_date, currency_code, currency_symbol, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -2007,7 +2008,7 @@ class ExportInvoiceRepository:
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
                    examination_date = ?, location_code_08b = ?, booking_no = ?, vessel_voyage_no = ?,
                    issuing_authority = ?, issuing_authority_address = ?,
-                   permission_no = ?, permission_date = ?, permission_expiry = ?, manufacturer_name = ?,
+                   permission_no = ?, permission_date = ?, permission_expiry = ?, permission_is_one_time = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
                    total_net_weight_kg = ?, total_gross_weight_kg = ?, shipping_bill_no = ?,
                    shipping_bill_date = ?, currency_code = ?, currency_symbol = ?,
@@ -2086,7 +2087,7 @@ class ExportInvoiceRepository:
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
             invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
             invoice.vessel_voyage_no, invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
-            invoice.permission_date, invoice.permission_expiry, invoice.manufacturer_name,
+            invoice.permission_date, invoice.permission_expiry, int(bool(invoice.permission_is_one_time)), invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
             invoice.shipping_bill_no, invoice.shipping_bill_date,

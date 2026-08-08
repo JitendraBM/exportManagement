@@ -41,7 +41,7 @@ _HEADER_FIELDS = [
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
     "examination_date", "location_code_08b", "booking_no", "vessel_voyage_no",
     "issuing_authority", "issuing_authority_address",
-    "permission_no", "permission_date", "permission_expiry", "manufacturer_name", "manufacturer_address",
+    "permission_no", "permission_date", "permission_expiry", "permission_is_one_time", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
     "total_net_weight_kg", "total_gross_weight_kg", "shipping_bill_no", "shipping_bill_date",
     "currency_code",

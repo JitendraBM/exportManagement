@@ -3,8 +3,8 @@
 
    Nothing is typed on this document and nothing is derived in this template -
    the route decides every value. Two bands sharing one column grid: the
-   e-way bill reference across the top, then a row per vehicle x goods line
-   with a totals row underneath. #}
+   e-way bill reference across the top, then one row per container (vehicle)
+   with its goods lines summed, and a totals row underneath. #}
 <style>
   .ewb-sheet {
     background: #fff; color: #000; width: 205mm; margin: 24px auto 48px;
@@ -23,16 +23,16 @@
 <div class="ewb-sheet js-page-sheet">
   <table>
     <colgroup>
-      <col style="width:15%"><col style="width:12%"><col style="width:31%">
-      <col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:10%">
+      <col style="width:30%"><col style="width:25%">
+      <col style="width:15%"><col style="width:15%"><col style="width:15%">
     </colgroup>
     <thead>
       {# The e-way bill this whole sheet is filed under. #}
       <tr>
         <th>EwayBill no</th>
-        <th colspan="2" style="font-weight:normal;">{{ invoice.eway_bill_no or '-' }}</th>
+        <th style="font-weight:normal;">{{ invoice.eway_bill_no or '-' }}</th>
         <th>EwayBill Date</th>
-        <th colspan="3" style="font-weight:normal;">{{ eway_bill_date or '-' }}</th>
+        <th colspan="2" style="font-weight:normal;">{{ eway_bill_date or '-' }}</th>
       </tr>
       <tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}</tr>
     </thead>
@@ -41,8 +41,6 @@
       <tr>
         <td>{{ row.vehicle_no or '-' }}</td>
         <td>{{ row.lr_no or '-' }}</td>
-        <td>{{ row.description }}</td>
-        <td class="ewb-c">{{ row.hsn_code }}</td>
         <td class="ewb-c">{{ '{:,.0f}'.format(row.pallets) }}</td>
         <td class="ewb-c">{{ '{:,.0f}'.format(row.quantity_boxes) }}</td>
         <td class="ewb-num">{{ '{:,.2f}'.format(row.quantity_value) }}</td>
@@ -56,7 +54,7 @@
       {% endfor %}
       {% if rows %}
       <tr class="ewb-tot">
-        <td colspan="4">TOTAL</td>
+        <td colspan="2">TOTAL</td>
         <td class="ewb-c">{{ '{:,.2f}'.format(totals.pallets) }}</td>
         <td class="ewb-c">{{ '{:,.2f}'.format(totals.quantity_boxes) }}</td>
         <td class="ewb-num">{{ '{:,.2f}'.format(totals.quantity_value) }}</td>

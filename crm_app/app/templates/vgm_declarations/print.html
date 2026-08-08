@@ -31,13 +31,17 @@
     This VGM declaration is generated from export invoice
     <strong>{{ invoice.export_invoice_number }}</strong>. The per-container rows come from its
     <strong>VGM attachment</strong>
-    {%- if container_count > 3 %} — this shipment has {{ container_count }} containers, more than the three
-    this one-cell-per-field sheet can list, so those cells read <strong>VGM ATTACHMENT</strong> and the
-    reader goes to that sheet
+    {%- if container_count > 1 %} — this shipment has {{ container_count }} containers and this sheet has
+    one cell per field, not one row per container, so those cells read <strong>VGM ATTACHMENT</strong>
+    {%- if show_attachment %} and that attachment is printed below, so the two go out as one document
+    {%- else %}; with this many containers the attachment is a document of its own — open the
+    <strong>VGM attachment</strong> page above to print it
+    {%- endif %}
     {%- else %} — {{ container_count }} container{{ 's' if container_count != 1 }}, so their values are
     listed here in full
     {%- endif %}.
-    Only the five shaded particulars on the reference are typed; use <strong>Edit</strong> for those.
+    Weighbridge and slip no. are typed on the VGM attachment page; the five shaded particulars on the
+    reference are typed here — use <strong>Edit</strong> for those.
   </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -51,6 +55,16 @@
   {% endwith %}
 
   {% include 'vgm_declarations/_sheet.html' %}
+
+  {# With more than one container the particulars above only point at the
+     attachment, so print it here too rather than send the reader elsewhere.
+     Read-only: the weighbridge and slip no. are still typed on the
+     attachment's own page. #}
+  {% if show_attachment %}
+    {% with embedded = True %}
+      {% include 'vgm_attachments/_sheet.html' %}
+    {% endwith %}
+  {% endif %}
 
 </body>
 </html>

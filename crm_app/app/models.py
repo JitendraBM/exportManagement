@@ -1819,6 +1819,7 @@ class ExportInvoice(CifMoneyLadder):
     permission_no: Optional[str] = None
     permission_date: Optional[str] = None
     permission_expiry: Optional[str] = None
+    permission_is_one_time: bool = False  # printed as "One Time" instead of the (blank) expiry date
     manufacturer_name: Optional[str] = None
     manufacturer_address: Optional[str] = None
     stuffing_location: Optional[str] = None  # "Stuff At" address, printed on the export packing list
@@ -1915,6 +1916,7 @@ class ExportInvoice(CifMoneyLadder):
             permission_no=g("permission_no"),
             permission_date=g("permission_date"),
             permission_expiry=g("permission_expiry"),
+            permission_is_one_time=bool(g("permission_is_one_time", 0)),
             manufacturer_name=g("manufacturer_name"),
             manufacturer_address=g("manufacturer_address"),
             stuffing_location=g("stuffing_location"),

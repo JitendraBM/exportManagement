@@ -33,6 +33,16 @@
   {%- for line in lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% else %}-{% endfor -%}
 {%- endmacro %}
 
+{# A label stacked directly on top of its value in one box - no ruled line
+   between them, matching the reference's plain header fields. #}
+{% macro field(label, value) -%}
+  <span class="bl-lbl">{{ label }}</span><br>{{ value }}
+{%- endmacro %}
+
+{% macro field_block(label, lines) -%}
+  <span class="bl-lbl">{{ label }}</span><br>{{ block(lines) }}
+{%- endmacro %}
+
 <div class="bl-sheet js-page-sheet">
   <div class="bl-title">BL DRAFT</div>
 
@@ -40,43 +50,28 @@
   <table>
     <colgroup><col style="width:26%"><col style="width:26%"><col style="width:24%"><col style="width:24%"></colgroup>
     <tr>
-      <td colspan="2" class="bl-lbl">SHIPPER (MAX 5 LINE)</td>
+      <td colspan="2" class="bl-box">{{ field_block('SHIPPER (MAX 5 LINE)', draft.shipper) }}</td>
       {# One box spanning the shipper and consignee rows, as the reference has it. #}
-      <td colspan="2" rowspan="4" class="bl-c bl-mid bl-lbl">
+      <td colspan="2" rowspan="2" class="bl-c bl-mid bl-lbl">
         BOOKING NO<br><br>{{ draft.booking_no }}
       </td>
     </tr>
-    <tr><td colspan="2" class="bl-box">{{ block(draft.shipper) }}</td></tr>
-    <tr><td colspan="2" class="bl-lbl">Consignee</td></tr>
-    <tr><td colspan="2" class="bl-box">{{ block(draft.consignee) }}</td></tr>
+    <tr><td colspan="2" class="bl-box">{{ field_block('Consignee', draft.consignee) }}</td></tr>
 
     <tr>
-      <td colspan="2" class="bl-lbl">Notify party</td>
-      <td colspan="2" class="bl-lbl">Notify party (MAX 5 LINE)</td>
-    </tr>
-    <tr>
-      <td colspan="2" class="bl-box">{{ block(draft.notify) }}</td>
-      <td colspan="2"></td>
+      <td colspan="2" class="bl-box">{{ field_block('Notify party', draft.notify) }}</td>
+      <td colspan="2" class="bl-box">{{ field('Notify party (MAX 5 LINE)', '') }}</td>
     </tr>
 
     <tr>
-      <td colspan="2" class="bl-lbl">VESSEL AND VOYAGE NO:</td>
-      <td colspan="2" class="bl-lbl">PLACE OF RECEIPT:</td>
-    </tr>
-    <tr>
-      <td colspan="2">{{ draft.vessel_voyage_no }}</td>
-      <td colspan="2">{{ draft.place_of_receipt }}</td>
+      <td colspan="2">{{ field('VESSEL AND VOYAGE NO:', draft.vessel_voyage_no) }}</td>
+      <td colspan="2">{{ field('PLACE OF RECEIPT:', draft.place_of_receipt) }}</td>
     </tr>
 
     <tr>
-      <td class="bl-lbl">PORT OF LOADING:</td>
-      <td class="bl-lbl">PORT OF DISCHARGE</td>
-      <td colspan="2" class="bl-lbl">PLACE OF DELIVERY:</td>
-    </tr>
-    <tr>
-      <td>{{ draft.port_of_loading }}</td>
-      <td>{{ draft.port_of_discharge }}</td>
-      <td colspan="2">{{ draft.place_of_delivery }}</td>
+      <td>{{ field('PORT OF LOADING:', draft.port_of_loading) }}</td>
+      <td>{{ field('PORT OF DISCHARGE', draft.port_of_discharge) }}</td>
+      <td colspan="2">{{ field('PLACE OF DELIVERY:', draft.place_of_delivery) }}</td>
     </tr>
 
     <tr>
@@ -85,7 +80,7 @@
       <td class="bl-lbl bl-c">GROSS WEIGHT</td>
     </tr>
     <tr>
-      <td class="bl-mid" style="height:120px;">{{ draft.marks }}</td>
+      <td class="bl-mid" style="height:120px;">{{ block(draft.marks) }}</td>
       <td colspan="2">{{ block(draft.description) }}</td>
       <td class="bl-c bl-mid">{{ draft.gross_weight_label }}</td>
     </tr>

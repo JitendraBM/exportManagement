@@ -5,7 +5,9 @@ The per-container VGM figures, derived once and shared by both VGM
 documents: the VGM ATTACHMENT (which prints every container as a row, and is
 where the weighbridge and slip number are typed) and the VGM declaration
 (INFORMATION ABOUT VERIFIED GROSS MASS OF CONTAINER), which quotes the same
-figures back for small shipments and otherwise just points at the attachment.
+figures back for a single-container shipment and otherwise points at the
+attachment - printing it underneath itself while it is short enough to ride
+along.
 
 Kept out of both route modules so neither has to import the other, and so
 the two sheets can never disagree about a container's weight.
@@ -13,10 +15,17 @@ the two sheets can never disagree about a container's weight.
 
 from typing import List, Optional
 
-# How many containers the declaration will spell out inline. Past this the
-# sheet says "VGM ATTACHMENT" instead and the reader goes to that sheet -
-# the declaration has one cell per field, not one row per container.
-INLINE_CONTAINER_LIMIT = 3
+# How many containers the declaration will spell out inline. The sheet has one
+# cell per field, not one row per container, so only a single-container
+# shipment can be quoted in it; past that the cell says "VGM ATTACHMENT" and
+# the reader goes to the attachment.
+INLINE_CONTAINER_LIMIT = 1
+
+# Up to this many containers the attachment is appended underneath the
+# declaration, so the two travel as one document and the reader doesn't have
+# to fetch a second sheet. A longer shipment's table would dwarf the
+# declaration it is attached to, so it stays a document of its own.
+APPEND_ATTACHMENT_LIMIT = 10
 
 # What that cell says when there are too many containers to list.
 SEE_ATTACHMENT = "VGM ATTACHMENT"
@@ -75,8 +84,8 @@ def declaration_cell(rows: List[dict], key: str) -> str:
 
     Up to INLINE_CONTAINER_LIMIT containers it lists the values themselves,
     one per line; beyond that it prints SEE_ATTACHMENT, because the
-    declaration has a single cell per field and a long list would not fit -
-    the attachment sheet is where every container is enumerated.
+    declaration has a single cell per field and a list would not fit - the
+    attachment sheet is where every container is enumerated.
     """
     if not rows:
         return "-"
@@ -84,3 +93,11 @@ def declaration_cell(rows: List[dict], key: str) -> str:
         return SEE_ATTACHMENT
     values = [_format(row.get(key)) for row in rows]
     return "\n".join(v for v in values if v) or "-"
+
+
+def append_attachment(rows: List[dict]) -> bool:
+    """Whether the declaration should print the attachment table beneath
+    itself: only when the per-container cells point at the attachment
+    (more than INLINE_CONTAINER_LIMIT containers) and the table is still
+    short enough to ride along (APPEND_ATTACHMENT_LIMIT)."""
+    return INLINE_CONTAINER_LIMIT < len(rows) <= APPEND_ATTACHMENT_LIMIT

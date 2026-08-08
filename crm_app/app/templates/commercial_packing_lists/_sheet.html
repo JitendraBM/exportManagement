@@ -69,8 +69,9 @@
          exactly as the reference has it. #}
       <tr class="ci-tot">
         <td colspan="2" rowspan="2" class="ci-mid ci-lbl">Bill Of Lading No</td>
-        <td colspan="2" rowspan="2" class="ci-mid">{{ invoice.bill_of_lading_no or '' }}</td>
+        <td rowspan="2" class="ci-mid">{{ invoice.bill_of_lading_no or '' }}</td>
         <td rowspan="2" class="ci-mid ci-c ci-lbl">Bill Of Lading Date</td>
+        <td rowspan="2" class="ci-mid ci-c">{{ dmy(invoice.bill_of_lading_date) if invoice.bill_of_lading_date else '' }}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(totals.pallets) }}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(totals.quantity_boxes) }}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(totals.quantity_value) }}</td>
@@ -83,10 +84,6 @@
         <td class="ci-c">Alt. Qty</td>
         <td class="ci-c">Net Weight(KG)</td>
         <td class="ci-c">Gross Weight(KG)</td>
-      </tr>
-      <tr>
-        <td colspan="4"></td>
-        <td colspan="6" class="ci-mid">{{ dmy(invoice.bill_of_lading_date) if invoice.bill_of_lading_date else '' }}</td>
       </tr>
     </tbody>
   </table>

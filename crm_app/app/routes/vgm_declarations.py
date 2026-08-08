@@ -11,10 +11,12 @@ details from the parent Export Invoice and Our Company, and six per-container
 cells from the very same rows the attachment prints.
 
 Those six are the interesting part. The declaration has ONE cell per field,
-not one row per container, so a long shipment cannot be listed inline: up to
-three containers the values are quoted here, and beyond that the cell simply
-reads "VGM ATTACHMENT" and the reader goes to that sheet. See
-`app/vgm.py:declaration_cell`.
+not one row per container, so only a single-container shipment can be quoted
+inline; with more the cell simply reads "VGM ATTACHMENT". So that the reader
+does not then have to go and fetch a second document, the attachment table is
+printed underneath this sheet - up to ten containers, past which it is long
+enough to stand on its own. See `app/vgm.py:declaration_cell` and
+`app/vgm.py:append_attachment`.
 
 The remaining five cells are the shaded ones on the reference - facts nobody
 else in the app holds - and are typed on this document's own small edit form.
@@ -25,7 +27,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from app.exceptions import NotFoundError, PermissionDeniedError, ValidationError
 from app.repositories import ExportInvoiceRepository
 from app.utils import login_required
-from app.vgm import container_rows, declaration_cell
+from app.vgm import append_attachment, container_rows, declaration_cell
 
 vgm_declarations_bp = Blueprint("vgm_declarations", __name__, url_prefix="/vgm-declarations")
 
@@ -98,6 +100,7 @@ def view_vgm_declaration(export_invoice_id):
     return render_template(
         "vgm_declarations/print.html", invoice=invoice, company=company,
         particulars=_particulars(invoice, company, rows), container_count=len(rows),
+        rows=rows, show_attachment=append_attachment(rows),
     )
 
 

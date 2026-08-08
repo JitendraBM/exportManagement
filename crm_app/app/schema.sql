@@ -904,6 +904,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     permission_no               TEXT,
     permission_date             TEXT,
     permission_expiry           TEXT,
+    permission_is_one_time      INTEGER NOT NULL DEFAULT 0,  -- 1 when the chosen permit has no expiry (validity_type = 'one_time'); printed as "One Time" instead of the (blank) expiry date
     manufacturer_name           TEXT,
     manufacturer_address        TEXT,
     stuffing_location           TEXT,          -- "Stuff At" address, printed on the export packing list

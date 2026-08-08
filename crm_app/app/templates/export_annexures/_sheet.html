@@ -249,7 +249,7 @@
       <td class="eia-v eia-c">{{ dmy(invoice.permission_date) }}</td>
       <td class="eia-num">12B</td>
       <td class="eia-lbl">Expiry Date</td>
-      <td class="eia-v eia-c">{{ dmy(invoice.permission_expiry) }}</td>
+      <td class="eia-v eia-c">{{ 'One Time' if invoice.permission_is_one_time else dmy(invoice.permission_expiry) }}</td>
     </tr>
   </table>
   <table>

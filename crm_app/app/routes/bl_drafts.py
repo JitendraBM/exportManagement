@@ -104,7 +104,10 @@ def _draft(invoice, company, packing_list) -> dict:
         "port_of_loading": (invoice.port_of_loading or "-").upper(),
         "port_of_discharge": (invoice.port_of_discharge or "-").upper(),
         "place_of_delivery": (invoice.final_destination or "-").upper(),
-        "marks": f"TOTAL {_num(totals['pallets'], 0)} PACKING",
+        "marks": [
+            f"TOTAL {_num(totals['pallets'], 0)} PACKING",
+            f"TOTAL {_num(totals['quantity_boxes'], 0)} QTY",
+        ],
         "description": description,
         "gross_weight_label": f"{_num(gross)} KGS",
         "rows": rows,
@@ -155,6 +158,13 @@ def download_bl_draft_docx(export_invoice_id):
     )
 
 
+def _field(label: str, value) -> list:
+    """A label stacked on the value it names, as one cell's lines - no ruled
+    line between them, matching the reference's plain header fields."""
+    lines = value if isinstance(value, list) else [value]
+    return [label, ""] + list(lines)
+
+
 def _build_docx(invoice, draft) -> bytes:
     """The Word rendering of the sheet: the same two tables, same order."""
     doc = DocxDocument()
@@ -166,22 +176,17 @@ def _build_docx(invoice, draft) -> bytes:
     header = [
         # The booking number sits in one box spanning the shipper/consignee
         # rows, its label stacked above the number.
-        [Cell("SHIPPER (MAX 5 LINE)", colspan=2, **label),
-         Cell(["BOOKING NO", "", draft["booking_no"]], colspan=2, rowspan=4,
+        [Cell(_field("SHIPPER (MAX 5 LINE)", draft["shipper"]), colspan=2),
+         Cell(["BOOKING NO", "", draft["booking_no"]], colspan=2, rowspan=2,
               align="center", bold=True, size=16)],
-        [Cell(draft["shipper"], colspan=2)],
-        [Cell("Consignee", colspan=2, **label)],
-        [Cell(draft["consignee"], colspan=2)],
-        [Cell("Notify party", colspan=2, **label),
-         Cell("Notify party (MAX 5 LINE)", colspan=2, **label)],
-        [Cell(draft["notify"], colspan=2), Cell("", colspan=2)],
-        [Cell("VESSEL AND VOYAGE NO:", colspan=2, **label),
-         Cell("PLACE OF RECEIPT:", colspan=2, **label)],
-        [Cell(draft["vessel_voyage_no"], colspan=2), Cell(draft["place_of_receipt"], colspan=2)],
-        [Cell("PORT OF LOADING:", **label), Cell("PORT OF DISCHARGE", **label),
-         Cell("PLACE OF DELIVERY:", colspan=2, **label)],
-        [Cell(draft["port_of_loading"]), Cell(draft["port_of_discharge"]),
-         Cell(draft["place_of_delivery"], colspan=2)],
+        [Cell(_field("Consignee", draft["consignee"]), colspan=2)],
+        [Cell(_field("Notify party", draft["notify"]), colspan=2),
+         Cell(_field("Notify party (MAX 5 LINE)", [""]), colspan=2)],
+        [Cell(_field("VESSEL AND VOYAGE NO:", draft["vessel_voyage_no"]), colspan=2),
+         Cell(_field("PLACE OF RECEIPT:", draft["place_of_receipt"]), colspan=2)],
+        [Cell(_field("PORT OF LOADING:", draft["port_of_loading"])),
+         Cell(_field("PORT OF DISCHARGE", draft["port_of_discharge"])),
+         Cell(_field("PLACE OF DELIVERY:", draft["place_of_delivery"]), colspan=2)],
         [Cell("CONTAINER NOS. MARKS & NUMBERS", **label),
          Cell(["NUMBER AND KIND OF PACKAGES", "DESCRIPTION OF GOODS"], colspan=2, **label),
          Cell("GROSS WEIGHT", align="center", **label)],

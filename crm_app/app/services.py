@@ -3552,6 +3552,7 @@ class ExportInvoiceService:
             permission_no=(fields.get("permission_no") or "").strip() or None,
             permission_date=(fields.get("permission_date") or "").strip() or None,
             permission_expiry=(fields.get("permission_expiry") or "").strip() or None,
+            permission_is_one_time=(fields.get("permission_is_one_time") or "").strip() in ("1", "true", "on"),
             manufacturer_name=(fields.get("manufacturer_name") or "").strip() or None,
             manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
             stuffing_location=(fields.get("stuffing_location") or "").strip() or None,

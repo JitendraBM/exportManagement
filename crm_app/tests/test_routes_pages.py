@@ -1325,15 +1325,16 @@ class TestBlDraftRoutes:
             assert expected in document
 
     def test_docx_rowspan_emits_matching_merge_cells(self, admin_ctx):
-        """The booking-no box spans four rows: one opener plus three
-        continuations, all with the same gridSpan, or Word drops the merge."""
+        """The booking-no box spans the shipper and consignee rows: one
+        opener plus one continuation, both with the same gridSpan, or Word
+        drops the merge."""
         import zipfile, io as _io
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
         resp = client.get(f"/bl-drafts/{invoice.id}/docx")
         document = zipfile.ZipFile(_io.BytesIO(resp.data)).read("word/document.xml").decode("utf-8")
         assert document.count('<w:vMerge w:val="restart"/>') == 1
-        assert document.count("<w:vMerge/>") == 3
+        assert document.count("<w:vMerge/>") == 1
 
     def test_an_invoice_with_no_11b_rows_still_renders_both_formats(self, admin_ctx):
         """Saving an export invoice always generates a packing list, so there
@@ -1525,26 +1526,39 @@ class TestVgmDeclarationRoutes:
         # Defaults print without anyone having opened the edit form.
         assert "METHOD-1" in body and "NORMAL" in body and "N/A" in body
 
-    def test_three_or_fewer_containers_are_listed_in_full(self, admin_ctx):
+    def test_a_single_container_is_listed_in_full(self, admin_ctx):
+        """One cell per field means only a one-container shipment fits inline -
+        and then there is nothing to attach underneath."""
         client, container, admin, company_id = admin_ctx
-        invoice = self._with_containers(client, container, admin, company_id, 3)
+        invoice = self._with_containers(client, container, admin, company_id, 1)
         body = client.get(f"/vgm-declarations/{invoice.id}").get_data(as_text=True)
-        assert "DFSU2889100" in body and "DFSU2889102" in body
+        assert "DFSU2889100" in body
         assert "30,480.00" in body                  # max permissible weight
         assert "Morbi" in body                      # weighbridge
-        assert "123" in body and "125" in body      # slip numbers
+        assert "123" in body                        # slip number
         assert "VGM ATTACHMENT" not in body
+        assert "Total VGM Weight" not in body       # no attachment table appended
 
-    def test_more_than_three_containers_point_at_the_attachment(self, admin_ctx):
+    def test_several_containers_point_at_the_attachment_and_print_it_below(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._with_containers(client, container, admin, company_id, 4)
         body = client.get(f"/vgm-declarations/{invoice.id}").get_data(as_text=True)
         assert "VGM ATTACHMENT" in body
-        # The per-container values are NOT spelled out on this sheet.
-        assert "DFSU2889100" not in body
-        assert "Morbi" not in body
+        # ... and the attachment itself rides along, read-only: every container
+        # is enumerated, but the typed cells stay editable only on its own page.
+        assert "Total VGM Weight" in body
+        assert "DFSU2889100" in body and "DFSU2889103" in body
+        assert "vgm_weighbridge_name[]" not in body
         # Shipper-level particulars still print normally.
         assert "EBKG16522374" in body and "KGS" in body
+
+    def test_more_than_ten_containers_leave_the_attachment_on_its_own(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._with_containers(client, container, admin, company_id, 11)
+        body = client.get(f"/vgm-declarations/{invoice.id}").get_data(as_text=True)
+        assert "VGM ATTACHMENT" in body
+        assert "Total VGM Weight" not in body       # too long to ride along
+        assert "DFSU2889100" not in body
 
     def test_the_edit_form_asks_only_for_the_manual_particulars(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1648,13 +1662,13 @@ class TestEsealRoutes:
         assert 'value="12:20"' in body
         assert "23/04/2026" in body                 # the printed twin, dd/mm/yyyy
 
-    def test_labels_carry_no_format_hints(self, admin_ctx):
+    def test_labels_carry_format_hints(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
         body = client.get(f"/e-seals/{invoice.id}").get_data(as_text=True)
         assert "SHIPPING BILL DATE" in body and "SEALING TIME" in body
-        assert "(dd/mm/yyyy)" not in body
-        assert "(HH:mm)" not in body
+        assert "(dd/mm/yyyy)" in body
+        assert "(HH:mm)" in body
 
     def test_sealing_time_is_stored_as_24_hour_hhmm(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1803,7 +1817,8 @@ class TestEwayBillRoutes:
 
     def test_a_row_per_vehicle_with_totals(self, admin_ctx):
         # The helper splits 100 boxes 60/40 across two containers of a line
-        # priced in SQM: 144 SQM total, so 86.40 / 57.60 alt qty.
+        # priced in SQM: 144 SQM total, so 86.40 / 57.60 alt qty. The sheet
+        # is container-wise, not per goods line, so no description/HSN print.
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(
             client, container, admin, company_id,
@@ -1816,26 +1831,10 @@ class TestEwayBillRoutes:
         assert "22-04-2026" in body
         assert "GJ12BX4611" in body and "GJ12BX4612" in body
         assert "LR 0001" in body and "LR 0002" in body
-        assert "69072100" in body                    # HSN, off the goods line
+        assert "Description Of Goods" not in body and "HSNC" not in body
         assert "TOTAL" in body
         assert "144.00" in body                      # alt qty total
         assert "100" in body                         # boxes total
-
-    def test_the_description_is_the_goods_lines_own_name(self, admin_ctx):
-        """Export invoice lines carry no separate dimension field - the
-        product name as typed IS the description the sheet prints."""
-        client, container, admin, company_id = admin_ctx
-        product = container.product_service.create_product(
-            current_user=admin, product_name="600 X 1200 MM [2 PCS = 1.44 SQM]",
-            description="", hsn_code="69072100", igst_percent="18",
-            quantity="4", alternate_quantity="1.44",
-            net_weight_kg=26.5, gross_weight_kg=27.0)
-        invoice = self._create_export_invoice(
-            client, container, admin, company_id,
-            extra={"item_product_id[]": str(product.id),
-                   "item_product_name[]": "600 X 1200 MM [2 PCS = 1.44 SQM]"})
-        body = client.get(f"/eway-bills/{invoice.id}").get_data(as_text=True)
-        assert "600 X 1200 MM [2 PCS = 1.44 SQM]" in body
 
     def test_nothing_on_the_sheet_is_an_input(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
