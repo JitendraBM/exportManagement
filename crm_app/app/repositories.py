@@ -1593,9 +1593,9 @@ class QuotationRepository:
                 container_details, shipping_mode, shipping_terms, payment_terms,
                 price_validity_days, remarks,
                 sea_freight, insurance, certification, other_charges,
-                discount_amount, fob_pricing, round_off, bank_name, bank_account_number, bank_ifsc_code,
+                discount_amount, fob_pricing, round_off, cif_adjust_usd, bank_name, bank_account_number, bank_ifsc_code,
                 bank_swift_code, bank_branch, bank_address, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (quotation.company_id, quotation.quotation_number, quotation.quotation_date, quotation.lead_id,
              quotation.buyer_name, quotation.buyer_address, quotation.buyer_reference_no,
              quotation.port_of_loading, quotation.port_of_discharge, quotation.packing_details,
@@ -1603,7 +1603,7 @@ class QuotationRepository:
              quotation.payment_terms,
              quotation.price_validity_days, quotation.remarks,
              quotation.sea_freight, quotation.insurance, quotation.certification, quotation.other_charges,
-             quotation.discount_amount, int(bool(quotation.fob_pricing)), quotation.round_off,
+             quotation.discount_amount, int(bool(quotation.fob_pricing)), quotation.round_off, quotation.cif_adjust_usd,
              quotation.bank_name, quotation.bank_account_number, quotation.bank_ifsc_code,
              quotation.bank_swift_code, quotation.bank_branch, quotation.bank_address,
              quotation.currency_code, quotation.currency_symbol,
@@ -1621,6 +1621,7 @@ class QuotationRepository:
                                       price_validity_days = ?,
                                       remarks = ?, sea_freight = ?, insurance = ?, certification = ?,
                                       other_charges = ?, discount_amount = ?, fob_pricing = ?, round_off = ?,
+                                      cif_adjust_usd = ?,
                                       bank_name = ?, bank_account_number = ?,
                                       bank_ifsc_code = ?, bank_swift_code = ?, bank_branch = ?, bank_address = ?,
                                       currency_code = ?, currency_symbol = ?,
@@ -1633,7 +1634,7 @@ class QuotationRepository:
              quotation.price_validity_days,
              quotation.remarks, quotation.sea_freight, quotation.insurance, quotation.certification,
              quotation.other_charges, quotation.discount_amount, int(bool(quotation.fob_pricing)),
-             quotation.round_off, quotation.bank_name,
+             quotation.round_off, quotation.cif_adjust_usd, quotation.bank_name,
              quotation.bank_account_number, quotation.bank_ifsc_code, quotation.bank_swift_code,
              quotation.bank_branch, quotation.bank_address,
              quotation.currency_code, quotation.currency_symbol, quotation_id),
@@ -1937,7 +1938,7 @@ class ExportInvoiceRepository:
         invoice.container_details = [
             dict(r) for r in self.db.query(
                 "SELECT sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, "
-                "max_permitted_weight, tare_weight, gross_weight, net_weight, "
+                "max_permitted_weight, tare_weight_kg, gross_weight, net_weight, "
                 "weighbridge_name, weighing_slip_no, sealing_time, sealing_date "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
@@ -2129,7 +2130,7 @@ class ExportInvoiceRepository:
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
                     "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, "
-                    "lr_no, transporter_name, max_permitted_weight, tare_weight, "
+                    "lr_no, transporter_name, max_permitted_weight, tare_weight_kg, "
                     "gross_weight, net_weight, weighbridge_name, weighing_slip_no, "
                     "sealing_time, sealing_date) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2137,7 +2138,7 @@ class ExportInvoiceRepository:
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
                      cd.get("lr_no") or None, cd.get("transporter_name") or None,
                      cd.get("max_permitted_weight") or None,
-                     cd.get("tare_weight") or None, cd.get("gross_weight") or None, cd.get("net_weight") or None,
+                     cd.get("tare_weight_kg"), cd.get("gross_weight") or None, cd.get("net_weight") or None,
                      cd.get("weighbridge_name") or None, cd.get("weighing_slip_no") or None,
                      cd.get("sealing_time") or None, cd.get("sealing_date") or None),
                 )

@@ -1918,37 +1918,32 @@ def apply_fob_uplift(document) -> None:
     The discount is deliberately NOT part of the lump: it comes off above the
     invoice value line, not between FOB and CIF.
 
-    The uplifted price is rounded to the cent, because it is a price the buyer
-    reads off the sheet and multiplies out: every printed column has to agree.
-    Those rounded lines then can't add up to exactly (FOB total + charges), so
-    the remainder goes to `document.round_off` and prints as its own row just
-    above CIF VALUE - which leaves the FOB VALUE row exactly the goods total
-    that was typed, the figure the user actually reasoned in. `price_usd` stays
-    the CIF price throughout, which is why nothing downstream - the printed
-    sheets, the money ladder, the prefill from one document to the next - needs
-    a special case; `fob_price_usd` only remembers what was typed so reopening
-    the form shows the numbers back.
+    The uplift is kept at full precision (only the line totals are rounded to
+    the cent) so that CIF - charges lands back exactly on the FOB total that
+    was typed - the FOB VALUE row is the figure the user reasoned in, so it is
+    the one that has to stay exact. Any cent the rounded totals can't carry is
+    absorbed silently into the Total column itself rather than tracked as a
+    separate round-off figure. `price_usd` stays the CIF price throughout,
+    which is why nothing downstream - the printed sheets, the money ladder,
+    the prefill from one document to the next - needs a special case;
+    `fob_price_usd` only remembers what was typed so reopening the form shows
+    the numbers back.
 
     Written once for all three document types (they share CifMoneyLadder and
     the same item shape) so their arithmetic can't drift apart. Mirrored by
     recalcTotals() in each of the three forms, which previews the same figures.
     """
     items = document.items or []
-    document.round_off = 0
     if not document.fob_pricing:
         for item in items:
             item.fob_price_usd = None
         return
     total_qty = sum(item.quantity_value for item in items)
     uplift = (document.charges_total / total_qty) if total_qty else 0
-    fob_total = 0.0
     for item in items:
         item.fob_price_usd = item.price_usd
-        item.price_usd = round(item.price_usd + uplift, 2)
+        item.price_usd = item.price_usd + uplift
         item.total_usd = round(item.quantity_value * item.price_usd, 2)
-        fob_total += item.quantity_value * item.fob_price_usd
-    document.round_off = round(
-        fob_total + document.charges_total - sum(item.total_usd for item in items), 2)
 
 
 # ============================================================
@@ -2123,7 +2118,12 @@ class QuotationService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            fob_pricing=is_fob_pricing(fields),
+            # Quotations no longer have an FOB-typed-price mode - the typed
+            # price is always the absolute FOB price, never adjusted by an
+            # uplift. Hardcoded off (rather than read from `fields`) so even
+            # a direct API/service call can't revive the old behavior.
+            fob_pricing=False,
+            cif_adjust_usd=_float("cif_adjust_usd", 0),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -3533,7 +3533,12 @@ class ExportInvoiceService:
             certification=_float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            fob_pricing=is_fob_pricing(fields),
+            # Export invoices no longer have an FOB-typed-price mode - the
+            # typed price is always the CIF price the sheet prints, exactly
+            # as if fob_pricing had never existed. Hardcoded off (rather than
+            # read from `fields`) so even a direct API/service call can't
+            # revive the old uplift.
+            fob_pricing=False,
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -3607,17 +3612,25 @@ class ExportInvoiceService:
     @staticmethod
     def _clean_container_details(raw) -> List[dict]:
         # CARRIED_CONTAINER_FIELDS have no input on the export invoice form
-        # (unlike tare_weight and the other typed fields above), so they
+        # (unlike tare_weight_kg and the other typed fields above), so they
         # default to None here and update() carries the stored values forward
         # by row position - see the comment on that constant.
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
                       for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no",
-                                "lr_no", "transporter_name", "max_permitted_weight", "tare_weight")}
+                                "lr_no", "transporter_name", "max_permitted_weight")}
+            tare_raw = (r.get("tare_weight_kg") or "").strip()
+            if tare_raw:
+                try:
+                    values["tare_weight_kg"] = float(tare_raw)
+                except ValueError:
+                    raise ValidationError("Container details: tare weight must be a number.")
+            else:
+                values["tare_weight_kg"] = None
             for key in ExportInvoiceService.CARRIED_CONTAINER_FIELDS:
                 values[key] = None
-            if any(values.values()):
+            if any(v is not None for v in values.values()):
                 rows.append(values)
         return rows
 
@@ -4365,15 +4378,15 @@ class PackingListService:
         full design-level rows are imported as the starting point; otherwise
         each proforma product line becomes one empty product block (marked
         is_placeholder) and the user fills in designs and box counts."""
+        source_pl = self._ancestor_packing_list(invoice.company_id, quotation_id=invoice.quotation_id)
         fields = {
             "proforma_invoice_id": invoice.id,
             "lead_id": invoice.lead_id,
             "export_ref_no": invoice.export_ref_no,
             "buyer_order_no": invoice.buyer_order_no,
             "other_reference": invoice.other_reference,
-            "remarks": invoice.remarks or "MADE IN INDIA",
+            "remarks": (source_pl.remarks if source_pl else None) or invoice.remarks or "MADE IN INDIA",
         }
-        source_pl = self._ancestor_packing_list(invoice.company_id, quotation_id=invoice.quotation_id)
         if source_pl:
             items = self._items_from_packing_list(source_pl)
         else:

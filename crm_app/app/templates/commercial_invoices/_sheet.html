@@ -92,13 +92,6 @@
          Each entry is (label, value, signed) - `signed` only for ROUND-OFF,
          which has to read as an amount added or taken back out. #}
       {% set money_rows = [] %}
-      {# An FOB-priced invoice carries one extra step above the CIF line: its
-         goods lines are worked out from per-unit prices rounded to the cent,
-         and Round-off is the few cents that leaves between them and the CIF
-         value. Same row, same place, as on the export invoice itself. #}
-      {% if invoice.fob_pricing %}
-      {% set _ = money_rows.append(('Round-off', invoice.round_off, true)) %}
-      {% endif %}
       {% set _ = money_rows.append(('CIF Invoice Value', invoice.cif_value_usd, false)) %}
       {% set _ = money_rows.append(('Discount', invoice.discount_amount, false)) %}
       {# FOB terms put the whole ocean leg on the buyer so both drop out; CFR

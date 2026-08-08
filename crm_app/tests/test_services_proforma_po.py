@@ -113,10 +113,11 @@ class TestProformaCrud:
         assert reloaded.invoice_value_usd == 195.0  # CIF 200 - 5 discount
         assert reloaded.fob_value_usd == 185.0      # 195 - 10 sea freight
 
-    def test_fob_pricing_spreads_the_charges_and_books_a_round_off(self, container, seed):
+    def test_fob_pricing_spreads_the_charges_at_full_precision(self, container, seed):
         # Same shared uplift the quotation uses (services.apply_fob_uplift):
-        # 100 of charges over 3 units is 33.333..., so the printed price
-        # rounds to 40.33 and the missing cent becomes the ROUND-OFF row.
+        # 100 of charges over 3 units is 33.333..., kept at full precision
+        # rather than rounded to the cent, so the line total lands exactly on
+        # 121.0 with no round-off to carry.
         pi = container.proforma_invoice_service.create(
             seed.admin,
             {"consignee_name": "Buyer Co", "invoice_date": "2026-02-01",
@@ -124,8 +125,10 @@ class TestProformaCrud:
             [{"product_name": "Tiles", "quantity_value": "3", "price_usd": "7"}])
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         item = reloaded.items[0]
-        assert (item.fob_price_usd, item.price_usd, item.total_usd) == (7.0, 40.33, 120.99)
-        assert reloaded.round_off == 0.01
+        assert item.fob_price_usd == 7.0
+        assert item.price_usd == pytest.approx(7 + 100 / 3)
+        assert item.total_usd == 121.0
+        assert reloaded.round_off == 0
         assert reloaded.cif_value_usd == pytest.approx(121.0)
         assert reloaded.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
 

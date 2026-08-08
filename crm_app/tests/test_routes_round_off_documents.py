@@ -1,21 +1,16 @@
 """
 test_routes_round_off_documents.py
 ----------------------------------
-The ROUND-OFF row on the documents that hang off an export invoice.
+The ROUND-OFF row that used to sit above CIF VALUE on FOB-priced documents
+has been removed: apply_fob_uplift() keeps the per-unit uplift at full
+precision and only rounds each line's Total column, so any residual cent
+lands silently in that column instead of being tracked and printed as its
+own row. These tests guard that the row is gone everywhere it used to print,
+and that the CIF value still foots to the goods column.
 
-An FOB-priced invoice works its goods lines out from per-unit prices rounded to
-the cent (see services.apply_fob_uplift), so the goods column lands a few cents
-either side of the CIF value. Every sheet that prints both a goods column and a
-CIF total therefore has to show that remainder, or it visibly doesn't foot.
-
-The export invoice's own sheet is covered upstream; these are the attachments
-built on top of it - the Tax Invoice, the Commercial Invoice and the customer's
-copy - each of which reaches the total by a different route:
-
-  * Tax Invoice        goods column + ROUND-OFF = Total Invoice Value (in INR)
-  * Commercial Invoice ladder runs DOWN from CIF, so round-off sits above it
-  * Customer Invoice   ladder runs UP from an independently re-rounded FOB
-                       column, so it needs a round-off of its own
+The Customer Invoice's own `fob_priced_round_off` is a different, unrelated
+feature (it re-derives an FOB rate from the stored CIF price for that one
+sheet) and is untouched here.
 """
 
 import pytest
@@ -29,11 +24,14 @@ def admin_ctx(app, logged_in_admin):
     return client, app.container, admin, company_id
 
 
-class TestRoundOffOnExportInvoiceAttachments:
+class TestRoundOffRemovedFromExportInvoiceAttachments:
     def _create_fob_priced_invoice(self, client, container, admin, company_id):
-        """An export invoice priced FOB, with charges chosen so the per-unit
-        uplift does NOT divide evenly into the cent - which is the whole point:
-        a clean division would leave nothing to round off and prove nothing."""
+        """An export invoice that posts the old fob_pricing checkbox with
+        charges chosen so the per-unit uplift would NOT have divided evenly
+        into the cent - the case that used to leave a round-off remainder.
+        Export invoices no longer have an FOB-typed-price mode at all, so
+        this now behaves exactly like a plain CIF-priced invoice - kept as
+        the fixture name to show the posted field is silently ignored."""
         product = container.product_service.create_product(
             current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
             igst_percent="18", quantity="4", alternate_quantity="1.44",
@@ -42,7 +40,9 @@ class TestRoundOffOnExportInvoiceAttachments:
             "export_invoice_number": "1000000099", "invoice_date": "2026-03-01",
             "consignee_name": "ROBUST INTERNATIONAL", "tax_mode": "igst", "exchange_rate": "86.70",
             "stuffing_location": "ALIVE GRANITO LLP, MORBI",
-            # Prices typed are FOB; the four charges get spread over the lines.
+            # A stale client (or a direct API call) still posting the old
+            # checkbox - must be ignored, see fob_pricing=False hardcoded in
+            # ExportInvoiceService._build_header.
             "fob_pricing": "on",
             "sea_freight": "1234.57", "insurance": "321.09",
             "certification": "150", "other_charges": "99.99",
@@ -68,37 +68,36 @@ class TestRoundOffOnExportInvoiceAttachments:
         listed = container.export_invoice_service.list_all(company_id)[0]
         return container.export_invoice_service.get(listed.id, company_id)
 
-    def test_the_setup_actually_produces_a_round_off(self, admin_ctx):
-        """Guard on the fixture itself: if the numbers above ever stop leaving a
-        remainder, every assertion below would pass vacuously."""
+    def test_fob_pricing_checkbox_is_gone_and_never_carries_a_round_off(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_fob_priced_invoice(client, container, admin, company_id)
-        assert invoice.fob_pricing is True
-        assert invoice.round_off != 0
+        assert invoice.fob_pricing is False
+        assert invoice.items[0].price_usd == 5.92   # the typed price, untouched by any uplift
+        assert invoice.round_off == 0
 
-    def test_cif_value_is_the_goods_column_plus_the_round_off(self, admin_ctx):
+    def test_cif_value_is_just_the_goods_column(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_fob_priced_invoice(client, container, admin, company_id)
         assert invoice.items, "no goods lines - the assertion below would be vacuous"
         goods = sum(item.total_usd for item in invoice.items)
-        assert round(goods + invoice.round_off, 2) == round(invoice.cif_value_usd, 2)
+        assert round(goods, 2) == round(invoice.cif_value_usd, 2)
 
-    def test_tax_invoice_prints_the_round_off_row(self, admin_ctx):
+    def test_tax_invoice_prints_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_fob_priced_invoice(client, container, admin, company_id)
         body = client.get(f"/tax-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Round-off" in body
+        assert "Round-off" not in body
 
-    def test_commercial_invoice_prints_the_round_off_row(self, admin_ctx):
+    def test_commercial_invoice_prints_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_fob_priced_invoice(client, container, admin, company_id)
         body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Round-off" in body
+        assert "Round-off" not in body
 
-    def test_customer_invoice_closes_on_the_shared_cif_value(self, admin_ctx):
-        """The customer's copy re-rounds its own FOB column, so its round-off is
-        its own figure - but the total it closes on must be the SAME CIF value
-        every other document quotes, not a near-miss."""
+    def test_customer_invoice_still_closes_on_the_shared_cif_value(self, admin_ctx):
+        """The customer's copy re-rounds its own FOB column (a separate,
+        unrelated feature) but must still close on the SAME CIF value every
+        other document quotes."""
         client, container, admin, company_id = admin_ctx
         invoice = self._create_fob_priced_invoice(client, container, admin, company_id)
         assert invoice.fob_priced_total, "no FOB column - the assertion below would be vacuous"

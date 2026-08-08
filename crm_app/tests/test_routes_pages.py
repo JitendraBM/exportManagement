@@ -951,31 +951,33 @@ class TestDeliveryTermChargeRows:
         assert 'rowspan="7"' in sheet
         _table_is_rectangular(sheet, "Sr No")
 
-    # ---- FOB-typed prices add the ROUND-OFF row ------------------------------
-    def test_fob_priced_quotation_sheet_prints_a_round_off_row(self, admin_ctx):
+    # ---- FOB-typed prices no longer add a ROUND-OFF row -----------------------
+    # apply_fob_uplift keeps the uplift at full precision and only rounds each
+    # line's Total, so any residual cent is absorbed there instead of being
+    # tracked and printed as its own row.
+    def test_fob_priced_quotation_sheet_has_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         quotation = container.quotation_service.create(
             admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
                     "shipping_terms": "CIF", "sea_freight": "100", "fob_pricing": "1"},
             [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
-        assert "ROUND-OFF" in sheet
-        assert "+0.01" in sheet                   # signed: charge added back
-        assert 'rowspan="9"' in sheet             # the 8 ladder rows + ROUND-OFF
+        assert "ROUND-OFF" not in sheet
+        assert 'rowspan="8"' in sheet
         _table_is_rectangular(sheet, "CIF VALUE")
 
-    def test_fob_priced_proforma_sheet_prints_a_round_off_row(self, admin_ctx):
+    def test_fob_priced_proforma_sheet_has_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         proforma = container.proforma_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
                     "terms_of_delivery": "CIF", "sea_freight": "100", "fob_pricing": "1"},
             [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
-        assert "ROUND-OFF" in sheet and "+0.01" in sheet
-        assert 'rowspan="9"' in sheet             # the 8 ladder rows + ROUND-OFF
+        assert "ROUND-OFF" not in sheet
+        assert 'rowspan="8"' in sheet
         _table_is_rectangular(sheet, "CIF VALUE")
 
-    def test_fob_priced_export_invoice_sheet_prints_a_round_off_row(self, admin_ctx):
+    def test_fob_priced_export_invoice_sheet_has_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = container.export_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
@@ -984,9 +986,9 @@ class TestDeliveryTermChargeRows:
                     "sea_freight": "100", "fob_pricing": "1"},
             [{"product_name": "P", "quantity_value": "3", "unit": "SQM", "price_usd": "7"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Round-off" in sheet and "+0.01" in sheet
-        # 9 money rows: the full 8-row ladder plus Round-off.
-        assert 'rowspan="9"' in sheet
+        assert "Round-off" not in sheet
+        # 8 money rows: the full ladder, with no Round-off row added.
+        assert 'rowspan="8"' in sheet
         _table_is_rectangular(sheet, "Sr No")
 
     def test_plain_quotation_sheet_has_no_round_off_row(self, admin_ctx):

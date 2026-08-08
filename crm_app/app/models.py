@@ -840,9 +840,9 @@ class QuotationItem:
     unit: str = "SQM"
     price_usd: float = 0
     total_usd: float = 0
-    # Set only under fob_pricing (see Quotation.fob_pricing): the price as the
-    # user typed it, before the per-unit charge uplift that made price_usd.
-    # NULL on every line priced the normal (CIF-typed) way.
+    # Unused (kept so an old row still loads) - quotations no longer have an
+    # FOB-typed-price mode; price_usd is always the absolute price the user
+    # typed. See Quotation.fob_pricing / Quotation.cif_adjust_usd.
     fob_price_usd: Optional[float] = None
 
     @staticmethod
@@ -891,18 +891,17 @@ class Quotation(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
-    # When true the prices typed on the form are FOB prices: the four charges
-    # above (not the discount) are spread evenly over the total alt qty and
-    # added onto every line, so each item's price_usd still ends up being the
-    # CIF price the sheet prints. See QuotationService._apply_fob_uplift.
+    # Unused (kept so an old quotation's row still loads): quotations no
+    # longer have an FOB-typed-price mode - price_usd is always the absolute
+    # price the user typed. See cif_adjust_usd and cif_value_usd below.
     fob_pricing: bool = False
-    # Under fob_pricing the printed price is rounded to the cent, so the lines
-    # can't add up to exactly (FOB total + charges). The remainder is carried
-    # here and printed as its own ROUND-OFF row just above CIF VALUE, which
-    # keeps every column on the sheet multiplying out AND the FOB value exactly
-    # the goods total that was typed. Always 0 when fob_pricing is off. This
-    # field deliberately shadows CifMoneyLadder.round_off.
     round_off: float = 0
+    # The manual gap between what the CIF value field was typed as and what
+    # the ladder computes (goods total + charges) - see cif_value_usd below
+    # and the form's subtotal-input handler. Unlike price_usd this IS the one
+    # place a manual adjustment is allowed to land; 0 on a quotation whose CIF
+    # value was never overridden.
+    cif_adjust_usd: float = 0
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_ifsc_code: Optional[str] = None
@@ -947,6 +946,7 @@ class Quotation(CifMoneyLadder):
             discount_amount=row["discount_amount"],
             fob_pricing=bool(row["fob_pricing"]) if "fob_pricing" in row.keys() else False,
             round_off=(row["round_off"] if "round_off" in row.keys() else 0) or 0,
+            cif_adjust_usd=(row["cif_adjust_usd"] if "cif_adjust_usd" in row.keys() else 0) or 0,
             bank_name=row["bank_name"],
             bank_account_number=row["bank_account_number"],
             bank_ifsc_code=row["bank_ifsc_code"],
@@ -983,6 +983,21 @@ class Quotation(CifMoneyLadder):
         if self.computed_subtotal_usd is not None:
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
+
+    @property
+    def cif_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.cif_value_usd - a quotation's typed price
+        is always the absolute FOB price (quantity_value * price_usd summed
+        across every line, i.e. subtotal_usd, is the FOB invoice total), so
+        unlike every other document here CIF is built UPWARDS from FOB by
+        adding the charges rather than being the goods total on its own. This
+        holds regardless of the shipping terms chosen - the terms only decide
+        which charge fields are non-zero (see drops_sea_freight/drops_insurance),
+        never the FOB total itself. cif_adjust_usd is the one place a manual
+        typed-CIF-value override is allowed to land (see the form's
+        subtotal-input handler); it is 0 on a quotation that was never
+        overridden that way."""
+        return self.subtotal_usd + self.charges_total + self.cif_adjust_usd
 
 
 @dataclass
@@ -1840,7 +1855,7 @@ class ExportInvoice(CifMoneyLadder):
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight, gross_weight, net_weight}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items

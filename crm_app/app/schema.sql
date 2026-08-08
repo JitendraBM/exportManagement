@@ -541,14 +541,16 @@ CREATE TABLE IF NOT EXISTS quotations (
     certification            REAL NOT NULL DEFAULT 0,
     other_charges            REAL NOT NULL DEFAULT 0,
     discount_amount         REAL NOT NULL DEFAULT 0,
-    -- 1 = the prices typed on the form are FOB prices, and the charges above
-    -- (discount excluded) are spread evenly over the total alt qty and added
-    -- back onto every line to reach the CIF price that gets printed. See
-    -- QuotationService._apply_fob_uplift.
+    -- Unused (kept so an old quotation's row still loads): quotations no
+    -- longer have an FOB-typed-price mode - the typed price is always the
+    -- absolute FOB price. See Quotation.cif_value_usd / cif_adjust_usd below.
     fob_pricing             INTEGER NOT NULL DEFAULT 0,
-    -- What the rounded-to-the-cent line prices can't carry, printed as its own
-    -- ROUND-OFF row just above CIF VALUE. Only ever non-zero under fob_pricing.
     round_off               REAL NOT NULL DEFAULT 0,
+    -- The manual gap between what the CIF value field was typed as and what
+    -- the ladder computes (goods total + charges) - see the form's
+    -- subtotal-input handler and Quotation.cif_value_usd. 0 on a quotation
+    -- whose CIF value was never overridden.
+    cif_adjust_usd          REAL NOT NULL DEFAULT 0,
     bank_name               TEXT,
     bank_account_number     TEXT,
     bank_ifsc_code          TEXT,
@@ -578,8 +580,8 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     pallets             REAL,      -- "Plts" column - same derived-from-boxes pattern as proforma_invoice_items.pallets
     quantity_value       REAL NOT NULL DEFAULT 0,
     unit                TEXT NOT NULL DEFAULT 'SQM',
-    price_usd           REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
-    fob_price_usd       REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
+    price_usd           REAL NOT NULL DEFAULT 0,   -- the absolute FOB price the user typed - never adjusted
+    fob_price_usd       REAL,                      -- unused (kept so an old row still loads) - see quotations.fob_pricing
     total_usd           REAL NOT NULL DEFAULT 0
 );
 
@@ -961,7 +963,7 @@ CREATE TABLE IF NOT EXISTS export_invoice_containers (
 );
 
 -- Page-2 section 11B: one row per PHYSICAL container. gross_weight/net_weight
--- have no form input (unlike tare_weight) - they only ever hold whatever is
+-- have no form input (unlike tare_weight_kg) - they only ever hold whatever is
 -- already stored on the row, e.g. set by a later process outside this form.
 CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -975,7 +977,7 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     lr_no                 TEXT,          -- lorry receipt / consignment note number for that container's road leg
     transporter_name      TEXT,          -- snapshot of the chosen transporters.name, so renaming/deleting a transporter can't rewrite a saved invoice
     max_permitted_weight  TEXT,
-    tare_weight           TEXT,
+    tare_weight_kg        REAL,
     gross_weight          TEXT,
     net_weight            TEXT,
     -- Typed on the VGM attachment, which is a row per physical container:

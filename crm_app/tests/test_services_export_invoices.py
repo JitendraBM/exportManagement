@@ -77,20 +77,22 @@ class TestExportCrud:
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
 
-    def test_fob_pricing_spreads_the_charges_and_books_a_round_off(self, container, seed):
-        # The shared uplift (services.apply_fob_uplift): 100 of charges over
-        # 3 units is 33.333..., so the printed price rounds to 40.33 and the
-        # missing cent becomes the ROUND-OFF row. Tax follows the CIF price.
+    def test_fob_pricing_is_never_revived_even_if_posted(self, container, seed):
+        """Export invoices no longer have an FOB-typed-price mode - a stale
+        client (or a direct API call) posting the old fob_pricing checkbox
+        must not trigger the removed uplift. The typed price is always the
+        CIF price, exactly as if fob_pricing had never existed."""
         inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
                           fob_pricing="1",
                           items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
                                   "price_usd": "7", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         item = got.items[0]
-        assert (item.fob_price_usd, item.price_usd, item.total_usd) == (7.0, 40.33, 120.99)
-        assert got.round_off == 0.01
-        assert got.cif_value_usd == pytest.approx(121.0)
-        assert got.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+        assert got.fob_pricing is False
+        assert item.fob_price_usd is None
+        assert item.price_usd == 7.0
+        assert item.total_usd == 21.0
+        assert got.cif_value_usd == pytest.approx(21.0)
 
     def test_without_fob_pricing_the_export_prices_are_untouched(self, container, seed):
         got = container.export_invoice_service.get(
@@ -344,19 +346,19 @@ class TestExportChildLists:
             containers=[{"container_type": "20FT FCL", "container_count": "2"}],
             container_details_list=[
                 {"container_type": "20FT FCL", "container_no": "ABCD1234", "line_seal_no": "LS1",
-                 "rfid_seal_no": "RF1", "vehicle_no": "GJ01", "tare_weight": "2200"}],
+                 "rfid_seal_no": "RF1", "vehicle_no": "GJ01", "tare_weight_kg": "2200"}],
         )
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.total_containers == 2
         assert got.container_details[0]["container_no"] == "ABCD1234"
-        assert got.container_details[0]["tare_weight"] == "2200"
+        assert got.container_details[0]["tare_weight_kg"] == 2200
 
     def test_gross_and_net_weight_have_no_form_field_but_survive_edits(self, container, seed):
         # No form field sets these - they start out blank.
         inv = make_export(
             container, seed,
             containers=[{"container_type": "20FT FCL", "container_count": "1"}],
-            container_details_list=[{"container_no": "ABCD1234", "tare_weight": "2200"}],
+            container_details_list=[{"container_no": "ABCD1234", "tare_weight_kg": "2200"}],
         )
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.container_details[0]["gross_weight"] is None
@@ -368,19 +370,19 @@ class TestExportChildLists:
             "WHERE export_invoice_id = ?", ("5000", "2800", inv.id))
 
         # An unrelated edit through the service - the form always resubmits
-        # every current 11B row's editable fields (container_no/tare_weight
+        # every current 11B row's editable fields (container_no/tare_weight_kg
         # etc.), but never gross/net weight, since they aren't form fields.
         updated = container.export_invoice_service.update(
             seed.admin, inv.id,
             {"consignee_name": "NEW NAME", "invoice_date": "2026-02-20",
              "export_invoice_number": inv.export_invoice_number,
              "containers": [{"container_type": "20FT FCL", "container_count": "1"}],
-             "container_details_list": [{"container_no": "ABCD1234", "tare_weight": "2200"}]},
+             "container_details_list": [{"container_no": "ABCD1234", "tare_weight_kg": "2200"}]},
             [{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM", "price_usd": "5.92"}],
         )
         assert updated.container_details[0]["gross_weight"] == "5000"
         assert updated.container_details[0]["net_weight"] == "2800"
-        assert updated.container_details[0]["tare_weight"] == "2200"
+        assert updated.container_details[0]["tare_weight_kg"] == 2200
 
     def test_11b_tare_weight_round_trips(self, container, seed):
         inv = make_export(

@@ -275,12 +275,6 @@
       {# Each entry is (label, value, is_total, signed) - `signed` only for
          ROUND-OFF, which has to read as an amount added or taken back out. #}
       {% set money = [] %}
-      {# FOB-priced invoices carry one extra step: the lines are worked out
-         from per-unit prices rounded to the cent, and Round-off is the few
-         cents that leaves between them and the CIF value. #}
-      {% if invoice.fob_pricing %}
-      {% set _ = money.append(('Round-off', invoice.round_off, false, true)) %}
-      {% endif %}
       {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false, false)) %}
       {% set _ = money.append(('Discount', invoice.discount_amount, false, false)) %}
       {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}

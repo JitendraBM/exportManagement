@@ -40,9 +40,13 @@ def view_export_packing_list(export_packing_list_id):
     if not packing_list.invoice:
         abort(404)
     company = container.company_service.get(g.user.company_id)
+    lut_no = None
+    if company and company.lut_details:
+        primary_lut = next((l for l in company.lut_details if l.get("is_primary")), None)
+        lut_no = (primary_lut or company.lut_details[0]).get("lut_number")
     return render_template(
         "export_packing_lists/print.html",
-        packing_list=packing_list, invoice=packing_list.invoice, company=company,
+        packing_list=packing_list, invoice=packing_list.invoice, company=company, lut_no=lut_no,
     )
 
 
