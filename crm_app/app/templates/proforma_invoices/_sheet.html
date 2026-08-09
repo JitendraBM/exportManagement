@@ -10,8 +10,17 @@
 {% import 'proforma_invoices/_goods_rows.html' as goods %}
 {% set PI_ANNEX_START = 6 %}
 {% set pi_mode = invoice.display_mode or 'index' %}
-{% set main_items = invoice.items[:PI_ANNEX_START] %}
-{% set annex_items = invoice.items[PI_ANNEX_START:] %}
+{# printed_items, not items: the typed rate is the FOB rate, and what a
+   buyer reads here is the CIF rate - the charges spread over the total ALT
+   QTY, rounded to the printable two decimals and added to every line (see
+   ProformaInvoice.printed_items). The goods column therefore foots to the
+   CIF VALUE below it exactly - the cents a rounded per-unit uplift can't
+   carry are absorbed into the last line's Total, NOT shown as a round-off
+   step: customs has no round-off line to accept, and the FOB value this is
+   all built up from is the figure the buyer and the seller agreed. #}
+{% set printed_items = invoice.printed_items %}
+{% set main_items = printed_items[:PI_ANNEX_START] %}
+{% set annex_items = printed_items[PI_ANNEX_START:] %}
 {# The filler row's height is measured in the browser (templates/_page_filler.html)
    so the sheet fills its page exactly whatever the items wrap to. #}
 <style>
@@ -280,14 +289,17 @@
      reader has to be able to follow the subtraction from CIF down to FOB
      without a step going missing.
 
-     The delivery terms are the one thing that removes a row - FOB drops both
-     the freight and the insurance, CFR drops the insurance alone. Each row is
+     The delivery terms are the one thing that removes a row - FOB drops the
+     freight, the insurance and the certification, CFR drops the insurance
+     alone. Each row is
      asked about separately and the Amount In Word rowspan is counted from the
      answers, so removing one row can't leave the cell spanning a row that
      isn't there. #}
   {% set show_sea_freight = not invoice.terms_of_delivery | drops_sea_freight %}
   {% set show_insurance = not invoice.terms_of_delivery | drops_insurance %}
-  {% set charge_rows = 6 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+  {% set show_certification = not invoice.terms_of_delivery | drops_certification %}
+  {% set charge_rows = 5 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+                         + (1 if show_certification else 0)
                          + (1 if annex_items else 0) %}
   <table>
     <colgroup>
@@ -327,10 +339,12 @@
       <td class="pi-val pi-right">{{ usd(invoice.sea_freight) }}</td>
     </tr>
     {% endif %}
+    {% if show_certification %}
     <tr>
       <td class="pi-charge-label">CERTIFICATION</td>
       <td class="pi-val pi-right">{{ usd(invoice.certification) }}</td>
     </tr>
+    {% endif %}
     <tr>
       <td class="pi-charge-label">OTHER CHARGES</td>
       <td class="pi-val pi-right">{{ usd(invoice.other_charges) }}</td>

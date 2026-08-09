@@ -212,8 +212,9 @@
       <div class="field"><label for="place_of_receipt">Place of receipt</label><input type="text" id="place_of_receipt" name="place_of_receipt" value="{{ data.place_of_receipt | default('', true) }}"></div>
     </div>
     <div class="form-row">
-      {# Options come from Administration -> Miscellaneous (port_of_loading_options). #}
-      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options) }}
+      {# Options come from Administration -> Miscellaneous (port_of_loading_options);
+         an admin can also add one from the dropdown itself. #}
+      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options, can_add=current_user.is_admin) }}
       <div class="field"><label for="port_of_discharge">Port of discharge</label><input type="text" id="port_of_discharge" name="port_of_discharge" value="{{ data.port_of_discharge | default('', true) }}"></div>
       <div class="field"><label for="final_destination">Final destination</label><input type="text" id="final_destination" name="final_destination" value="{{ data.final_destination | default('', true) }}"></div>
     </div>
@@ -422,7 +423,7 @@
          don't charge it - see applyDeliveryTermCharges below. #}
       <div class="field js-charge-sea-freight" style="max-width:150px;"><label for="sea_freight">Sea freight (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
       <div class="field js-charge-insurance" style="max-width:150px;"><label for="insurance">Insurance (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field js-charge-certification" style="max-width:150px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
@@ -659,10 +660,10 @@
   });
 
   // ---- the delivery terms decide which charges apply --------------------------
-  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
-  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
-  // the insurance and nothing else. Each input is toggled on its own question -
-  // matching drops_sea_freight/drops_insurance in app/utils.py, which zero the
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance and
+  // no certification); CFR keeps the freight and the certification but leaves
+  // the buyer to insure the cargo, so it drops the insurance and nothing else. Each input is toggled on its own question -
+  // matching drops_sea_freight/drops_insurance/drops_certification in app/utils.py, which zero the
   // same charges server-side and leave the same rows off the printed sheet.
   const contractSelect = document.getElementById('nature_of_contract');
   function applyDeliveryTermCharges() {
@@ -677,6 +678,7 @@
     };
     toggle('.js-charge-sea-freight', fob);
     toggle('.js-charge-insurance', fob || cfr);
+    toggle('.js-charge-certification', fob);
     recalcTotals();
   }
   contractSelect.addEventListener('change', applyDeliveryTermCharges);

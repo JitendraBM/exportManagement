@@ -292,15 +292,67 @@ class TestProformaInvoice:
         base.update(overrides)
         return ProformaInvoice(**base)
 
-    def test_invoice_value(self):
-        # Same CIF -> discount -> invoice value -> charges -> FOB ladder as the
-        # quotation, from the shared CifMoneyLadder mixin.
+    def test_the_ladder_runs_up_from_fob_to_cif(self):
+        # Same treatment as the quotation: a proforma invoice's price is the
+        # absolute FOB price, so the line totals ARE the FOB invoice total and
+        # CIF is built by adding the charges back onto it (see
+        # ProformaInvoice.cif_value_usd, which overrides CifMoneyLadder).
         pi = self._pi(sea_freight=10, discount_amount=5)
         pi.items = [ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=1,
                                         product_name="P", total_usd=100)]
-        assert pi.cif_value_usd == 100
-        assert pi.invoice_value_usd == 95         # 100 - 5
-        assert pi.fob_value_usd == 85             # 95 - 10 sea freight
+        assert pi.subtotal_usd == 100             # the FOB invoice total
+        assert pi.cif_value_usd == 110            # 100 + 10 sea freight
+        assert pi.invoice_value_usd == 105        # 110 - 5
+        assert pi.fob_value_usd == 95             # 105 - 10 sea freight
+
+    def test_fob_terms_leave_cif_equal_to_the_goods_total(self):
+        # Under FOB every charge is held at zero, so there is nothing to add:
+        # CIF, invoice and FOB values all land on the typed goods total.
+        pi = self._pi()
+        pi.items = [ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=1,
+                                        product_name="P", total_usd=100)]
+        assert pi.cif_value_usd == 100 and pi.fob_value_usd == 100
+
+    def _priced_pi(self, **overrides):
+        """A PI with two real lines - qty x price consistent with the stored
+        total, the way the service always builds them."""
+        pi = self._pi(**overrides)
+        pi.items = [
+            ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=1, product_name="P",
+                                quantity_value=100, price_usd=5.92, total_usd=592),
+            ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=2, product_name="Q",
+                                quantity_value=50, price_usd=4.00, total_usd=200),
+        ]
+        return pi
+
+    def test_the_printed_rate_is_the_fob_rate_plus_the_charges_per_unit(self):
+        # 150 SQM carrying 300 of charges = 2.00 a unit, which divides evenly:
+        # every rate goes up by exactly 2.00 and nothing is left to round.
+        pi = self._priced_pi(sea_freight=200, insurance=100)
+        assert pi.charge_uplift_per_unit == 2.00
+        assert [(i.price_usd, i.total_usd) for i in pi.printed_items] == [(7.92, 792), (6.00, 300)]
+        assert pi.cif_value_usd == 1092           # 792 goods + 300 charges
+        assert pi.fob_value_usd == 792            # the goods as typed
+
+    def test_what_the_printed_rate_cannot_carry_is_absorbed_by_the_last_total(self):
+        # 100 over 150 SQM is 0.666... - 0.67 once rounded to the cent a rate
+        # prints, which would overcharge the goods column by 0.50 across the
+        # two lines. There is no round-off row to put that in (customs won't
+        # accept one), so the last line's Total absorbs it: 50 x 4.67 = 233.50
+        # prints as 233.00 and the column foots to the exact CIF value.
+        pi = self._priced_pi(sea_freight=100)
+        assert pi.charge_uplift_per_unit == 0.67
+        assert [(i.price_usd, i.total_usd) for i in pi.printed_items] == [(6.59, 659), (4.67, 233)]
+        assert pi.printed_goods_total == 892      # exactly 792 + 100
+        assert pi.cif_value_usd == 892
+        # ...and the FOB value - the figure the buyer and seller agreed - is
+        # untouched by any of it.
+        assert pi.fob_value_usd == 792
+
+    def test_the_stored_lines_keep_the_typed_fob_price(self):
+        pi = self._priced_pi(sea_freight=100)
+        assert pi.printed_items[0].price_usd == 6.59
+        assert pi.items[0].price_usd == 5.92 and pi.items[0].total_usd == 592
 
     def test_display_mode_defaults_to_index_when_null(self):
         row = self._make_row(display_mode=None)

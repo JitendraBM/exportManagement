@@ -17,13 +17,16 @@
    annexure halves.
 
    The delivery terms can take charge rows out: FOB puts the whole ocean leg on
-   the buyer (no freight, no insurance), CFR keeps the freight but leaves the
-   buyer to insure the cargo (insurance only). The two rows are asked about
+   the buyer (no freight, no insurance, no certification), CFR keeps the freight
+   and the certification but leaves the buyer to insure the cargo (insurance
+   only). The rows are asked about
    SEPARATELY and the AMOUNT IN WORDS rowspan is counted from the answers, so
    dropping one row can't leave the cell spanning a row that isn't there. #}
 {% set show_sea_freight = not quotation.shipping_terms | drops_sea_freight %}
 {% set show_insurance = not quotation.shipping_terms | drops_insurance %}
-{% set charge_rows = 6 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+{% set show_certification = not quotation.shipping_terms | drops_certification %}
+{% set charge_rows = 5 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+                       + (1 if show_certification else 0)
                        + (2 if annex_items else 0) %}
 {# Short item lists are closed off by one blank filler row sized in the browser
    to exactly the page's leftover space (templates/_page_filler.html), like the
@@ -177,10 +180,12 @@
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.sea_freight) }}</td>
       </tr>
       {% endif %}
+      {% if show_certification %}
       <tr class="quote-charge-row">
         <td colspan="5" class="num">CERTIFICATION</td>
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.certification) }}</td>
       </tr>
+      {% endif %}
       <tr class="quote-charge-row">
         <td colspan="5" class="num">OTHER</td>
         <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.other_charges) }}</td>

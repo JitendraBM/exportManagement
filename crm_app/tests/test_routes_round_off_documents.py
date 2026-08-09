@@ -130,3 +130,57 @@ class TestRoundOffRemovedFromExportInvoiceAttachments:
         assert invoice.round_off == 0
         assert "Round-off" not in client.get(f"/tax-invoices/{invoice.id}").get_data(as_text=True)
         assert "Round-off" not in client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
+
+
+class TestProformaInvoiceHasNoFobPricingMode:
+    """The proforma invoice lost the "Prices typed above are FOB" checkbox
+    too: the typed price is always the absolute FOB price and CIF VALUE is
+    worked out from it plus the charges, so nothing on the form can rewrite a
+    line's price (and there is no round-off to carry)."""
+
+    def _post(self, client, container, company_id, **over):
+        data = {
+            "consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-03-01",
+            "terms_of_delivery": "CIF", "sea_freight": "100", "insurance": "20",
+            "item_product_name[]": "GVT 600X1200", "item_quantity_value[]": "100",
+            "item_unit[]": "SQM", "item_price_usd[]": "5.92",
+        }
+        data.update(over)
+        resp = client.post("/proforma-invoices/new", data=data, follow_redirects=True)
+        assert resp.status_code == 200
+        listed = container.proforma_invoice_service.list_all(company_id)[0]
+        return container.proforma_invoice_service.get(listed.id, company_id)
+
+    def test_the_form_no_longer_offers_the_checkbox(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        body = client.get("/proforma-invoices/new").get_data(as_text=True)
+        assert 'name="fob_pricing"' not in body
+        assert "add the charges into them" not in body
+
+    def test_posting_the_old_checkbox_never_reprices_a_line(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._post(client, container, company_id, fob_pricing="on")
+        assert invoice.fob_pricing is False
+        assert invoice.round_off == 0
+        assert invoice.items[0].price_usd == 5.92    # the typed price, untouched
+        assert invoice.items[0].fob_price_usd is None
+
+    def test_cif_value_is_the_goods_total_plus_the_charges(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._post(client, container, company_id)
+        assert invoice.items, "no goods lines - the assertions below would be vacuous"
+        goods = sum(item.total_usd for item in invoice.items)
+        assert goods == 592.0
+        assert invoice.cif_value_usd == 712.0        # 592 + 100 freight + 20 insurance
+        assert invoice.fob_value_usd == 592.0        # back to the typed goods total
+        sheet = client.get(f"/proforma-invoices/{invoice.id}").get_data(as_text=True)
+        assert "712.00" in sheet and "592.00" in sheet
+
+    def test_fob_terms_leave_cif_equal_to_the_goods_total(self, admin_ctx):
+        """Picking FOB drops every charge, so there is nothing to add on top:
+        the buyer's CIF, invoice and FOB values are all the typed goods
+        total."""
+        client, container, admin, company_id = admin_ctx
+        invoice = self._post(client, container, company_id, terms_of_delivery="FOB MUNDRA")
+        assert (invoice.sea_freight, invoice.insurance) == (0, 0)
+        assert invoice.cif_value_usd == 592.0 == invoice.fob_value_usd

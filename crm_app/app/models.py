@@ -13,7 +13,7 @@ just "how do I represent myself", not "how do I persist myself".
 """
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, List
 
 
@@ -1582,6 +1582,9 @@ class ProformaInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
+    # Both unused (kept so an old row still loads): like the quotation, a
+    # proforma invoice no longer has an FOB-typed-price mode - price_usd is
+    # always the absolute FOB price the user typed. See cif_value_usd below.
     fob_pricing: bool = False  # see Quotation.fob_pricing
     round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
@@ -1685,6 +1688,83 @@ class ProformaInvoice(CifMoneyLadder):
         if self.computed_subtotal_usd is not None:
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
+
+    @property
+    def cif_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.cif_value_usd - same treatment the
+        quotation gets: a proforma invoice's typed price is always the
+        absolute FOB price (quantity_value * price_usd summed across every
+        line, i.e. subtotal_usd, is the FOB invoice total), so CIF is built
+        UPWARDS from FOB by adding the charges rather than being the goods
+        total on its own. This holds regardless of the terms of delivery -
+        the terms only decide which charge fields are non-zero (see
+        drops_sea_freight/drops_insurance/drops_certification), never the FOB
+        total itself, so picking FOB leaves CIF equal to the goods total and
+        picking CIF works the CIF value out from the charges typed.
+
+        This is exactly what the printed goods column adds up to: the cents
+        a rounded per-unit uplift can't carry are absorbed into the last
+        printed line's Total rather than left to a round-off row (see
+        printed_items)."""
+        return round(self.subtotal_usd + self.charges_total, 2)
+
+    @property
+    def fob_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.fob_value_usd. The FOB value is the goods
+        as typed, less the discount - it is the figure the whole ladder is
+        built up FROM, so it must not pick up the printed rates' round-off on
+        the way back down (the ROUND-OFF row on the sheet is what carries
+        that instead)."""
+        return self.subtotal_usd - self.discount_amount
+
+    # ---- CIF-priced view of the goods lines -----------------------------
+    # The rate typed on the form is the FOB rate, but the rate the buyer reads
+    # on the sheet is the CIF rate: the charges between FOB and CIF are spread
+    # uniformly over the total ALT QTY and that per-unit share is added to
+    # every line. The exact inverse of ExportInvoice.fob_priced_lines.
+    @property
+    def charge_uplift_per_unit(self) -> float:
+        """One unit of ALT QTY's share of the FOB->CIF charges, rounded to the
+        two decimals a printed rate has room for - the closest printable
+        figure, not the exact share. What that rounding leaves over is
+        absorbed by the last printed line's Total; see printed_items."""
+        total_qty = sum(item.quantity_value or 0 for item in self.items)
+        return round(self.charges_total / total_qty, 2) if total_qty else 0.0
+
+    @property
+    def printed_items(self) -> List[ProformaInvoiceItem]:
+        """The goods lines as the sheet and the annexure print them: same
+        lines, but at the CIF rate, each line's Total worked out FROM that
+        printed rate. Copies - the stored items keep the FOB rate that was
+        typed.
+
+        A per-unit uplift rounded to the cent can't land the column exactly on
+        FOB + charges, and the few cents left over are absorbed into the LAST
+        line's Total rather than printed as a round-off row of their own: this
+        document is read by customs, which has no round-off line to accept,
+        while the FOB value it is all built up from is the figure the buyer
+        and the seller actually agreed. So the goods column always foots to
+        the CIF value exactly, and the ladder below it reconciles all the way
+        down to the agreed FOB value with no extra step to explain."""
+        uplift = self.charge_uplift_per_unit
+        printed = []
+        for item in self.items:
+            rate = round((item.price_usd or 0) + uplift, 2)
+            printed.append(replace(
+                item, price_usd=rate, total_usd=round(rate * (item.quantity_value or 0), 2),
+            ))
+        if printed:
+            leftover = round(
+                (self.subtotal_usd + self.charges_total) - sum(i.total_usd for i in printed), 2)
+            if leftover:
+                last = printed[-1]
+                printed[-1] = replace(last, total_usd=round(last.total_usd + leftover, 2))
+        return printed
+
+    @property
+    def printed_goods_total(self) -> float:
+        """What the printed goods column adds up to - the CIF value."""
+        return round(sum(item.total_usd for item in self.printed_items), 2)
 
 
 EXPORT_TAX_MODE_IGST = "igst"

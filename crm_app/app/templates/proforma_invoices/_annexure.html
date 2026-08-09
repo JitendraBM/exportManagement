@@ -7,11 +7,13 @@
    brings along). Keep PI_ANNEX_START in sync with _sheet.html. #}
 {% import 'proforma_invoices/_goods_rows.html' as goods %}
 {% set PI_ANNEX_START = 6 %}
-{% set annex_items = invoice.items[PI_ANNEX_START:] %}
+{# printed_items - the CIF-priced lines, exactly as the invoice page prints
+   them. See _sheet.html. #}
+{% set annex_items = invoice.printed_items[PI_ANNEX_START:] %}
 {% if annex_items %}
 {% set pi_mode = invoice.display_mode or 'index' %}
 {# line numbering continues from the invoice page (index view) #}
-{% set annex_sr_start = invoice.items|length - annex_items|length %}
+{% set annex_sr_start = invoice.printed_items|length - annex_items|length %}
 
 {% macro ax_usd(v) -%}
   {%- if v %}$&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}$&nbsp;-{% endif -%}

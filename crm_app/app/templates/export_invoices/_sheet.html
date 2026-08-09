@@ -278,9 +278,10 @@
       {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false, false)) %}
       {% set _ = money.append(('Discount', invoice.discount_amount, false, false)) %}
       {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}
-      {# The delivery terms decide which of these two apply: FOB puts the whole
-         ocean leg on the buyer so both drop out, CFR keeps the freight but
-         leaves the buyer to insure the cargo so only the insurance goes. Each
+      {# The delivery terms decide which of these apply: FOB puts the whole
+         ocean leg on the buyer so the insurance, the freight and the
+         certification all drop out, CFR keeps the freight and the
+         certification but leaves the buyer to insure the cargo. Each
          is appended on its own question. The money ladder drives the whole
          band's row count, so the left cell's rowspan and the Net/Gross split
          below re-derive themselves from whatever ends up in this list - a
@@ -291,7 +292,9 @@
       {% if not invoice.nature_of_contract | drops_sea_freight %}
       {% set _ = money.append(('Sea Freight', invoice.sea_freight, false, false)) %}
       {% endif %}
+      {% if not invoice.nature_of_contract | drops_certification %}
       {% set _ = money.append(('Certification', invoice.certification, false, false)) %}
+      {% endif %}
       {% set _ = money.append(('Other Charges', invoice.other_charges, false, false)) %}
       {% set _ = money.append(('FOB Value', invoice.fob_value_usd, false, false)) %}
 

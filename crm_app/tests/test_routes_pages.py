@@ -721,6 +721,50 @@ class TestMiscRoutes:
         assert '<select id="port_of_loading" name="port_of_loading">' in page
         assert "MUNDRA" in page
 
+    @pytest.mark.parametrize("path", [
+        "/export-invoices/new",
+        "/proforma-invoices/new",
+        "/quotations/new",
+    ])
+    def test_an_admin_can_add_a_port_straight_from_the_dropdown(self, admin_ctx, path):
+        client, container, admin, company_id = admin_ctx
+        page = client.get(path).get_data(as_text=True)
+        assert "+ Add a new port" in page
+
+        resp = client.post("/misc/api/ports-of-loading",
+                           data={"name": "MUNDRA", "pin_code": "370421"})
+        assert resp.status_code == 200
+        assert resp.get_json()["name"] == "MUNDRA"
+        stored = container.misc_list_service.list_ports_of_loading(company_id)
+        assert [(p.name, p.pin_code) for p in stored] == [("MUNDRA", "370421")]
+        # ...and it is on the dropdown from then on, like any other entry.
+        assert "MUNDRA" in client.get(path).get_data(as_text=True)
+
+    def test_quick_adding_a_port_reports_its_errors_as_json(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        # A port needs both halves, and a name can't repeat - the same rules
+        # the Miscellaneous page enforces, reported back to the dropdown
+        # rather than flashed onto a page the user never leaves.
+        resp = client.post("/misc/api/ports-of-loading", data={"name": "MUNDRA", "pin_code": ""})
+        assert resp.status_code == 400 and "Pincode" in resp.get_json()["error"]
+        client.post("/misc/api/ports-of-loading", data={"name": "MUNDRA", "pin_code": "370421"})
+        resp = client.post("/misc/api/ports-of-loading", data={"name": "mundra", "pin_code": "370421"})
+        assert resp.status_code == 400 and "already on the port of loading list" in resp.get_json()["error"]
+        assert len(container.misc_list_service.list_ports_of_loading(company_id)) == 1
+
+    def test_a_non_admin_is_not_offered_the_add_option(self, app, client):
+        """The list itself is admin-only, so an employee gets the plain
+        dropdown rather than an entry that would only fail on them."""
+        container = app.container
+        tenant = container.tenant_repo.create("Emp Co", "emp-co")
+        employee = container.auth_service.create_user(
+            tenant.id, "empuser", "emp-pass-1", "Emp User", "employee")
+        with client.session_transaction() as sess:
+            sess["user_id"] = employee.id
+        page = client.get("/quotations/new").get_data(as_text=True)
+        assert '<select id="port_of_loading" name="port_of_loading">' in page
+        assert "+ Add a new port" not in page
+
     def test_picked_currency_prints_on_the_invoice_and_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         client.post("/misc/currencies", data={"name": "JPY", "symbol": "¥"}, follow_redirects=True)
@@ -869,8 +913,9 @@ def _table_is_rectangular(html, marker):
 
 
 class TestDeliveryTermChargeRows:
-    """FOB hands the whole ocean leg to the buyer, so both charges leave the
-    sheet; CFR keeps the freight with the seller and drops the insurance alone.
+    """FOB hands the whole ocean leg to the buyer, so the freight, the
+    insurance and the certification all leave the sheet; CFR keeps the freight
+    and the certification with the seller and drops the insurance alone.
     Each sheet has to lose exactly the right row(s) AND stay rectangular - the
     amount-in-words cell spans the whole ladder, so its rowspan has to be
     counted from the rows that actually print."""
@@ -879,24 +924,30 @@ class TestDeliveryTermChargeRows:
         client, container, admin, company_id = admin_ctx
         quotation = container.quotation_service.create(
             admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
-                    "shipping_terms": "FOB", "sea_freight": "100", "insurance": "50"},
+                    "shipping_terms": "FOB", "sea_freight": "100", "insurance": "50",
+                    "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
-        assert "CERTIFICATION" in sheet          # the rest of the ladder stays
+        assert "CERTIFICATION" not in sheet
+        assert "OTHER" in sheet                  # the rest of the ladder stays
         assert "CIF VALUE" in sheet and "FOB VALUE" in sheet
-        assert 'rowspan="6"' in sheet            # 8 ladder rows - the 2 dropped
+        assert 'rowspan="5"' in sheet            # 8 ladder rows - the 3 dropped
+        _table_is_rectangular(sheet, "CIF VALUE")
 
     def test_proforma_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         proforma = container.proforma_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
-                    "terms_of_delivery": "FOB MUNDRA", "sea_freight": "100", "insurance": "50"},
+                    "terms_of_delivery": "FOB MUNDRA", "sea_freight": "100", "insurance": "50",
+                    "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
         assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
+        assert "CERTIFICATION" not in sheet
         assert "CIF VALUE" in sheet and "INVOICE VALUE" in sheet and "FOB VALUE" in sheet
-        assert 'rowspan="6"' in sheet            # 8 ladder rows - the 2 dropped
+        assert 'rowspan="5"' in sheet            # 8 ladder rows - the 3 dropped
+        _table_is_rectangular(sheet, "CIF VALUE")
 
     def test_export_invoice_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -904,13 +955,15 @@ class TestDeliveryTermChargeRows:
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
                     "export_invoice_number": "1000000001", "tax_mode": "igst",
                     "exchange_rate": "86.70", "nature_of_contract": "FOB",
-                    "sea_freight": "100", "insurance": "50"},
+                    "sea_freight": "100", "insurance": "50", "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
         assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        assert "Certification" not in sheet
         assert "CIF Value" in sheet and "Invoice Value" in sheet
         assert "FOB Value" in sheet and "Other Charges" in sheet
-        assert 'rowspan="6"' in sheet            # the shortened money ladder
+        assert 'rowspan="5"' in sheet            # the shortened money ladder
+        _table_is_rectangular(sheet, "Sr No")
 
     # ---- CFR: the insurance row alone comes out ------------------------------
     def test_quotation_sheet_drops_only_the_insurance_row(self, admin_ctx):
@@ -922,6 +975,7 @@ class TestDeliveryTermChargeRows:
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "INSURANCE" not in sheet
         assert "SEA FREIGHT" in sheet            # CFR = cost AND freight
+        assert "CERTIFICATION" in sheet
         assert 'rowspan="7"' in sheet            # 8 ladder rows - the 1 dropped
         _table_is_rectangular(sheet, "CIF VALUE")
 
@@ -933,6 +987,7 @@ class TestDeliveryTermChargeRows:
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
         assert "INSURANCE" not in sheet and "SEA FREIGHT" in sheet
+        assert "CERTIFICATION" in sheet
         assert 'rowspan="7"' in sheet
         _table_is_rectangular(sheet, "CIF VALUE")
 
@@ -946,6 +1001,7 @@ class TestDeliveryTermChargeRows:
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
         assert "Insurance" not in sheet and "Sea Freight" in sheet
+        assert "Certification" in sheet
         # 7 money rows: the Export Under cell spans them all, and the Net/Gross
         # weight cells split the remaining 5 between them (2 + 3).
         assert 'rowspan="7"' in sheet
@@ -966,13 +1022,36 @@ class TestDeliveryTermChargeRows:
         assert 'rowspan="8"' in sheet
         _table_is_rectangular(sheet, "CIF VALUE")
 
-    def test_fob_priced_proforma_sheet_has_no_round_off_row(self, admin_ctx):
+    def test_a_proforma_sheet_prints_cif_rates_with_no_round_off_row(self, admin_ctx):
+        """The typed 7.00 is an FOB rate; 100 of sea freight over 3 SQM is
+        33.33 a unit once rounded to the cent the Rate column prints, so the
+        sheet quotes 40.33. 3 x 40.33 is a cent under the exact 121, and that
+        cent is absorbed into the line's printed Total - customs has no
+        round-off line to accept, and the FOB value the ladder is built up
+        from is what the buyer and seller agreed."""
         client, container, admin, company_id = admin_ctx
         proforma = container.proforma_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
-                    "terms_of_delivery": "CIF", "sea_freight": "100", "fob_pricing": "1"},
+                    "terms_of_delivery": "CIF", "sea_freight": "100"},
             [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "40.33" in sheet          # the printed CIF rate
+        assert "121.00" in sheet         # ...and the Total the column foots to
+        assert "120.99" not in sheet
+        assert "ROUND-OFF" not in sheet
+        assert 'rowspan="8"' in sheet
+        _table_is_rectangular(sheet, "CIF VALUE")
+
+    def test_a_proforma_sheet_that_divides_evenly_needs_no_absorbing(self, admin_ctx):
+        # 90 over 3 SQM is exactly 30.00 a unit, so the printed Total is the
+        # plain rate x quantity with nothing absorbed into it.
+        client, container, admin, company_id = admin_ctx
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
+                    "terms_of_delivery": "CIF", "sea_freight": "90"},
+            [{"product_name": "P", "quantity_value": "3", "price_usd": "7"}])
+        sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
+        assert "37.00" in sheet and "111.00" in sheet
         assert "ROUND-OFF" not in sheet
         assert 'rowspan="8"' in sheet
         _table_is_rectangular(sheet, "CIF VALUE")

@@ -11,7 +11,7 @@ port's PIN code). Editing happens inline on the single page rather than
 through separate form pages, since a list row is only a field or two.
 """
 
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, g, abort, jsonify
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.utils import admin_required, verify_delete_password
@@ -166,3 +166,19 @@ def delete_port_of_loading(entry_id):
     except NotFoundError:
         abort(404)
     return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/api/ports-of-loading", methods=["POST"])
+@admin_required
+def api_quick_create_port_of_loading():
+    """Lets an admin add a port to the list straight from the Port of loading
+    dropdown on the quotation / proforma-invoice / export-invoice forms (see
+    the port_of_loading_select macro), so a missing port doesn't cost a
+    detour to Administration -> Miscellaneous and a lost half-typed document.
+    Same shape as the product picker's own quick-create; everything else
+    about the list is still managed on the Miscellaneous page."""
+    try:
+        entry = current_app.container.misc_list_service.create_port_of_loading(g.user, _fields(request.form))
+    except (ValidationError, PermissionDeniedError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"id": entry.id, "name": entry.name, "pin_code": entry.pin_code})
