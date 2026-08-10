@@ -31,7 +31,7 @@
      outer border, the nested table supplies the interior rules. Every row
      keeps its own border-bottom, including the last one: neighboring nested
      tables in the same host row can have different row counts (e.g. Purchase
-     Details grows with the supplier count while LUT IGST Details is always 5
+     Details grows with the supplier count while Invoice Value & IGST Details is always 5
      rows), so a shorter column must still close itself off right under its
      own last line rather than relying on the far-away host cell's edge. */
   .ei-nest > td { padding: 0; }
@@ -358,7 +358,7 @@
     </tr>
   </table>
 
-  <!-- ============ PURCHASE DETAILS (0.1% GST) | LUT IGST DETAILS ============ -->
+  <!-- ============ PURCHASE DETAILS (0.1% GST) | INVOICE VALUE & IGST DETAILS ============ -->
   {% set pd_list = invoice.purchase_details %}
   {% set pd_count = pd_list|length %}
   {% set pd_rows = ((pd_count + 1) // 2) %}
@@ -391,7 +391,7 @@
       <td>
         <table>
           <colgroup><col style="width:44%"><col style="width:12%"><col style="width:44%"></colgroup>
-          <tr><td colspan="3" class="ei-lbl ei-c">LUT IGST Details</td></tr>
+          <tr><td colspan="3" class="ei-lbl ei-c">Invoice Value &amp; IGST Details</td></tr>
           <tr><td>Invoice Value</td><td class="ei-c">{{ invoice.currency_prefix }}</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
           <tr><td>Exchange Rate</td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
           <tr><td>Invoice Value INR</td><td class="ei-c">₹</td><td class="ei-num">{{ ind(invoice.invoice_value_inr) }}</td></tr>
