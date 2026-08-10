@@ -310,7 +310,7 @@
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
-          {# Four stacked lines, every one of them derived - see the same block
+          {# Three stacked lines, every one of them derived - see the same block
              on the export packing list sheet, which prints the identical
              structure so the two sheets can't disagree:
                1. the government scheme (this invoice's own export-under text
@@ -318,15 +318,15 @@
                2. the sheet's own SUPPLY MEANT FOR EXPORT heading, repeated
                   here because the cell is what customs reads,
                3. the EPCG licence, when the chain's purchase invoices carried
-                  one or it was typed straight onto this invoice,
-               4. the company's current LUT number.
-             Nothing else belongs in this cell. #}
+                  one or it was typed straight onto this invoice.
+             Nothing else belongs in this cell - in particular NOT the LUT
+             number, which prints in the sheet's own SUPPLY MEANT FOR EXPORT
+             heading above and has no place in this cell. #}
           {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
           <span class="ei-lbl">Export Under</span><br>
           {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
           SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
           {% if invoice.epcg_number %}<br>EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
-          {% if lut_no %}<br>LUT NO : {{ lut_no }}{% endif %}
         </td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>

@@ -537,6 +537,27 @@ class TestExportPackingListRoutes:
         assert lines[0] == "CLAIMING UNDER ADVANCE AUTHORISATION"
         assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
 
+    def test_the_lut_number_stays_out_of_the_export_under_cell(self, admin_ctx):
+        """Customs reads this cell, and the LUT number has no place in it -
+        it belongs to the SUPPLY MEANT FOR EXPORT heading at the top of the
+        sheet. Pinned on both sheets, which print the identical cell."""
+        client, container, admin, company_id = admin_ctx
+        self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "epcg_number": "2431000888", "epcg_date": "2019-09-17",
+        })
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+
+        for path in (f"/export-invoices/{invoice.id}", f"/export-packing-lists/{packing_list.id}"):
+            page = client.get(path).get_data(as_text=True)
+            lines = self._export_under_cell(page)
+            assert not any("LUT" in line for line in lines), path
+            assert len(lines) == 3      # scheme / heading / EPCG, nothing else
+        # ...and the packing list still carries the company's LUT up in its
+        # SUPPLY MEANT FOR EXPORT heading, which is where it belongs.
+        assert "LUT123" in client.get(
+            f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
+
     def test_saving_an_export_invoice_generates_its_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
