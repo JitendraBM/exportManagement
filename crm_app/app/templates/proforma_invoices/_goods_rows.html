@@ -1,12 +1,16 @@
 {# Shared goods-row renderer for the invoice sheet and the annexure sheet.
    Groups consecutive items under a category heading row (first line of the
-   name, HSN code in its own column), like the original Excel documents:
+   name, HSN code in its own column), like the original Excel documents.
+   Every item line gets a running number in the Sr No column, numbering
+   continues across the annexure, in both display modes:
 
-   - mode 'index'   : every item line gets a running number (printed in the
-                      Marks column), numbering continues across the annexure.
-   - mode 'surface' : items additionally split by their surface finish, and
-                      the group's SURFACE (GLOSSY / MATT / ...) prints in the
-                      Marks column of the heading row; no line numbers.
+   - mode 'index'   : items are grouped by name/HSN only.
+   - mode 'surface' : items are additionally split by their surface finish,
+                      and the group's SURFACE (GLOSSY / MATT / ...) prints in
+                      the Sr No column of the heading row - so a heading row
+                      always prints in this mode, even for a lone item, to
+                      keep the surface visible without covering up its line
+                      number below.
 
    An item whose name has extra lines below the first prints those lines as
    its description (the first line lives in the heading); a single-line item
@@ -16,7 +20,7 @@
   {{- (item.product_name or '').split('\n')[0]|trim|upper }}|{{ item.hsn_code or '' }}{% if mode == 'surface' %}|{{ (item.surface or '')|trim|upper }}{% endif -%}
 {%- endmacro %}
 
-{% macro rows(items, mode, sr_start=0) %}
+{% macro rows(items, mode, sr_start=0, currency_prefix='$') %}
   {% set gs = namespace(sr=sr_start, key=none, first=true) %}
   {% for item in items %}
     {% set key = group_key(item, mode) %}
@@ -29,6 +33,12 @@
        until the group closes. #}
     {% set next_key = group_key(items[loop.index], mode) if loop.index < items|length else none %}
     {% set is_solo = is_new_group and next_key != key and '\n' not in (item.product_name or '') %}
+    {# In surface mode the heading row is the only place the surface name
+       prints, so it always prints - even for a solo item - rather than
+       borrowing the item row's own Sr No cell (which would blank out its
+       number). In index mode a solo item still skips the heading, inlining
+       its name into the numbered row as before. #}
+    {% set inline_into_row = is_solo and mode != 'surface' %}
     {% if is_new_group %}
       {% set gs.key = key %}
       {% if not gs.first %}
@@ -36,7 +46,7 @@
         <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
-      {% if not is_solo %}
+      {% if not inline_into_row %}
       <tr class="pi-goods">
         <td class="pi-val pi-center">{% if mode == 'surface' %}{{ (item.surface or '')|upper }}{% endif %}</td>
         <td class="pi-val pi-bottom">{{ (item.product_name or '').split('\n')[0]|upper }}</td>
@@ -49,11 +59,9 @@
     {% set gs.sr = gs.sr + 1 %}
     {% set rest = (item.product_name or '').split('\n')[1:] | join('\n') %}
     <tr class="pi-goods">
-      <td class="pi-val pi-center">
-        {%- if mode == 'index' %}{{ gs.sr }}{% elif is_solo %}{{ (item.surface or '')|upper }}{% endif -%}
-      </td>
+      <td class="pi-val pi-center">{{ gs.sr }}</td>
       <td class="pi-val pi-bottom">
-        {%- if is_solo -%}
+        {%- if inline_into_row -%}
           {{ (item.product_name or '').split('\n')[0]|upper }}
         {%- else -%}
           {%- for line in rest.split('\n') -%}
@@ -61,13 +69,13 @@
           {%- endfor -%}
         {%- endif -%}
       </td>
-      <td class="pi-val pi-center">{% if is_solo %}{{ item.hsn_code or '' }}{% endif %}</td>
+      <td class="pi-val pi-center">{% if inline_into_row %}{{ item.hsn_code or '' }}{% endif %}</td>
       <td class="pi-val pi-center">{{ '{:,.2f}'.format(item.pallets) if item.pallets else '' }}</td>
-      <td class="pi-val pi-center">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="pi-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+      <td class="pi-val pi-right">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="pi-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
       <td class="pi-val pi-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }} <span class="pi-unit-sm">{{ item.unit }}</span></td>
-      <td class="pi-val pi-right">${{ '{:,.2f}'.format(item.price_usd or 0) }}</td>
+      <td class="pi-val pi-right">{{ currency_prefix }}{{ '{:,.2f}'.format(item.price_usd or 0) }}</td>
       <td class="pi-val pi-center">{{ item.unit }}</td>
-      <td class="pi-val pi-right">{% if item.total_usd %}$&nbsp;{{ '{:,.2f}'.format(item.total_usd) }}{% else %}$&nbsp;-{% endif %}</td>
+      <td class="pi-val pi-right">{{ currency_prefix }}&nbsp;{{ '{:,.2f}'.format(item.total_usd or 0) }}</td>
     </tr>
   {% endfor %}
 {% endmacro %}

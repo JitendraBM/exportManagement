@@ -1,229 +1,314 @@
-{# The Quotation sheet itself (banner, meta table, items table, bank details,
-   signature). Shared by print.html (standalone) and print_combined.html
-   (quotation + packing details). Expects `quotation` and `company` in
-   context. Keep QUOTE_ANNEX_START in sync with quotations/_annexure.html. #}
+{# The quotation A4 sheet - a replica of the AAYU EXIM "QUOTATION"
+   spreadsheet format (same reference family as proforma_invoices/_sheet.html,
+   which this layout mirrors field-for-field). Shared by print.html
+   (standalone) and print_combined.html (quotation + packing details).
+   Expects `quotation` and `company` in context; brings its own scoped
+   .qt-* styles along. #}
+{# Items beyond what fits on the quotation page spill onto the ANNEXURE sheet
+   (_annexure.html) - the quotation page then shows a "(CONTINUE TO
+   ANNEXURE----->)" marker, per-page totals and an Annexure line in the
+   charges block, like the original Excel document. Keep QUOTE_ANNEX_START in
+   sync with _annexure.html. #}
+{% import 'quotations/_goods_rows.html' as goods %}
+{% set QUOTE_ANNEX_START = 6 %}
+{% set main_items = quotation.items[:QUOTE_ANNEX_START] %}
+{% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
+{# The filler row's height is measured in the browser (templates/_page_filler.html)
+   so the sheet fills its page exactly whatever the items wrap to. #}
+<style>
+  .qt-sheet {
+    background: #fff;
+    color: #000;
+    width: 205mm;
+    margin: 24px auto 48px;
+    padding: 6mm 6mm 8mm;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+  .qt-title {
+    border: 1px solid #000;
+    text-align: center;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 3px 0;
+  }
+  .qt-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
+  {# No text-align here - .qt-sheet td is a class+element selector, which
+     out-specifies a plain .qt-center/.qt-right class and would silently win
+     over them regardless of source order. Cells default to the browser's
+     left anyway, so .qt-left only needs to exist for its vertical-align
+     pairing. #}
+  .qt-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: top; word-wrap: break-word; }
+  .qt-label { font-size: 9px; }
+  .qt-val { font-weight: bold; }
+  .qt-center { text-align: center; }
+  .qt-left { text-align: left; vertical-align: top; }
+  .qt-right { text-align: right; }
+  .qt-mid { vertical-align: middle !important; }
+  .qt-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
+  {# Header/bank bands: a host cell holding its own nested table, borderless
+     itself so the nested table supplies the interior rules - the same
+     banded pattern proforma_invoices/_sheet.html uses, which lets the left
+     (address blocks, variable length) and right (fixed label:value rows)
+     halves size independently instead of forcing a shared row grid across
+     content that never lines up 1:1. #}
+  .qt-nest > td { padding: 0; }
+  .qt-nest table { margin-top: 0; }
+  .qt-nest table td { border: none; border-bottom: 1px solid #000; }
+  .qt-nest table td + td { border-left: 1px solid #000; }
+  /* Opt out per-row for a label that sits directly above its own block with
+     no rule between them (Consigner/Consignee/Beneficiary/Bank). */
+  .qt-nest table tr.qt-nb td { border-bottom: none; }
+  .qt-nest table.qt-nosplit td + td { border-left: none; }
+  .qt-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
+  .qt-items tbody tr.qt-goods td, .qt-items tbody tr.qt-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
+  .qt-charge-label { text-align: left; font-weight: bold; font-size: 9px; vertical-align: middle; }
+  .qt-sign-cell { height: 92px; padding: 4px 6px; }
+  .qt-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
+  .qt-stamp { text-align: right; }
+  .qt-footnote { font-size: 9px; padding: 2px 0 6px; }
+  @media print {
+    .qt-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
+  }
+</style>
+
+{% macro dmy(val) -%}
+  {%- if val -%}
+    {%- set p = (val|string)[:10].split('-') -%}
+    {%- if p|length == 3 %}{{ '%02d'|format(p[2]|int) }}-{{ '%02d'|format(p[1]|int) }}-{{ p[0] }}{% else %}{{ val }}{% endif -%}
+  {%- else -%}-{%- endif -%}
+{%- endmacro %}
+{% macro usd(v) -%}
+  {%- if v %}{{ quotation.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ quotation.currency_prefix }}&nbsp;-{% endif -%}
+{%- endmacro %}
 
 {% set phone = (company.contact_details | selectattr('type', 'equalto', 'phone') | list | first) if company else None %}
 {% set email = (company.contact_details | selectattr('type', 'equalto', 'email') | list | first) if company else None %}
 
-{% set QUOTE_ANNEX_START = 6 %}
-{% set main_items = quotation.items[:QUOTE_ANNEX_START] %}
-{% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
-{% set main_total = main_items | sum(attribute='total_usd') %}
-{% set annex_total = annex_items | sum(attribute='total_usd') %}
-{# The ladder below AMOUNT IN WORDS is 8 rows (CIF VALUE / DISCOUNT / INVOICE
-   VALUE / INSURANCE / SEA FREIGHT / CERTIFICATION / OTHER / FOB VALUE), and an
-   annexure adds the two rows that break the goods total into its page-1 and
-   annexure halves.
+<div class="qt-sheet js-page-sheet">
+  <div class="qt-title">QUOTATION</div>
 
-   The delivery terms can take charge rows out: FOB puts the whole ocean leg on
-   the buyer (no freight, no insurance), CFR keeps the freight but leaves the
-   buyer to insure the cargo (insurance only). The two rows are asked about
-   SEPARATELY and the AMOUNT IN WORDS rowspan is counted from the answers, so
-   dropping one row can't leave the cell spanning a row that isn't there. #}
-{% set show_sea_freight = not quotation.shipping_terms | drops_sea_freight %}
-{% set show_insurance = not quotation.shipping_terms | drops_insurance %}
-{% set charge_rows = 6 + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
-                       + (2 if annex_items else 0) %}
-{# Short item lists are closed off by one blank filler row sized in the browser
-   to exactly the page's leftover space (templates/_page_filler.html), like the
-   proforma invoice - rather than stretching every item row by a percentage,
-   which only worked when printing and left the rows uneven on screen. #}
-
-<div class="quote-sheet js-page-sheet">
-  <div class="quote-banner">&lt; &lt; &lt; &lt; &lt; QUOTATION &gt; &gt; &gt; &gt; &gt;</div>
-
-  <table class="quote-meta-table">
-    <tr>
-      <td class="quote-side-label" rowspan="5"><span>EXPORTER</span></td>
-      <td class="quote-block" rowspan="5">
-        {% if company and company.logo_path %}
-        <img src="{{ url_for('static', filename=company.logo_path) }}" alt="{{ company.company_name }} logo"
-             style="float:right; max-width:90px; max-height:48px; object-fit:contain; margin-left:6px;">
-        {% endif %}
-        <strong>{{ company.company_name if company else '' }}</strong><br>
-        {{ (company.address or '')|replace('\n', '<br>')|safe if company else '' }}
-        {% if phone %}<br>Tel: {{ phone.value }}{% endif %}
-        {% if email %}<br>Email: {{ email.value }}{% endif %}
+  <!-- ============ HEADER: consigner/consignee | quotation references ============ -->
+  <table>
+    <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+    <tr class="qt-nest">
+      <td>
+        <table>
+          <colgroup><col style="width:22%"><col style="width:78%"></colgroup>
+          <tr class="qt-nb"><td colspan="2" class="qt-label">Consigner</td></tr>
+          <tr>
+            <td colspan="2" class="qt-val">
+              {{ company.company_name|upper if company else '' }}<br>
+              {{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}
+            </td>
+          </tr>
+          <tr><td class="qt-label">EMAIL</td><td class="qt-val">{{ email.value|upper if email else '-' }}</td></tr>
+          <tr><td class="qt-label">CONTACT</td><td class="qt-val">{{ phone.value if phone else '-' }}</td></tr>
+          <tr class="qt-nb"><td colspan="2" class="qt-label">Consignee</td></tr>
+          <tr>
+            <td colspan="2" class="qt-val">
+              {{ (quotation.buyer_name or '')|upper }}<br>
+              {{ (quotation.buyer_address or '')|upper|replace('\n', '<br>')|safe }}
+            </td>
+          </tr>
+        </table>
       </td>
-      <td class="quote-field-label">QUOTATION NO</td>
-      <td class="quote-field-value mono">{{ quotation.quotation_number }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">DATE</td>
-      <td class="quote-field-value">{{ quotation.quotation_date }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">PORT OF LOADING</td>
-      <td class="quote-field-value">{{ quotation.port_of_loading or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">PORT OF DISCHARGE</td>
-      <td class="quote-field-value">{{ quotation.port_of_discharge or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">PACKING / CONTAINER</td>
-      <td class="quote-field-value">{{ quotation.packing_details or '—' }} · {{ quotation.container_details or '—' }}</td>
-    </tr>
-
-    <tr>
-      <td class="quote-side-label" rowspan="5"><span>IMPORTER</span></td>
-      <td class="quote-block" rowspan="5">
-        <strong>{{ quotation.buyer_name }}</strong><br>
-        {{ (quotation.buyer_address or '')|replace('\n', '<br>')|safe }}
+      <td>
+        <table>
+          <colgroup><col style="width:40%"><col style="width:60%"></colgroup>
+          <tr><td class="qt-label">Quotation No</td><td class="qt-val">{{ quotation.quotation_number }}</td></tr>
+          <tr><td class="qt-label">Quotation Date</td><td class="qt-val">{{ dmy(quotation.quotation_date) }}</td></tr>
+          <tr><td class="qt-label">Currency</td><td class="qt-val">{{ quotation.currency_label }}</td></tr>
+          <tr><td class="qt-label">Buyer Reference No</td><td class="qt-val">{{ quotation.buyer_reference_no or '-' }}</td></tr>
+          <tr><td class="qt-label">Packing</td><td class="qt-val">{{ quotation.packing_details or '-' }}</td></tr>
+          <tr><td class="qt-label">Port Of Loading</td><td class="qt-val">{{ (quotation.port_of_loading or '-')|upper }}</td></tr>
+          <tr><td class="qt-label">Port Of Discharge</td><td class="qt-val">{{ (quotation.port_of_discharge or '-')|upper }}</td></tr>
+          <tr><td class="qt-label">Final Destination</td><td class="qt-val">{{ (quotation.final_destination or '-')|upper }}</td></tr>
+          <tr><td class="qt-label">Nature Of Contract</td><td class="qt-val">{{ (quotation.shipping_terms or '-')|upper }}</td></tr>
+          <tr><td class="qt-label">Container Details</td><td class="qt-val">{{ (quotation.container_details or '-')|upper|replace('\n', '<br>')|safe }}</td></tr>
+          <tr><td class="qt-label">Payment Terms</td><td class="qt-val">{{ quotation.payment_terms or '-' }}</td></tr>
+        </table>
       </td>
-      <td class="quote-field-label">SHIPPING</td>
-      <td class="quote-field-value">{{ quotation.shipping_mode or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">SHIPPING TERMS</td>
-      <td class="quote-field-value">{{ quotation.shipping_terms or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">BUYER REFERENCE NO</td>
-      <td class="quote-field-value">{{ quotation.buyer_reference_no or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">PAYMENT TERMS</td>
-      <td class="quote-field-value">{{ quotation.payment_terms or '—' }}</td>
-    </tr>
-    <tr>
-      <td class="quote-field-label">CURRENCY</td>
-      <td class="quote-field-value">{{ quotation.currency_label }}</td>
     </tr>
   </table>
 
-  <table class="quote-items-table">
+  {% set ns = namespace(pallets=0, boxes=0, qty=0, amount=0) %}
+  {% for item in main_items %}
+    {% set ns.pallets = ns.pallets + (item.pallets or 0) %}
+    {% set ns.boxes = ns.boxes + (item.quantity_boxes or 0) %}
+    {% set ns.qty = ns.qty + (item.quantity_value or 0) %}
+    {% set ns.amount = ns.amount + (item.total_usd or 0) %}
+  {% endfor %}
+  {% set annex_total = annex_items | sum(attribute='total_usd') %}
+
+  <!-- Goods -->
+  <table class="qt-items">
     <colgroup>
-      <col style="width:4%"><col style="width:28%"><col style="width:8%"><col style="width:11%">
-      <col style="width:11%"><col style="width:10%"><col style="width:7%"><col style="width:21%">
+      <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:7%">
+      <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:17%">
     </colgroup>
     <thead>
       <tr>
-        <th>SR</th>
-        <th>PRODUCT</th>
-        <th>HSN CODE</th>
-        <th>QTY</th>
-        <th>ALT QTY</th>
-        <th>PRICE ({{ quotation.currency_name }})</th>
-        <th>UNIT</th>
-        <th>TOTAL ({{ quotation.currency_name }})</th>
+        <td>Sr No</td>
+        <td>Description Of Goods</td>
+        <td>HSNC</td>
+        <td>Packing</td>
+        <td>Qty</td>
+        <td>Alt. Qty</td>
+        <td>Rate</td>
+        <td>Unit</td>
+        <td>Total Amount</td>
       </tr>
     </thead>
     <tbody>
-      {% for item in main_items %}
-      <tr>
-        <td class="num">{{ item.sr_no }}</td>
-        <td class="quote-product-cell">{{ item.product_name|replace('\n', '<br>')|safe }}</td>
-        <td>{{ item.hsn_code or '—' }}</td>
-        <td class="num quote-qty-cell">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="quote-unit-sm">{{ item.quantity_unit }}</span>{% else %}—{% endif %}</td>
-        <td class="num quote-qty-cell">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="quote-unit-sm">{{ item.unit }}</span></td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.price_usd) }}</td>
-        <td>{{ item.unit }}</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.total_usd) }}</td>
-      </tr>
-      {% endfor %}
+      {{ goods.rows(main_items, quotation.currency_prefix) }}
       {% if annex_items %}
+      <tr class="qt-goods">
+        <td></td>
+        <td class="qt-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+      {% endif %}
+      <tr class="qt-filler js-page-filler">
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
       <tr>
         <td></td>
-        <td colspan="7"><strong>(CONTINUE TO ANNEXURE-----&gt;)</strong></td>
-      </tr>
-      {% endif %}
-      <tr class="js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td class="qt-val qt-center">TOTAL</td>
+        <td></td>
+        <td class="qt-val qt-center">{{ '{:,.2f}'.format(ns.pallets) if ns.pallets else '' }}</td>
+        <td class="qt-val qt-right">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
+        <td class="qt-val qt-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
+        <td></td>
+        <td></td>
+        <td class="qt-val qt-right">{{ usd(ns.amount) }}</td>
       </tr>
     </tbody>
-    <tfoot>
-      <tr>
-        <td rowspan="{{ charge_rows }}" colspan="2" class="quote-amount-words">
-          AMOUNT IN WORDS<br>
-          <strong>{{ quotation.invoice_value_usd | amount_in_words(quotation.currency_name) }}</strong>
-        </td>
-        {# The goods total. It only needs breaking in two when an annexure
-           carries part of it - otherwise CIF VALUE is simply the sum of the
-           lines printed right above. #}
-        {% if annex_items %}
-        <td colspan="5" class="num">SUBTOTAL (THIS PAGE)</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(main_total) }}</td>
-      </tr>
-      <tr>
-        <td colspan="5" class="num">ANNEXURE</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(annex_total) }}</td>
-      </tr>
-      <tr>
-        {% endif %}
-        <td colspan="5" class="num"><strong>CIF VALUE</strong></td>
-        <td class="num"><strong>{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.cif_value_usd) }}</strong></td>
-      </tr>
-      <tr class="quote-charge-row">
-        <td colspan="5" class="num">DISCOUNT</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.discount_amount) }}</td>
-      </tr>
-      <tr>
-        <td colspan="5" class="num"><strong>INVOICE VALUE ({{ quotation.currency_name }})</strong></td>
-        <td class="num"><strong>{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.invoice_value_usd) }}</strong></td>
-      </tr>
-      {# Everything from here down is subtracted out of the invoice value to
-         reach FOB - the quoted price is CIF, so these are already inside it. #}
-      {% if show_insurance %}
-      <tr class="quote-charge-row">
-        <td colspan="5" class="num">INSURANCE</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.insurance) }}</td>
-      </tr>
-      {% endif %}
-      {% if show_sea_freight %}
-      <tr class="quote-charge-row">
-        <td colspan="5" class="num">SEA FREIGHT</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.sea_freight) }}</td>
-      </tr>
-      {% endif %}
-      <tr class="quote-charge-row">
-        <td colspan="5" class="num">CERTIFICATION</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.certification) }}</td>
-      </tr>
-      <tr class="quote-charge-row">
-        <td colspan="5" class="num">OTHER</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.other_charges) }}</td>
-      </tr>
-      <tr>
-        <td colspan="5" class="num"><strong>FOB VALUE ({{ quotation.currency_name }})</strong></td>
-        <td class="num"><strong>{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(quotation.fob_value_usd) }}</strong></td>
-      </tr>
-    </tfoot>
   </table>
 
-  <div class="quote-footnote">Price validity: {{ quotation.price_validity_days }} days from date of quotation.</div>
+  <div class="qt-footnote">Price validity: {{ quotation.price_validity_days }} days from date of quotation.</div>
 
-  {% if quotation.remarks %}
-  <div class="quote-remarks">
-    <strong>REMARKS:</strong>
-    <div>{{ quotation.remarks|replace('\n', '<br>')|safe }}</div>
-  </div>
-  {% endif %}
-
-  <table class="quote-bank-table">
-    <colgroup><col style="width:32%"><col style="width:40%"><col style="width:28%"></colgroup>
+  <!-- Amount in words / charges -->
+  {# The ladder builds up from FOB VALUE (goods total) through OTHER CHARGES /
+     CERTIFICATION / INSURANCE / SEA FREIGHT to the CIF/CFR INVOICE VALUE,
+     then the goods-total breakdown (SUBTOTAL/ANNEXURE, when the items spill
+     onto the annexure) and DISCOUNT net off that to land on TOTAL VALUE
+     last - same order as proforma_invoices/_sheet.html. FOB VALUE is
+     unconditional, so it's what holds the AMOUNT IN WORDS rowspan cell. #}
+  {% set show_cif_row = not quotation.shipping_terms | is_fob %}
+  {% set show_sea_freight = not quotation.shipping_terms | drops_sea_freight %}
+  {% set show_insurance = not quotation.shipping_terms | drops_insurance %}
+  {% set charge_rows = 5 + (1 if show_cif_row else 0) + (1 if show_insurance else 0) + (1 if show_sea_freight else 0)
+                         + (1 if annex_items else 0) %}
+  <table>
+    <colgroup>
+      <col style="width:8%"><col style="width:45%"><col style="width:35%"><col style="width:12%">
+    </colgroup>
     <tr>
-      <th>BENEFICIARY</th>
-      <th>BANK NAME &amp; ADDRESS</th>
-      <td rowspan="2" class="quote-sign-cell">
-        <div class="quote-sign-flex">
-          <div>FOR&nbsp;{{ company.company_name|upper if company else '' }}</div>
-          <div>AUTHORISED SIGNATORY</div>
-        </div>
+      <td class="qt-label qt-mid" rowspan="{{ charge_rows }}">Invoice Value<br>In Word</td>
+      <td class="qt-val qt-mid" rowspan="{{ charge_rows }}">{{ quotation.invoice_value_usd | amount_in_words(quotation.currency_name) }}</td>
+      <td class="qt-charge-label">FOB Value</td>
+      <td class="qt-val qt-right">{{ usd(quotation.fob_value_usd) }}</td>
+    </tr>
+    <tr>
+      <td class="qt-charge-label">Other Charges</td>
+      <td class="qt-val qt-right">{{ usd(quotation.other_charges) }}</td>
+    </tr>
+    <tr>
+      <td class="qt-charge-label">Certification</td>
+      <td class="qt-val qt-right">{{ usd(quotation.certification) }}</td>
+    </tr>
+    {% if show_insurance %}
+    <tr>
+      <td class="qt-charge-label">Insurance</td>
+      <td class="qt-val qt-right">{{ usd(quotation.insurance) }}</td>
+    </tr>
+    {% endif %}
+    {% if show_sea_freight %}
+    <tr>
+      <td class="qt-charge-label">Sea Freight</td>
+      <td class="qt-val qt-right">{{ usd(quotation.sea_freight) }}</td>
+    </tr>
+    {% endif %}
+    {% if show_cif_row %}
+    <tr>
+      <td class="qt-charge-label">{{ 'CFR Invoice Value' if quotation.shipping_terms | is_cfr else 'CIF Invoice Value' }}</td>
+      <td class="qt-val qt-right">{{ usd(quotation.cif_value_usd) }}</td>
+    </tr>
+    {% endif %}
+    {% if annex_items %}
+    <tr>
+      <td class="qt-charge-label">Annexure</td>
+      <td class="qt-val qt-right">{{ usd(annex_total) }}</td>
+    </tr>
+    {% endif %}
+    <tr>
+      <td class="qt-charge-label">Discount</td>
+      <td class="qt-val qt-right">{{ usd(quotation.discount_amount) }}</td>
+    </tr>
+    <tr>
+      <td class="qt-charge-label">Total Value</td>
+      <td class="qt-val qt-right">{{ usd(quotation.invoice_value_usd) }}</td>
+    </tr>
+  </table>
+
+  <!-- Beneficiary / bank -->
+  <table>
+    <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+    <tr class="qt-nest">
+      <td>
+        <table>
+          <colgroup><col style="width:100%"></colgroup>
+          <tr class="qt-nb"><td class="qt-label">Beneficiary Name &amp; Address</td></tr>
+          <tr class="qt-nb">
+            <td class="qt-val">
+              {{ company.company_name|upper if company else '' }}<br>
+              {{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}
+            </td>
+          </tr>
+        </table>
+      </td>
+      <td>
+        {# The 4 bank fields print as one continuous stacked block - every
+           row (including the heading) opts out of the row-divider rule via
+           qt-nb, so there are no lines between Bank Name/Address/Account
+           No/SWIFT Code, only the outer cell border framing the whole
+           block. qt-nosplit also drops the label/value column rule so
+           nothing runs down the middle of that block either. #}
+        <table class="qt-nosplit">
+          <colgroup><col style="width:35%"><col style="width:65%"></colgroup>
+          <tr class="qt-nb"><td colspan="2" class="qt-label">Bank Details</td></tr>
+          <tr class="qt-nb"><td class="qt-label">Bank Name</td><td class="qt-val">{{ (quotation.bank_name or '-')|upper }}</td></tr>
+          <tr class="qt-nb"><td class="qt-label">Bank Address</td><td class="qt-val">{{ (quotation.bank_address or '-')|upper|replace('\n', '<br>')|safe }}</td></tr>
+          <tr class="qt-nb"><td class="qt-label">Bank Account No</td><td class="qt-val">{{ quotation.bank_account_number or '-' }}</td></tr>
+          <tr class="qt-nb"><td class="qt-label">SWIFT Code</td><td class="qt-val">{{ (quotation.bank_swift_code or '-')|upper }}</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Footnotes + signatures -->
+  <table>
+    <colgroup><col style="width:55%"><col></colgroup>
+    <tr>
+      <td colspan="2" class="qt-left">
+        <span class="qt-val">Remarks :</span> {{ (quotation.remarks or '')|upper|replace('\n', '<br>')|safe }}
       </td>
     </tr>
     <tr>
-      <td>
-        <strong>{{ company.company_name if company else '' }}</strong><br>
-        {{ (company.address or '')|replace('\n', '<br>')|safe if company else '' }}
+      <td class="qt-sign-cell">
+        <div class="qt-sign-flex">
+          <div class="qt-val">Accepted By Buyer</div>
+          <div class="qt-val">Stamp &amp; Authorised Signatury</div>
+        </div>
       </td>
-      <td>
-        <strong>{{ quotation.bank_name or '—' }}</strong><br>
-        {{ (quotation.bank_address or '')|replace('\n', '<br>')|safe }}<br>
-        {% if quotation.bank_account_number %}ACCOUNT NO: {{ quotation.bank_account_number }}<br>{% endif %}
-        {% if quotation.bank_ifsc_code %}IFSC CODE: {{ quotation.bank_ifsc_code }}<br>{% endif %}
-        {% if quotation.bank_swift_code %}SWIFT CODE: {{ quotation.bank_swift_code }}{% endif %}
+      <td class="qt-sign-cell">
+        <div class="qt-sign-flex qt-stamp">
+          <div class="qt-val">For&nbsp; {{ company.company_name|upper if company else '' }}</div>
+          <div class="qt-val">Authorised Signatury</div>
+        </div>
       </td>
     </tr>
   </table>

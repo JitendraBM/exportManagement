@@ -76,6 +76,15 @@
       <input type="checkbox" id="same_as_consignee">
       <label for="same_as_consignee">Buyer is same as consignee</label>
     </div>
+    <div class="field">
+      <label for="notify_buyer_select">Prefill from an existing buyer <span class="text-soft text-sm">(optional)</span></label>
+      <select id="notify_buyer_select">
+        <option value="">— Select a buyer to prefill —</option>
+        {% for b in buyers %}
+          <option value="{{ b.id }}" data-name="{{ b.company_name }}" data-address="{{ b.address | default('', true) }}">{{ b.company_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div class="field"><label for="notify_name">Notify party name</label><input type="text" id="notify_name" name="notify_name" value="{{ data.notify_name | default('', true) }}"></div>
     <div class="field"><label for="notify_address">Notify party address</label><textarea id="notify_address" name="notify_address" rows="3">{{ data.notify_address | default('', true) }}</textarea></div>
   </div>
@@ -101,9 +110,16 @@
       <div class="field"><label for="variation_in_qty">Variation in quantity</label><input type="text" id="variation_in_qty" name="variation_in_qty" placeholder="e.g. +/- 10%" value="{{ data.variation_in_qty | default('', true) }}"></div>
     </div>
     {% set chosen_currency = data.currency_code | default('USD', true) %}
+    {% set chosen_currency_obj = (currency_options | selectattr('name', 'equalto', chosen_currency) | list | first) %}
+    {% set chosen_symbol = chosen_currency_obj.symbol if chosen_currency_obj else '$' %}
+    {# Generated from a quotation - the currency has to match what the goods
+       were quoted in, so it's locked rather than just prefilled. #}
+    {% set currency_locked_by_quotation = (data.quotation_id | default('', true)) | string | trim %}
     <div class="form-row">
-      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed invoice; amounts are typed in this currency.') }}
+      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed invoice; amounts are typed in this currency.',
+                          locked=currency_locked_by_quotation, locked_hint='Locked to the linked quotation\'s currency.') }}
       <div class="field"><label for="container_details">Container details</label><input type="text" id="container_details" name="container_details" placeholder="e.g. 3 X 20 FT FCL" value="{{ data.container_details | default('', true) }}"></div>
+      <div class="field"><label for="packing_details">Packing</label><input type="text" id="packing_details" name="packing_details" placeholder="e.g. PALLATE" value="{{ data.packing_details | default('', true) }}"></div>
       <div class="field">
         {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
         {% set chosen_terms = data.terms_of_delivery | default('', true) %}
@@ -137,10 +153,8 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th id="price-header">Price ({{ chosen_currency }})</th>
-            {# Only shown with "Prices typed are FOB" ticked - see applyFobPricing. #}
-            <th class="num js-cif-col" hidden>CIF price ({{ chosen_currency }})</th>
-            <th class="num">Total ({{ chosen_currency }})</th>
+            <th>Price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
+            <th class="num">Total (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th></th>
           </tr>
         </thead>
@@ -168,14 +182,7 @@
                 {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
               </select>
             </td>
-            {# Under FOB pricing the stored price_usd is the CIF price worked
-               out at save time - what the user typed is fob_price_usd, so
-               that is what has to come back into the input. A re-displayed
-               form row (a dict, after a validation error) carries the typed
-               figure in price_usd either way. #}
-            {% set typed_price = row.fob_price_usd if (data.fob_pricing and row.fob_price_usd) else row.price_usd %}
-            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ typed_price or '' }}"></td>
-            <td class="num js-cif-price js-cif-col" hidden>0.00</td>
+            <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
             <td class="num js-total">0.00</td>
             <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
           </tr>
@@ -188,33 +195,22 @@
     <div class="form-row" style="margin-top:14px;">
       {# Each charge is hidden (and forced to 0) by the delivery terms that
          don't charge it - see applyDeliveryTermCharges below. #}
-      <div class="field js-charge-sea-freight" style="max-width:160px;"><label for="sea_freight">Sea freight ({{ chosen_currency }})</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field js-charge-insurance" style="max-width:160px;"><label for="insurance">Insurance ({{ chosen_currency }})</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="certification">Certification ({{ chosen_currency }})</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="other_charges">Other ({{ chosen_currency }})</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:160px;"><label for="discount_amount">Discount ({{ chosen_currency }})</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+      <div class="field js-charge-sea-freight" style="max-width:160px;"><label for="sea_freight">Sea freight (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+      <div class="field js-charge-insurance" style="max-width:160px;"><label for="insurance">Insurance (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field" style="max-width:160px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
-    {# The prices above are normally CIF prices - the charges are already
-       inside them. Ticking this says they were typed FOB instead, so the
-       charges (NOT the discount) get spread over the total Qty and added onto
-       every line to reach the CIF price the sheet prints. #}
-    <div class="field" style="margin-top:10px;">
-      <label class="flex gap-8" style="align-items:center;">
-        <input type="checkbox" id="fob_pricing" name="fob_pricing" value="1" {{ 'checked' if data.fob_pricing }}>
-        <span>Prices typed above are <strong>FOB</strong> — add the charges into them</span>
-      </label>
-      <div class="hint" id="fob-pricing-hint" hidden>
-        Sea freight + insurance + certification + other = <strong><span id="fob-charges-display">0.00</span></strong>,
-        spread over <span id="fob-qty-display">0.00</span> total Qty
-        = <strong><span id="fob-uplift-display">0.00</span></strong> added to every line's price.
-        The invoice prints the resulting CIF price; the discount is not part of the spread.
-      </div>
-    </div>
+    <p class="hint">FOB value = quantity x price, summed across every line above - the same no matter which shipping terms are chosen. Under FOB terms, CIF/CFR is not calculated or shown at all; invoice value = FOB value + certification + other charges - discount. Under CIF/CFR terms, the CIF/CFR value (FOB total + sea freight + insurance + certification + other charges) is shown too, and invoice value = CIF/CFR value - discount.</p>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
-      {# Same ladder the printed sheet uses: CIF - discount = invoice value,
-         then the charges come back out of it to leave FOB. #}
-      <div class="text-sm"><strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span></div>
+      {# Same ladder the printed sheet uses: CIF (FOB total + charges) -
+         discount = invoice value, and FOB value is that FOB total on its
+         own - see ProformaInvoice.cif_value_usd/fob_value_usd. The CIF/CFR
+         figure is hidden entirely under FOB terms - see
+         applyDeliveryTermCharges, the only thing that toggles
+         js-cif-value-block. #}
+      <div class="text-sm"><span class="js-cif-value-block"><strong><span id="cif-value-label">CIF</span> value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; </span><strong>Invoice value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="fob-value-display">0.00</span></div>
     </div>
   </div>
 
@@ -322,6 +318,28 @@
     sel.value = u;
   }
 
+  // ---- keep Price/Total headers, charge labels and currency symbols in
+  // sync with whatever currency is picked in the invoice details, instead of
+  // a value fixed at page load. ------------------------------------------
+  const currencySelect = document.getElementById('currency_code');
+  function updateCurrencyDisplays() {
+    const opt = currencySelect.selectedOptions[0];
+    if (!opt) return;
+    const name = opt.value || 'USD';
+    const symbol = opt.dataset.symbol || '$';
+    document.querySelectorAll('.js-currency-label').forEach((el) => { el.textContent = name; });
+    document.querySelectorAll('.js-currency-symbol').forEach((el) => { el.textContent = symbol; });
+  }
+  currencySelect.addEventListener('change', updateCurrencyDisplays);
+  updateCurrencyDisplays();
+
+  // A disabled field never posts - re-enable it right before submit so the
+  // locked value (see currency_select's `locked` param) still reaches the
+  // server, which enforces the same lock independently either way.
+  document.getElementById('invoice-form').addEventListener('submit', () => {
+    currencySelect.disabled = false;
+  });
+
   const itemsBody = document.getElementById('items-body');
   const addRowBtn = document.getElementById('add-row-btn');
 
@@ -346,7 +364,6 @@
         </select>
       </td>
       <td><input type="number" step="0.01" name="item_price_usd[]" class="js-price" required></td>
-      <td class="num js-cif-price js-cif-col" hidden>0.00</td>
       <td class="num js-total">0.00</td>
       <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>`;
     return tr;
@@ -358,8 +375,20 @@
     });
   }
 
-  const fobPricingEl = document.getElementById('fob_pricing');
-
+  // The typed price is always the absolute FOB price - it is never rewritten
+  // by anything on this form (fob_pricing is hardcoded off server-side, see
+  // ProformaInvoiceService._build_header). quantity x price summed across
+  // every line is the FOB total (fobTotal below), constant no matter which
+  // shipping terms are chosen. FOB value (as printed) IS that total, full
+  // stop - it is never reduced by the discount. CIF/CFR value is built
+  // UPWARDS from it by adding the charges (see ProformaInvoice.cif_value_usd)
+  // and is only shown when CIF/CFR terms are chosen (see
+  // applyDeliveryTermCharges); invoice value = that CIF/CFR total minus the
+  // discount either way, which for FOB (charges = certification + other,
+  // since sea freight/insurance are held at zero) works out to FOB value +
+  // certification + other charges - discount. Mirrors the quotation form's
+  // recalcTotals and ProformaInvoice.fob_value_usd/cif_value_usd, which is
+  // what actually saves.
   function recalcTotals() {
     const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
     const discount = parseFloat(document.getElementById('discount_amount').value) || 0;
@@ -367,38 +396,21 @@
     const insurance = parseFloat(document.getElementById('insurance').value) || 0;
     const certification = parseFloat(document.getElementById('certification').value) || 0;
     const otherCharges = parseFloat(document.getElementById('other_charges').value) || 0;
-
-    // With FOB pricing on, the charges (never the discount) are one lump for
-    // the whole shipment: divided by the total Qty they give a per-unit figure
-    // added uniformly onto every typed price to reach its CIF price. Mirrors
-    // apply_fob_uplift in app/services.py, which is what actually saves.
     const charges = seaFreight + insurance + certification + otherCharges;
-    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
-    const uplift = fobPricingEl.checked && totalQty ? charges / totalQty : 0;
-    if (fobPricingEl.checked) {
-      document.getElementById('fob-charges-display').textContent = charges.toFixed(2);
-      document.getElementById('fob-qty-display').textContent = totalQty.toFixed(2);
-      document.getElementById('fob-uplift-display').textContent = uplift.toFixed(4);
-    }
 
-    // The uplift is kept at full precision and only the line total is rounded
-    // to the cent - any gap that leaves lands silently in the Total column.
-    let goodsTotal = 0;
+    let fobTotal = 0;
     rows.forEach((tr) => {
       const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
-      const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
-      const price = typed + uplift;
+      const price = parseFloat(tr.querySelector('.js-price').value) || 0;
       const total = Math.round(qty * price * 100) / 100;
-      tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
-      goodsTotal += total;
+      fobTotal += total;
     });
-    const subtotal = goodsTotal;
-    document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
-    const invoiceValue = subtotal - discount;
-    const fobValue = invoiceValue - insurance - seaFreight - certification - otherCharges;
+    const cifValue = fobTotal + charges;
+    document.getElementById('subtotal-display').textContent = cifValue.toFixed(2);
+    const invoiceValue = cifValue - discount;
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
-    document.getElementById('fob-value-display').textContent = fobValue.toFixed(2);
+    document.getElementById('fob-value-display').textContent = fobTotal.toFixed(2);
   }
 
   // Qty auto-fills from Boxes x the row's catalog product's Alternate
@@ -492,7 +504,7 @@
     populatePalletOptions(tr, [], false);
     recalcRowPallets(tr);
     renumber();
-    applyFobPricing();  // the new row's CIF price cell follows the current mode
+    recalcTotals();
   });
 
   itemsBody.addEventListener('click', (e) => {
@@ -530,21 +542,6 @@
     document.getElementById(id).addEventListener('input', recalcTotals);
   });
 
-  // ---- FOB-typed prices --------------------------------------------------
-  // Only the display changes here: the Price column is relabelled, the
-  // worked-out CIF price per line is shown beside it, and the spread is
-  // explained under the charges. What gets posted is still the typed price -
-  // the server does the uplift, so the two can't drift apart.
-  function applyFobPricing() {
-    const on = fobPricingEl.checked;
-    document.getElementById('price-header').textContent =
-      (on ? 'FOB price (' : 'Price (') + '{{ chosen_currency }})';
-    document.querySelectorAll('.js-cif-col').forEach((cell) => { cell.hidden = !on; });
-    document.getElementById('fob-pricing-hint').hidden = !on;
-    recalcTotals();
-  }
-  fobPricingEl.addEventListener('change', applyFobPricing);
-
   // ---- the delivery terms decide which charges apply --------------------------
   // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
   // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
@@ -564,6 +561,11 @@
     };
     toggle('.js-charge-sea-freight', fob);
     toggle('.js-charge-insurance', fob || cfr);
+    document.getElementById('cif-value-label').textContent = cfr ? 'CFR' : 'CIF';
+    // Not the `hidden` attribute - see the quotation form's identical note;
+    // style.display sidesteps any future specificity fight with a display
+    // rule on this element's other classes.
+    document.querySelector('.js-cif-value-block').style.display = fob ? 'none' : '';
     recalcTotals();
   }
   termsSelect.addEventListener('change', applyDeliveryTermCharges);
@@ -605,6 +607,18 @@
   });
   consigneeNameEl.addEventListener('input', syncNotifyWithConsignee);
   consigneeAddrEl.addEventListener('input', syncNotifyWithConsignee);
+
+  // ---- notify-party buyer dropdown prefill --------------------------------------------------
+  document.getElementById('notify_buyer_select').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt.value) return;
+    sameAsConsignee.checked = false;
+    notifyNameEl.readOnly = false;
+    notifyAddrEl.readOnly = false;
+    notifyNameEl.value = opt.dataset.name || '';
+    notifyAddrEl.value = opt.dataset.address || '';
+    e.target.value = '';
+  });
 
   // when editing an invoice that was saved with identical values, restore the checked state
   if (notifyNameEl.value && notifyNameEl.value === consigneeNameEl.value && notifyAddrEl.value === consigneeAddrEl.value) {
@@ -726,7 +740,7 @@
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
-  applyFobPricing();  // ends in recalcTotals()
+  recalcTotals();
 })();
 </script>
 

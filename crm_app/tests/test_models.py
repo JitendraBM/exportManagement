@@ -13,6 +13,7 @@ import pytest
 from app.models import (
     Tenant, User, ContactPerson, Communication, Lead, Party, Supplier,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
+    ExportInvoice, ExportInvoiceItem,
     PurchaseOrder, PurchaseOrderItem, PackingList, PackingListItem,
     DocumentVersion,
     LEAD_STATUSES, CLIENT_STATUSES,
@@ -183,7 +184,7 @@ class TestQuotation:
         assert q.subtotal_usd == 100              # the FOB invoice total
         assert q.cif_value_usd == 120              # 100 + 10 + 5 + 2 + 3
         assert q.invoice_value_usd == 116          # 120 - 4
-        assert q.fob_value_usd == 96               # 116 - 5 - 10 - 2 - 3
+        assert q.fob_value_usd == 100              # always just the goods total - the discount only lands on invoice value, never here
 
     def test_cif_adjust_usd_lands_on_top_of_fob_plus_charges(self):
         q = self._quotation(sea_freight=10, cif_adjust_usd=7)
@@ -293,14 +294,18 @@ class TestProformaInvoice:
         return ProformaInvoice(**base)
 
     def test_invoice_value(self):
-        # Same CIF -> discount -> invoice value -> charges -> FOB ladder as the
-        # quotation, from the shared CifMoneyLadder mixin.
+        # Same ladder as the quotation (see TestQuotation.test_the_ladder_runs_up_from_fob_to_cif):
+        # a proforma invoice's typed price is always the absolute FOB price,
+        # and CIF is built by adding the charges back onto it (see
+        # ProformaInvoice.cif_value_usd, which overrides CifMoneyLadder for
+        # this document type too).
         pi = self._pi(sea_freight=10, discount_amount=5)
         pi.items = [ProformaInvoiceItem(id=None, proforma_invoice_id=1, sr_no=1,
                                         product_name="P", total_usd=100)]
-        assert pi.cif_value_usd == 100
-        assert pi.invoice_value_usd == 95         # 100 - 5
-        assert pi.fob_value_usd == 85             # 95 - 10 sea freight
+        assert pi.subtotal_usd == 100              # the FOB total
+        assert pi.cif_value_usd == 110              # 100 + 10 sea freight
+        assert pi.invoice_value_usd == 105          # 110 - 5
+        assert pi.fob_value_usd == 100              # always just the goods total - the discount only lands on invoice value, never here
 
     def test_display_mode_defaults_to_index_when_null(self):
         row = self._make_row(display_mode=None)
@@ -339,6 +344,71 @@ class TestProformaInvoice:
             display_mode=display_mode, status=status,
             created_by=1, created_at=None, updated_at=None,
         )
+
+
+# --------------------------------------------------------------------------
+# ExportInvoice FOB value
+# --------------------------------------------------------------------------
+class TestExportInvoice:
+    def _export_invoice(self, **overrides):
+        base = dict(id=1, company_id=1, export_invoice_number="EI1", invoice_date="2025-01-01",
+                    consignee_name="C", created_by=1)
+        base.update(overrides)
+        return ExportInvoice(**base)
+
+    def _item(self, quantity_value, price_usd, fob_price_usd=None, total_usd=None):
+        return ExportInvoiceItem(id=None, export_invoice_id=1, sr_no=1, product_name="P",
+                                 quantity_value=quantity_value, price_usd=price_usd,
+                                 fob_price_usd=fob_price_usd,
+                                 total_usd=total_usd if total_usd is not None else quantity_value * price_usd)
+
+    def test_fob_value_ignores_discount_and_charges_under_fob_terms(self):
+        # The bug: unlike Quotation/ProformaInvoice, ExportInvoice inherited
+        # CifMoneyLadder.fob_value_usd unmodified, so it moved with the
+        # discount (and the charges) even under FOB terms, where price_usd
+        # is unambiguously the typed FOB price already. Fixed to always be
+        # just the typed goods total then - see ExportInvoice.fob_value_usd.
+        # invoice_value_usd is built back UP from it: FOB + every charge -
+        # discount (ExportInvoice.invoice_value_usd).
+        inv = self._export_invoice(nature_of_contract="FOB", sea_freight=10, insurance=5,
+                                   certification=2, other_charges=3, discount_amount=4)
+        inv.items = [self._item(10, 6)]           # fob_price_usd is None - never uplifted
+        assert inv.cif_value_usd == 60
+        assert inv.fob_value_usd == 60              # goods total only, unlike the base ladder
+        assert inv.invoice_value_usd == 76          # 60 + (10+5+2+3) - 4
+
+    def test_fob_value_uses_the_originally_typed_price_when_uplifted(self):
+        # apply_fob_uplift (services.py) mutates price_usd into the CIF price
+        # and stashes the typed price in fob_price_usd - fob_value_usd must
+        # read the stash, not the mutated price_usd, or it would report the
+        # CIF total instead.
+        inv = self._export_invoice(fob_pricing=True, discount_amount=4)
+        inv.items = [self._item(10, price_usd=6.5, fob_price_usd=6, total_usd=65)]
+        assert inv.fob_value_usd == 60              # 10 x the typed 6, not 10 x the CIF 6.5
+
+    def test_fob_value_falls_back_to_the_base_ladder_under_cif_terms_without_a_push(self):
+        # Genuine CIF/CFR terms where the price was typed directly as the CIF
+        # price and "Calculate CIF pricing" was never pushed (fob_pricing off,
+        # nature_of_contract not FOB) - the app's default assumption is that
+        # price_usd is already CIF-inclusive (see CifMoneyLadder's docstring),
+        # so FOB has to be worked out the base ladder's way: strip the
+        # discount and the four charges back out of the CIF total. This is
+        # the scenario the over-broad first version of this fix accidentally
+        # broke (see test_routes_pages.py::TestCommercialInvoiceRoutes::
+        # test_money_is_the_invoices_own_currency_with_indian_grouping).
+        inv = self._export_invoice(nature_of_contract="CIF", insurance=50, discount_amount=100)
+        inv.items = [self._item(144, 5.92)]
+        assert inv.cif_value_usd == pytest.approx(852.48)
+        assert inv.invoice_value_usd == pytest.approx(752.48)   # 852.48 - 100
+        assert inv.fob_value_usd == pytest.approx(702.48)       # 852.48 - 100 - 50
+
+    def test_fob_priced_lines_reduction_is_independent_of_the_fob_value_fix(self):
+        # fob_priced_lines must keep spreading charges_total + discount_amount
+        # regardless of how fob_value_usd itself is now computed.
+        inv = self._export_invoice(sea_freight=10, discount_amount=4)
+        inv.items = [self._item(10, 6)]
+        lines = inv.fob_priced_lines()
+        assert lines[0]["rate"] == pytest.approx(6 - (10 + 4) / 10)
 
 
 # --------------------------------------------------------------------------

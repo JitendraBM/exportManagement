@@ -184,6 +184,11 @@ def register_template_helpers(app):
         """`{% if invoice.nature_of_contract | is_fob %}` - true for FOB terms."""
         return is_fob_terms(value)
 
+    @app.template_filter("is_cfr")
+    def is_cfr_filter(value):
+        """`{% if quotation.shipping_terms | is_cfr %}` - true for CFR terms."""
+        return is_cfr_terms(value)
+
     @app.template_filter("drops_sea_freight")
     def drops_sea_freight_filter(value):
         """`{% if not terms | drops_sea_freight %}` - hides the SEA FREIGHT row

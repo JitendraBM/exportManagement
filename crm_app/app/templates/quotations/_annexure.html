@@ -1,73 +1,85 @@
-{# The ANNEXURE page for a quotation: overflow product lines that didn't fit
-   on the main quotation sheet, with their own TOTAL row and signatory block -
-   same "not enough space" rule as proforma invoices (see
-   proforma_invoices/_annexure.html). Renders nothing when every item fits on
-   the main sheet. Self-contained (recomputes the split from
-   `quotation.items` rather than trusting caller-scoped variables) so it can
-   be included safely from anywhere. Keep QUOTE_ANNEX_START in sync with
-   quotations/print.html. #}
+{# The ANNEXURE sheet: overflow goods lines that didn't fit on the quotation
+   page, with their own TOTAL row and signatory block - like the original
+   Excel document's "(CONTINUE TO ANNEXURE----->)" pages. Renders nothing at
+   all when every item fits on the quotation page, in the combined document
+   the same as the single quotation view. Must be included AFTER
+   quotations/_sheet.html (it reuses the .qt-* styles that partial brings
+   along). Keep QUOTE_ANNEX_START in sync with _sheet.html. #}
+{% import 'quotations/_goods_rows.html' as goods %}
 {% set QUOTE_ANNEX_START = 6 %}
 {% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
 {% if annex_items %}
 
-{% set axns = namespace(total=0) %}
-{% for item in annex_items %}
-  {% set axns.total = axns.total + (item.total_usd or 0) %}
-{% endfor %}
+{% macro ax_usd(v) -%}
+  {%- if v %}{{ quotation.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(v) }}{% else %}{{ quotation.currency_prefix }}&nbsp;-{% endif -%}
+{%- endmacro %}
 
 <style>
-  .quote-annex-page { break-before: page; page-break-before: always; }
+  .qt-annex-page { break-before: page; page-break-before: always; }
+  .qt-annex-page .qt-items tbody tr { break-inside: avoid; page-break-inside: avoid; }
 </style>
 
-<div class="quote-annex-page quote-sheet js-page-sheet">
-  <div class="quote-banner">ANNEXURE</div>
+{% set axns = namespace(pallets=0, boxes=0, qty=0, amount=0) %}
+{% for item in annex_items %}
+  {% set axns.pallets = axns.pallets + (item.pallets or 0) %}
+  {% set axns.boxes = axns.boxes + (item.quantity_boxes or 0) %}
+  {% set axns.qty = axns.qty + (item.quantity_value or 0) %}
+  {% set axns.amount = axns.amount + (item.total_usd or 0) %}
+{% endfor %}
 
-  <table class="quote-items-table">
-    <colgroup>
-      <col style="width:4%"><col style="width:28%"><col style="width:12%"><col style="width:8%">
-      <col style="width:10%"><col style="width:10%"><col style="width:7%"><col style="width:21%">
-    </colgroup>
-    <thead>
-      <tr>
-        <th>SR</th>
-        <th>PRODUCT</th>
-        <th>HSN CODE</th>
-        <th>QTY</th>
-        <th>ALT QTY</th>
-        <th>PRICE ({{ quotation.currency_name }})</th>
-        <th>UNIT</th>
-        <th>TOTAL ({{ quotation.currency_name }})</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in annex_items %}
-      <tr>
-        <td class="num">{{ item.sr_no }}</td>
-        <td class="quote-product-cell">{{ item.product_name|replace('\n', '<br>')|safe }}</td>
-        <td>{{ item.hsn_code or '—' }}</td>
-        <td class="num quote-qty-cell">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="quote-unit-sm">{{ item.quantity_unit }}</span>{% else %}—{% endif %}</td>
-        <td class="num quote-qty-cell">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="quote-unit-sm">{{ item.unit }}</span></td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.price_usd) }}</td>
-        <td>{{ item.unit }}</td>
-        <td class="num">{{ quotation.currency_prefix }} {{ '{:,.2f}'.format(item.total_usd) }}</td>
-      </tr>
-      {% endfor %}
-      <tr class="js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-      </tr>
-      <tr class="quote-total-row">
-        <td colspan="7" class="num"><strong>TOTAL</strong></td>
-        <td class="num"><strong>$ {{ '{:,.2f}'.format(axns.total) }}</strong></td>
-      </tr>
-    </tbody>
-  </table>
+<div class="qt-annex-page">
+  <div class="qt-sheet js-page-sheet">
+    <div class="qt-title">ANNEXURE</div>
 
-  <div class="quote-signature">
-    <div></div>
-    <div class="quote-signature-box">
-      <div>{{ company.company_name if company else '' }}</div>
-      <div class="text-sm text-soft">Authorised Signatory</div>
-    </div>
+    <table class="qt-items">
+      <colgroup>
+        <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:7%">
+        <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:17%">
+      </colgroup>
+      <thead>
+        <tr>
+          <td>Sr No</td>
+          <td>Description Of Goods</td>
+          <td>HSNC</td>
+          <td>Packing</td>
+          <td>Qty</td>
+          <td>Alt. Qty</td>
+          <td>Rate</td>
+          <td>Unit</td>
+          <td>Total Amount</td>
+        </tr>
+      </thead>
+      <tbody>
+        {{ goods.rows(annex_items, quotation.currency_prefix) }}
+        <tr class="qt-filler js-page-filler">
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        </tr>
+        <tr>
+          <td></td>
+          <td class="qt-val qt-center">TOTAL</td>
+          <td></td>
+          <td class="qt-val qt-center">{{ '{:,.2f}'.format(axns.pallets) if axns.pallets else '' }}</td>
+          <td class="qt-val qt-right">{{ '{:,.0f}'.format(axns.boxes) if axns.boxes else '' }}</td>
+          <td class="qt-val qt-right">{{ '{:,.2f}'.format(axns.qty) }}</td>
+          <td></td>
+          <td></td>
+          <td class="qt-val qt-right">{{ ax_usd(axns.amount) }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <colgroup><col style="width:55%"><col></colgroup>
+      <tr>
+        <td class="qt-sign-cell"></td>
+        <td class="qt-sign-cell">
+          <div class="qt-sign-flex qt-stamp">
+            <div class="qt-val">For&nbsp; {{ company.company_name|upper if company else '' }}</div>
+            <div class="qt-val">Authorised Signatury</div>
+          </div>
+        </td>
+      </tr>
+    </table>
   </div>
 </div>
 {% endif %}

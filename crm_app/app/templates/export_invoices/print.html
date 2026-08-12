@@ -28,6 +28,19 @@
     </div>
     <div class="flex gap-8">
       {% if not historical_version %}
+      {% if invoice.linked_proformas %}
+      <details class="toolbar-menu">
+        <summary class="btn btn-ghost btn-sm">📄 Source PIs ({{ invoice.linked_proformas | length }}) ▾</summary>
+        <div class="toolbar-menu-panel">
+          {% for pi in invoice.linked_proformas %}
+          <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=pi.id) }}" class="toolbar-menu-item">
+            <span class="mono">{{ pi.invoice_number }}</span>
+            <span class="meta">{{ pi.invoice_date }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
       <a href="{{ url_for('export_packing_lists.view_for_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Export packing list</a>
       <a href="{{ url_for('export_annexures.view_annexure', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📋 Annexure-C</a>
       <a href="{{ url_for('tax_invoices.view_tax_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Tax invoice</a>

@@ -18,7 +18,7 @@ quotations_bp = Blueprint("quotations", __name__, url_prefix="/quotations")
 
 _HEADER_FIELDS = [
     "quotation_date", "lead_id", "buyer_name", "buyer_address", "buyer_reference_no",
-    "port_of_loading", "port_of_discharge", "packing_details", "container_details",
+    "port_of_loading", "port_of_discharge", "final_destination", "packing_details", "container_details",
     "shipping_mode", "shipping_terms", "payment_terms",
     "price_validity_days", "remarks",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",

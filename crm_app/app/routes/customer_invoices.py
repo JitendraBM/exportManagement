@@ -1,20 +1,18 @@
 """
 app/routes/customer_invoices.py
 --------------------------------
-The COMMERCIAL INVOICE (customer's copy).
+The COMMERCIAL INVOICE (customer's copy). Matches a real reference printout
+(EXP/001/26-27) field for field - see the sheet template.
 
-The same document as the BRC commercial invoice, priced the other way round:
-the Rate column quotes the FOB rate and each line's Total Amount follows from
-it, so the goods column adds up to the FOB value. The totals block then runs
-UPWARDS - the charges and the discount are added back on to reach the CIF
-total - rather than downwards from CIF as every other sheet does.
+Priced at the FOB rate, unlike the BRC copy: the Rate column is each line's
+typed FOB price - item.fob_price_usd when "Calculate CIF pricing" was used,
+falling back to price_usd when it never was (that's still the typed FOB
+price then). The totals block runs upwards from that goods total (FOB Value)
+rather than down from CIF, closing on Total CIF/CFR Invoice Value.
 
 Read-only, like the BRC copy: it carries the parent Export Invoice's own
 number and date, its header and money come from that invoice, and the weight
 totals from its Export Packing List. Nothing here is typed or editable.
-
-The repricing itself lives on ExportInvoice.fob_priced_lines, next to the
-money ladder it inverts.
 """
 
 from flask import Blueprint, render_template, current_app, g, abort
@@ -46,5 +44,5 @@ def view_customer_invoice(export_invoice_id):
         export_invoice_id, g.user.company_id)
     return render_template(
         "customer_invoices/print.html", invoice=invoice, company=company,
-        packing_list=packing_list, lines=invoice.fob_priced_lines(),
+        packing_list=packing_list,
     )

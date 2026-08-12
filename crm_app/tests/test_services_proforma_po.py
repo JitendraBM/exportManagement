@@ -107,17 +107,23 @@ class TestProformaCrud:
         assert pi.invoice_number.startswith("PI20260201")
 
     def test_create_persists_items_and_totals(self, container, seed):
+        # Same upward ladder as the quotation: the typed price is always FOB,
+        # and CIF is built by adding the charges back onto it (see
+        # ProformaInvoice.cif_value_usd).
         pi = self._create(container, seed, sea_freight="10", discount_amount="5")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.subtotal_usd == 200.0
-        assert reloaded.invoice_value_usd == 195.0  # CIF 200 - 5 discount
-        assert reloaded.fob_value_usd == 185.0      # 195 - 10 sea freight
+        assert reloaded.cif_value_usd == 210.0       # 200 FOB total + 10 sea freight
+        assert reloaded.invoice_value_usd == 205.0   # 210 - 5 discount
+        assert reloaded.fob_value_usd == 200.0       # always just the goods total
 
-    def test_fob_pricing_spreads_the_charges_at_full_precision(self, container, seed):
-        # Same shared uplift the quotation uses (services.apply_fob_uplift):
-        # 100 of charges over 3 units is 33.333..., kept at full precision
-        # rather than rounded to the cent, so the line total lands exactly on
-        # 121.0 with no round-off to carry.
+    def test_fob_pricing_is_never_revived_even_if_posted(self, container, seed):
+        """Proforma invoices no longer have an FOB-typed-price mode - a stale
+        client (or a direct API call) posting the old fob_pricing checkbox
+        must not trigger the removed uplift. The typed price is always the
+        absolute FOB price, exactly as if fob_pricing had never existed. See
+        ExportInvoiceService, which took over the "Prices typed above are
+        FOB" checkbox."""
         pi = container.proforma_invoice_service.create(
             seed.admin,
             {"consignee_name": "Buyer Co", "invoice_date": "2026-02-01",
@@ -125,12 +131,11 @@ class TestProformaCrud:
             [{"product_name": "Tiles", "quantity_value": "3", "price_usd": "7"}])
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         item = reloaded.items[0]
-        assert item.fob_price_usd == 7.0
-        assert item.price_usd == pytest.approx(7 + 100 / 3)
-        assert item.total_usd == 121.0
-        assert reloaded.round_off == 0
-        assert reloaded.cif_value_usd == pytest.approx(121.0)
-        assert reloaded.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+        assert reloaded.fob_pricing is False
+        assert item.fob_price_usd is None
+        assert item.price_usd == 7.0
+        assert item.total_usd == 21.0
+        assert reloaded.cif_value_usd == pytest.approx(121.0)  # 21 FOB total + 100 sea freight
 
     def test_without_fob_pricing_the_proforma_prices_are_untouched(self, container, seed):
         pi = self._create(container, seed, sea_freight="10")
@@ -141,15 +146,17 @@ class TestProformaCrud:
 
     def test_fob_terms_drop_sea_freight_and_insurance(self, container, seed):
         # FOB puts the ocean leg on the buyer, so both charges are stored as
-        # zero even if the form posts them - which means neither is subtracted
-        # on the way down from the invoice value to the FOB value.
+        # zero even if the form posts them. Certification/other charges still
+        # add onto the FOB total to reach the invoice value (see
+        # ProformaInvoice.cif_value_usd) - it's only sea freight/insurance
+        # that FOB holds at zero.
         pi = self._create(container, seed, terms_of_delivery="FOB MUNDRA",
                           sea_freight="10", insurance="20", other_charges="5")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 0
         assert reloaded.insurance == 0
-        assert reloaded.invoice_value_usd == 200.0  # no discount posted
-        assert reloaded.fob_value_usd == 195.0      # 200 - 5 other charges only
+        assert reloaded.invoice_value_usd == 205.0  # 200 FOB total + 5 other charges, no discount posted
+        assert reloaded.fob_value_usd == 200.0      # always just the goods total
 
     def test_cfr_terms_drop_only_the_insurance(self, container, seed):
         # CFR = cost AND FREIGHT: the seller keeps paying the freight, the
@@ -159,7 +166,8 @@ class TestProformaCrud:
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 10
         assert reloaded.insurance == 0
-        assert reloaded.fob_value_usd == 190.0  # CIF 200 - 10 freight
+        assert reloaded.cif_value_usd == 210.0  # 200 FOB total + 10 freight
+        assert reloaded.fob_value_usd == 200.0  # always just the goods total
 
     def test_create_records_a_version(self, container, seed):
         pi = self._create(container, seed)

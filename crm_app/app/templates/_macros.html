@@ -1,21 +1,28 @@
 {# Shared form widgets. Import with:
      {% from "_macros.html" import currency_select, port_of_loading_select %} #}
 
-{% macro currency_select(chosen, options, label='Currency', hint='') %}
+{% macro currency_select(chosen, options, label='Currency', hint='', locked=false, locked_hint='Locked - inherited from the linked document and cannot be changed here.') %}
 {# The currency a document is written in. Options come from Administration ->
    Miscellaneous; a document can hold a currency since removed from that list,
-   so the stored value stays selectable rather than silently switching. #}
+   so the stored value stays selectable rather than silently switching.
+
+   `locked` disables the field once the document is tied to an upstream one
+   whose currency it must match (e.g. a proforma invoice generated from a
+   quotation) - re-enabled just before submit (see each form's script) so the
+   locked value still posts; _build_header enforces the same rule
+   server-side regardless. #}
 <div class="field">
   <label for="currency_code">{{ label }}</label>
-  <select id="currency_code" name="currency_code">
+  <select id="currency_code" name="currency_code" {{ 'disabled' if locked }}>
     {% if chosen not in options | map(attribute='name') | list %}
     <option value="{{ chosen }}" selected>{{ chosen }}</option>
     {% endif %}
     {% for currency in options %}
-    <option value="{{ currency.name }}" {{ 'selected' if currency.name == chosen }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
+    <option value="{{ currency.name }}" data-symbol="{{ currency.symbol }}" {{ 'selected' if currency.name == chosen }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
     {% endfor %}
   </select>
-  {% if hint %}<div class="text-sm text-soft">{{ hint }}</div>{% endif %}
+  {% if locked %}<div class="text-sm text-soft">{{ locked_hint }}</div>
+  {% elif hint %}<div class="text-sm text-soft">{{ hint }}</div>{% endif %}
 </div>
 {% endmacro %}
 

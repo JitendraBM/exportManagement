@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional, List
 
+from app.utils import is_fob_terms
+
 
 @dataclass
 class Tenant:
@@ -879,6 +881,7 @@ class Quotation(CifMoneyLadder):
     buyer_reference_no: Optional[str] = None
     port_of_loading: Optional[str] = None
     port_of_discharge: Optional[str] = None
+    final_destination: Optional[str] = None
     packing_details: Optional[str] = None
     container_details: Optional[str] = None
     shipping_mode: Optional[str] = None
@@ -932,6 +935,7 @@ class Quotation(CifMoneyLadder):
             buyer_reference_no=row["buyer_reference_no"],
             port_of_loading=row["port_of_loading"],
             port_of_discharge=row["port_of_discharge"],
+            final_destination=row["final_destination"] if "final_destination" in row.keys() else None,
             packing_details=row["packing_details"],
             container_details=row["container_details"],
             shipping_mode=row["shipping_mode"],
@@ -998,6 +1002,19 @@ class Quotation(CifMoneyLadder):
         subtotal-input handler); it is 0 on a quotation that was never
         overridden that way."""
         return self.subtotal_usd + self.charges_total + self.cif_adjust_usd
+
+    @property
+    def fob_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.fob_value_usd. A quotation's FOB value is
+        simply the goods total (quantity x price, summed across every line) -
+        it is never reduced by the discount or built up with charges, unlike
+        the base ladder's version. The discount only ever comes off between
+        CIF and invoice value (see invoice_value_usd); it does not touch this
+        figure. This holds for every shipping term: under FOB terms nothing
+        is added on top of it (sea freight/insurance are held at zero and CIF
+        is not shown), and under CIF/CFR terms it is still the ex-charges
+        value of the goods themselves."""
+        return self.subtotal_usd
 
 
 @dataclass
@@ -1524,7 +1541,10 @@ class ProformaInvoiceItem:
     unit: str = "SQM"
     price_usd: float = 0
     total_usd: float = 0
-    fob_price_usd: Optional[float] = None  # see QuotationItem.fob_price_usd
+    # Unused (kept so an old row still loads) - proforma invoices no longer
+    # have an FOB-typed-price mode; price_usd is always the absolute price
+    # the user typed. See ExportInvoiceItem.fob_price_usd, which has this now.
+    fob_price_usd: Optional[float] = None
 
     @staticmethod
     def from_row(row) -> "ProformaInvoiceItem":
@@ -1574,6 +1594,7 @@ class ProformaInvoice(CifMoneyLadder):
     variation_in_qty: Optional[str] = None
     delivery_period: Optional[str] = None
     container_details: Optional[str] = None
+    packing_details: Optional[str] = None  # e.g. "PALLATE" - same field as Quotation.packing_details
     terms_of_delivery: Optional[str] = None
     payment_terms: Optional[str] = None
     remarks: Optional[str] = None
@@ -1582,7 +1603,10 @@ class ProformaInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
-    fob_pricing: bool = False  # see Quotation.fob_pricing
+    # Unused (kept so an old invoice's row still loads) - proforma invoices no
+    # longer have an FOB-typed-price mode; see ExportInvoice.fob_pricing,
+    # which has this now.
+    fob_pricing: bool = False
     round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
@@ -1629,6 +1653,7 @@ class ProformaInvoice(CifMoneyLadder):
             variation_in_qty=row["variation_in_qty"],
             delivery_period=row["delivery_period"],
             container_details=row["container_details"],
+            packing_details=row["packing_details"] if "packing_details" in row.keys() else None,
             terms_of_delivery=row["terms_of_delivery"],
             payment_terms=row["payment_terms"],
             remarks=row["remarks"],
@@ -1686,6 +1711,30 @@ class ProformaInvoice(CifMoneyLadder):
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
 
+    @property
+    def cif_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.cif_value_usd - like Quotation, a proforma
+        invoice's typed price is always the absolute FOB price (fob_pricing is
+        hardcoded off - see _build_header - so apply_fob_uplift never touches
+        it), so CIF is built UPWARDS from FOB by adding the charges rather
+        than being the goods total on its own. This holds regardless of the
+        shipping terms chosen - the terms only decide which charge fields are
+        non-zero (see drops_sea_freight/drops_insurance), never the FOB total
+        itself. Mirrors Quotation.cif_value_usd; a proforma invoice has no
+        cif_adjust_usd equivalent (the printed/typed CIF figure is never
+        manually overridden here)."""
+        return self.subtotal_usd + self.charges_total
+
+    @property
+    def fob_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.fob_value_usd - the FOB value is simply
+        the goods total (quantity x price, summed across every line), never
+        reduced by the discount or rebuilt from the invoice value. Mirrors
+        Quotation.fob_value_usd; see cif_value_usd above for why a proforma
+        invoice's ladder runs upward like a quotation's rather than downward
+        like the base CifMoneyLadder."""
+        return self.subtotal_usd
+
 
 EXPORT_TAX_MODE_IGST = "igst"
 EXPORT_TAX_MODE_LUT = "lut"
@@ -1720,7 +1769,9 @@ class ExportInvoiceItem:
     price_usd: float = 0
     total_usd: float = 0
     igst_percent: float = 0
-    fob_price_usd: Optional[float] = None  # see QuotationItem.fob_price_usd
+    # What was typed under FOB pricing (NULL otherwise) - see
+    # ExportInvoice.fob_pricing / apply_fob_uplift in services.py.
+    fob_price_usd: Optional[float] = None
 
     @property
     def tax_usd(self) -> float:
@@ -1797,7 +1848,9 @@ class ExportInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
-    fob_pricing: bool = False  # see Quotation.fob_pricing
+    # "Prices typed above are FOB" checkbox on the form - see
+    # is_fob_pricing / apply_fob_uplift in services.py.
+    fob_pricing: bool = False
     round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
@@ -1971,6 +2024,74 @@ class ExportInvoice(CifMoneyLadder):
             return self.computed_subtotal_usd
         return sum(item.total_usd for item in self.items)
 
+    @property
+    def _fob_price_is_absolute(self) -> bool:
+        """True when price_usd (or, if the uplift ran, fob_price_usd) is
+        already the true FOB figure on its own - either because the uplift
+        actually folded the charges into the CIF price and stashed the
+        original typed price (fob_pricing on), or because there's no CIF
+        concept to begin with (FOB terms - see is_fob_terms in app/utils.py).
+        False means the opposite: CIF/CFR terms where the price was typed
+        directly as the CIF price and never run through "Calculate CIF
+        pricing" - the app's default assumption (see CifMoneyLadder's
+        docstring: "every price in this app is a CIF price") - so FOB has to
+        be worked out the base ladder's way, by stripping the charges back
+        out of the CIF total instead of trusting price_usd as-is."""
+        return bool(self.fob_pricing) or is_fob_terms(self.nature_of_contract)
+
+    @property
+    def fob_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.fob_value_usd.
+
+        When _fob_price_is_absolute, the FOB value is quantity x the ORIGINAL
+        typed price per line - fob_price_usd when the uplift ran (it mutated
+        price_usd into the CIF price and stashed what was actually typed
+        there), falling back to price_usd itself when it never did but the
+        terms are FOB (price_usd IS still the typed FOB price in that case,
+        nothing ever adjusts it). Never reduced by the discount or the four
+        charges then - it only moves when a line's typed price or quantity
+        changes, same as Quotation.fob_value_usd/ProformaInvoice.fob_value_usd.
+
+        Otherwise (genuine CIF/CFR terms, uplift never run) falls back to
+        exactly the base CifMoneyLadder formula, computed directly against
+        cif_value_usd rather than via invoice_value_usd/super() - both of
+        those are ALSO overridden on this class and would recurse back into
+        _fob_price_is_absolute's other branch otherwise."""
+        if self._fob_price_is_absolute:
+            return sum(
+                (item.quantity_value or 0)
+                * (item.fob_price_usd if item.fob_price_usd is not None else (item.price_usd or 0))
+                for item in self.items
+            )
+        return self.cif_value_usd - self.discount_amount - self.charges_total
+
+    @property
+    def invoice_value_usd(self) -> float:
+        """Overrides CifMoneyLadder.invoice_value_usd to match fob_value_usd
+        above - same branch, so the two stay a consistent ladder either way.
+
+        When _fob_price_is_absolute, invoice value is built UP from FOB
+        rather than down from CIF, since fob_value_usd no longer moves with
+        the charges there: FOB value + every charge - discount. Whenever the
+        uplift actually ran, subtotal_usd IS fob_value_usd + charges_total by
+        construction (apply_fob_uplift spreads exactly charges_total across
+        the lines), so this lands on the exact same figure as the base
+        cif_value_usd - discount_amount would - no behaviour change for that
+        case. The fix only bites under FOB terms (sea_freight and insurance
+        are held at zero there, but certification/other_charges are not -
+        see drops_sea_freight/drops_insurance in app/utils.py): previously
+        those still-typed charges vanished from invoice_value_usd entirely
+        because subtotal_usd never carried them and fob_value_usd (rightly)
+        doesn't either; now they always reach the buyer's payable figure.
+
+        Otherwise (genuine CIF/CFR terms, uplift never run) falls back to
+        exactly the base formula - cif_value_usd - discount_amount - since
+        the price is assumed CIF-inclusive already and nothing needs adding
+        back on."""
+        if self._fob_price_is_absolute:
+            return self.fob_value_usd + self.charges_total - self.discount_amount
+        return self.cif_value_usd - self.discount_amount
+
     # The two persisted columns export_invoices.cnf_value / .fob_value are
     # written from these on every save (nothing reads them back - they exist so
     # the figures are queryable outside the app). Both are just the ladder in
@@ -1983,7 +2104,7 @@ class ExportInvoice(CifMoneyLadder):
 
     @property
     def fob_value(self) -> float:
-        """Invoice value less insurance / sea freight / certification / other."""
+        """Quantity x the typed FOB price, summed - see fob_value_usd."""
         return self.fob_value_usd
 
     # ---- FOB-priced view of the goods lines -----------------------------
@@ -1999,9 +2120,20 @@ class ExportInvoice(CifMoneyLadder):
         total follows FROM the rounded rate, so a customer multiplying the
         printed rate by the printed quantity gets the printed total. That
         makes the FOB and CIF figures on this sheet differ very slightly from
-        the exact ladder elsewhere - the price of a sheet that foots."""
+        the exact ladder elsewhere - the price of a sheet that foots.
+
+        The reduction is worked out directly from charges_total and
+        discount_amount rather than as `cif_value_usd - fob_value_usd`: since
+        the fob_value_usd fix, that property is the pure goods total
+        (quantity x the originally typed price), ignoring the discount AND
+        the four charges, so the old subtraction no longer recovers "the four
+        charges plus the discount" this view intentionally spreads. This is
+        numerically identical to what that subtraction used to yield (back
+        when fob_value_usd was cif_value_usd - discount_amount -
+        charges_total), so this view's own figures stay byte-for-byte
+        unchanged by that fix."""
         total_qty = sum(i.quantity_value or 0 for i in self.items)
-        reduction = ((self.cif_value_usd - self.fob_value_usd) / total_qty) if total_qty else 0
+        reduction = ((self.charges_total + self.discount_amount) / total_qty) if total_qty else 0
         lines = []
         for item in self.items:
             rate = round((item.price_usd or 0) - reduction, 2)

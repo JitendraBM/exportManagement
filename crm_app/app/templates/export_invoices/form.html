@@ -104,16 +104,24 @@
       <div class="field">
         {# Options come from Administration -> Miscellaneous (currency_options). #}
         {% set chosen_currency = data.currency_code | default('USD', true) %}
+        {% set chosen_currency_obj = (currency_options | selectattr('name', 'equalto', chosen_currency) | list | first) %}
+        {% set chosen_symbol = chosen_currency_obj.symbol if chosen_currency_obj else '$' %}
         <label for="currency_code">Currency</label>
-        <select id="currency_code" name="currency_code">
+        {# Locked once tied to a proforma invoice - the export invoice has to
+           be in whatever currency the linked PI was raised in. Re-enabled
+           just before submit (see the script below) so the locked value
+           still posts; _build_header enforces the same rule server-side
+           regardless. #}
+        <select id="currency_code" name="currency_code" {{ 'disabled' if selected_ids }}>
           {# An invoice can hold a currency since removed from the list - keep it selectable rather than silently switching it. #}
           {% if chosen_currency not in currency_options | map(attribute='name') | list %}
           <option value="{{ chosen_currency }}" selected>{{ chosen_currency }}</option>
           {% endif %}
           {% for currency in currency_options %}
-          <option value="{{ currency.name }}" {{ 'selected' if currency.name == chosen_currency }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
+          <option value="{{ currency.name }}" data-symbol="{{ currency.symbol }}" {{ 'selected' if currency.name == chosen_currency }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
           {% endfor %}
         </select>
+        {% if selected_ids %}<div class="text-sm text-soft">Locked to the linked proforma invoice's currency.</div>{% endif %}
       </div>
       <div class="field">
         <div class="flex-between">
@@ -372,7 +380,9 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th>Price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
+            <th id="price-header"><span id="price-label-prefix">Price</span> (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
+            {# Only shown once "Calculate CIF pricing" has been pushed - see applyCifDisplay. #}
+            <th class="num js-cif-col" hidden>CIF price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th>IGST %</th>
             <th class="num">Total (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th></th>
@@ -406,7 +416,14 @@
                 {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
               </select>
             </td>
-            <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
+            {# Under FOB pricing the stored price_usd is the CIF price worked
+               out at save time - what the user typed is fob_price_usd, so
+               that is what has to come back into the input. A re-displayed
+               form row (a dict, after a validation error) carries the typed
+               figure in price_usd either way. #}
+            {% set typed_price = row.fob_price_usd if (data.fob_pricing and row.fob_price_usd) else row.price_usd %}
+            <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required value="{{ typed_price or '' }}"></td>
+            <td class="num js-cif-price js-cif-col" hidden>0.00</td>
             <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
             <td class="num js-total">0.00</td>
             <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
@@ -426,6 +443,29 @@
       <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
       <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
     </div>
+    {# The prices typed in the Price column above are always the absolute FOB
+       price - only the user edits them. This button is a one-shot push: it
+       spreads the charges (NOT the discount) over the total Qty and adds the
+       result onto every line's typed FOB price to work out the CIF price and
+       the totals below, all in one go. It does not keep recalculating as
+       qty/price/charges change afterwards - push it again to refresh. Only
+       means anything under CIF/CFR terms - under FOB there's no CIF figure to
+       build at all (see js-cif-value-block below and is_fob), so the whole
+       field is hidden and the calculation is cleared there - see
+       applyDeliveryTermCharges, which mirrors ExportInvoiceService._build_header's
+       server-side enforcement of the same rule (fields are stored exactly as
+       apply_fob_uplift always worked out; only the trigger moved from a
+       checkbox to this button). #}
+    <div class="field js-cif-calc-field" style="margin-top:10px;">
+      <input type="hidden" id="fob_pricing" name="fob_pricing" value="{{ '1' if data.fob_pricing else '0' }}">
+      <button type="button" class="btn btn-sm" id="calc-cif-btn">⇄ Calculate CIF pricing</button>
+      <div class="hint" id="cif-calc-summary" hidden>
+        Sea freight + insurance + certification + other = <strong><span id="fob-charges-display">0.00</span></strong>,
+        spread over <span id="fob-qty-display">0.00</span> total Qty
+        = <strong><span id="fob-uplift-display">0.00</span></strong> added to every line's FOB price to reach its CIF price.
+        CIF invoice value: <span class="js-currency-symbol">{{ chosen_symbol }}</span><strong><span id="cif-calc-value">0.00</span></strong>.
+      </div>
+    </div>
     <div class="form-row">
       {# Display only - worked out from each line's Boxes x its catalog
          product's per-box net/gross weight, the same figures the export
@@ -435,9 +475,11 @@
     </div>
     <div class="flex-between" style="margin-top:14px;">
       <div></div>
+      {# The CIF/CFR figure is hidden entirely under FOB terms - see
+         applyDeliveryTermCharges, the only thing that toggles
+         js-cif-value-block (mirrors the quotation/proforma forms). #}
       <div class="text-sm flex gap-8" style="align-items:center; flex-wrap:wrap;">
-        <strong>CIF value:</strong> $ <span id="subtotal-display">0.00</span>
-        &nbsp;·&nbsp; <strong>Invoice value:</strong> $ <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> $ <span id="fob-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span>
+        <span class="js-cif-value-block"><strong><span id="cif-value-label">CIF</span> value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; </span><strong>Invoice value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="fob-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span>
       </div>
     </div>
   </div>
@@ -526,6 +568,7 @@
         </select>
       </td>
       <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required></td>
+      <td class="num js-cif-price js-cif-col" hidden>0.00</td>
       <td class="js-igst-cell text-sm">—</td>
       <td class="num js-total">0.00</td>
       <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>`;
@@ -537,19 +580,37 @@
   }
 
   const subtotalDisplay = document.getElementById('subtotal-display');
+  const fobPricingField = document.getElementById('fob_pricing');
+
+  // Whether the last "Calculate CIF pricing" push is still in effect. Unlike
+  // the checkbox this replaced, this is a one-shot calculation: appliedUplift
+  // is frozen at push time, not recomputed live as qty/price/charges change -
+  // see calcCifBtn below. Starts true when reopening an invoice that was
+  // already CIF-calculated, so its saved figures redisplay correctly.
+  let cifApplied = fobPricingField.value === '1';
+  let appliedUplift = 0;
 
   function recalcTotals() {
     const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
     const rate = parseFloat(document.getElementById('exchange_rate').value) || 0;
     const num = (id) => parseFloat(document.getElementById(id).value) || 0;
 
-    let goodsTotal = 0, tax = 0, netWeight = 0, grossWeight = 0;
+    // The uplift is kept at full precision and only the line total is rounded
+    // to the cent - any gap that leaves lands silently in the Total column.
+    const uplift = cifApplied ? appliedUplift : 0;
+    let goodsTotal = 0, fobTotal = 0, tax = 0, netWeight = 0, grossWeight = 0;
     rows.forEach((tr) => {
       const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
-      const price = parseFloat(tr.querySelector('.js-price').value) || 0;
+      const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
+      const price = typed + uplift;
       const total = Math.round(qty * price * 100) / 100;
+      tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
       goodsTotal += total;
+      // Quantity x the typed price, summed line by line - the FOB value
+      // whenever price_usd is already the absolute FOB figure (see the
+      // "absolute" branch below); ignored otherwise.
+      fobTotal += qty * typed;
       const igst = parseFloat(tr.dataset.igst) || 0;
       tr.querySelector('.js-igst-cell').textContent = tr.dataset.igst ? igst : '—';
       tax += total * rate * igst / 100;   // tax follows the CIF price, as always
@@ -564,16 +625,58 @@
     document.getElementById('total_net_weight_kg').value = netWeight ? (Math.round(netWeight * 100) / 100) : '';
     document.getElementById('total_gross_weight_kg').value = grossWeight ? (Math.round(grossWeight * 100) / 100) : '';
 
-    // Same ladder the printed sheet uses: CIF - discount = invoice value,
-    // then the charges come back out of it to leave FOB.
     const subtotal = goodsTotal;
     subtotalDisplay.textContent = subtotal.toFixed(2);
-    const invoiceValue = subtotal - num('discount_amount');
-    const fobValue = invoiceValue - num('insurance') - num('sea_freight') - num('certification') - num('other_charges');
+    // Mirrors ExportInvoice.fob_value_usd/invoice_value_usd in app/models.py
+    // exactly (see _fob_price_is_absolute there for the full reasoning).
+    // price_usd is the absolute FOB figure - so the ladder builds UP from it
+    // (FOB + every charge - discount) - whenever "Calculate CIF pricing" has
+    // been pushed (the charges are already folded into every line's price
+    // then) or the delivery term is FOB (there's no CIF concept to begin
+    // with). Otherwise the price was typed directly as the CIF price and
+    // never adjusted - the app's default assumption - so both figures fall
+    // back to the base ladder's own top-down subtraction instead.
+    const isFobTerms = /^FOB\b/i.test((contractSelect.value || '').trim());
+    const absolute = cifApplied || isFobTerms;
+    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
+    const discount = num('discount_amount');
+    const fobValue = absolute ? fobTotal : (subtotal - discount - charges);
+    const invoiceValue = absolute ? (fobValue + charges - discount) : (subtotal - discount);
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
     document.getElementById('fob-value-display').textContent = fobValue.toFixed(2);
     document.getElementById('tax-display').textContent = tax.toFixed(2);
+    if (cifApplied) document.getElementById('cif-calc-value').textContent = subtotal.toFixed(2);
   }
+
+  // ---- push-button CIF pricing --------------------------------------------------
+  // The Price column is always the absolute FOB price the user typed. Pushing
+  // "Calculate CIF pricing" reads the charges once, works out the per-unit
+  // uplift, freezes it in appliedUplift, and reveals the worked-out CIF price
+  // per line plus the totals below. It's a snapshot, not a live formula -
+  // editing qty/price/charges afterwards leaves the shown CIF figures as they
+  // were until the button is pushed again. What gets posted is still each
+  // line's typed FOB price - the server redoes this same uplift at save time
+  // (apply_fob_uplift in app/services.py), so the two can't drift apart.
+  function applyCifDisplay() {
+    document.getElementById('price-label-prefix').textContent = cifApplied ? 'FOB price' : 'Price';
+    document.querySelectorAll('.js-cif-col').forEach((cell) => { cell.hidden = !cifApplied; });
+    document.getElementById('cif-calc-summary').hidden = !cifApplied;
+    recalcTotals();
+  }
+  function pushCifCalculation() {
+    const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
+    const num = (id) => parseFloat(document.getElementById(id).value) || 0;
+    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
+    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
+    appliedUplift = totalQty ? charges / totalQty : 0;
+    cifApplied = true;
+    fobPricingField.value = '1';
+    document.getElementById('fob-charges-display').textContent = charges.toFixed(2);
+    document.getElementById('fob-qty-display').textContent = totalQty.toFixed(2);
+    document.getElementById('fob-uplift-display').textContent = appliedUplift.toFixed(4);
+    applyCifDisplay();
+  }
+  document.getElementById('calc-cif-btn').addEventListener('click', pushCifCalculation);
 
   function recalcRowQty(tr) {
     const altQty = parseFloat(tr.dataset.altQty);
@@ -639,7 +742,7 @@
     populatePalletOptions(tr, [], false);
     recalcRowPallets(tr);
     renumber();
-    recalcTotals();
+    applyCifDisplay();  // the new row's CIF price cell follows the current mode
   });
 
   itemsBody.addEventListener('click', (e) => {
@@ -665,6 +768,7 @@
   // matching drops_sea_freight/drops_insurance in app/utils.py, which zero the
   // same charges server-side and leave the same rows off the printed sheet.
   const contractSelect = document.getElementById('nature_of_contract');
+  const cifCalcField = document.querySelector('.js-cif-calc-field');
   function applyDeliveryTermCharges() {
     const terms = (contractSelect.value || '').trim();
     const fob = /^FOB\b/i.test(terms);
@@ -677,9 +781,33 @@
     };
     toggle('.js-charge-sea-freight', fob);
     toggle('.js-charge-insurance', fob || cfr);
-    recalcTotals();
+    // "Calculate CIF pricing" only means something when there's a CIF figure
+    // to build - under FOB terms there's none, so the button is hidden and
+    // any pushed calculation is automatically cleared, falling back to the
+    // default tax calculation (IGST% x the plain typed price, i.e. FOB value
+    // and Invoice value work out equal) - mirrors the server-side enforcement
+    // in ExportInvoiceService._build_header (no_fob_pricing).
+    cifCalcField.hidden = fob;
+    if (fob && cifApplied) {
+      cifApplied = false;
+      appliedUplift = 0;
+      fobPricingField.value = '0';
+      applyCifDisplay();
+    }
+    document.getElementById('cif-value-label').textContent = cfr ? 'CFR' : 'CIF';
+    // Not the `hidden` attribute - see the quotation/proforma forms' identical
+    // note; style.display sidesteps any specificity fight with a display
+    // rule on this element's other classes.
+    document.querySelector('.js-cif-value-block').style.display = fob ? 'none' : '';
+    recalcTotals();  // FOB value and Invoice value recompute automatically, every time this runs
   }
   contractSelect.addEventListener('change', applyDeliveryTermCharges);
+  // Reopening an invoice that already had a pushed CIF calculation
+  // reconstructs it from the saved charges/qty (recomputing the same uplift
+  // apply_fob_uplift worked out at save time) so it redisplays correctly;
+  // applyDeliveryTermCharges then clears it right back off if the terms
+  // saved out are FOB, same as any other load.
+  if (cifApplied) pushCifCalculation(); else applyCifDisplay();
   applyDeliveryTermCharges();
 
   // ---- reference-PI picker: restrict to one buyer at a time -----------------
@@ -688,6 +816,7 @@
   // (same lead if the PI is linked to one, else its consignee name) is
   // disabled and dimmed rather than removed, so the reason stays visible.
   const proformaPicker = document.getElementById('proforma-picker');
+  const currencySelect = document.getElementById('currency_code');
   function refreshProformaPickerFilter() {
     const checked = Array.from(proformaPicker.querySelectorAll('.js-pi-check:checked'));
     const keys = new Set(checked.map((c) => c.dataset.companyKey));
@@ -698,6 +827,10 @@
       cb.disabled = blocked;
       if (label) label.style.opacity = blocked ? '0.4' : '';
     });
+    // Tying the invoice to a PI locks the currency to whatever that PI was
+    // raised in (see currency_code's server-rendered `disabled` above and
+    // _build_header, which enforces the same rule either way).
+    currencySelect.disabled = checked.length > 0;
   }
   if (proformaPicker) {
     proformaPicker.addEventListener('change', (e) => {
@@ -705,6 +838,12 @@
     });
     refreshProformaPickerFilter();
   }
+
+  // A disabled field never posts - re-enable it right before submit so the
+  // locked currency still reaches the server.
+  document.getElementById('invoice-form').addEventListener('submit', () => {
+    currencySelect.disabled = false;
+  });
 
   // ---- reference-PI loader --------------------------------------------------
   // Loading fetches the prefill and applies it in place instead of reloading
@@ -742,8 +881,11 @@
   }
 
   function refreshCurrencyLabels() {
-    const code = document.getElementById('currency_code').value || '';
+    const sel = document.getElementById('currency_code');
+    const code = sel.value || '';
+    const symbol = (sel.selectedOptions[0] && sel.selectedOptions[0].dataset.symbol) || '$';
     document.querySelectorAll('.js-currency-label').forEach((el) => { el.textContent = code; });
+    document.querySelectorAll('.js-currency-symbol').forEach((el) => { el.textContent = symbol; });
   }
   document.getElementById('currency_code').addEventListener('change', refreshCurrencyLabels);
 
@@ -779,7 +921,12 @@
     refreshCurrencyLabels();
     applyDeliveryTermCharges();
 
-    // Goods lines and the imported supplier rows come wholly from the PIs.
+    // Goods lines and the imported supplier rows come wholly from the PIs -
+    // any previously pushed CIF calculation was worked out for a different
+    // set of rows, so it's cleared rather than silently misapplied to these.
+    cifApplied = false;
+    appliedUplift = 0;
+    fobPricingField.value = '0';
     itemsBody.innerHTML = '';
     (data.items || []).forEach((item) => {
       const tr = buildLoadedRow(item);
@@ -787,7 +934,7 @@
       initRowPalletSelection(tr);
     });
     renumber();
-    recalcTotals();
+    applyCifDisplay();
 
     const pdWrap = document.getElementById('purchase-detail-rows');
     pdWrap.innerHTML = '';
@@ -995,7 +1142,7 @@
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
-  recalcTotals();
+  applyCifDisplay();  // ends in recalcTotals()
 })();
 </script>
 

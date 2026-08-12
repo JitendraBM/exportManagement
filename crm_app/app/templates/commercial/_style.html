@@ -34,6 +34,13 @@
   .ci-items tbody td { vertical-align: top; }
   .ci-goods { font-weight: bold; }
   .ci-tot td { font-weight: bold; }
+  /* Invoice Value - lifted out of the charges ladder with a shaded band and
+     heavier rules, matching the export invoice sheet's treatment. The rules
+     are on the money columns only; the rowspanned cells beside it must not
+     be cut across. */
+  .ci-tiv td:last-child, .ci-tiv td:nth-last-child(2) {
+    background: #eee; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000;
+  }
   .ci-sign { height: 46px; }
   @media print { .ci-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
