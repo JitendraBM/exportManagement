@@ -1799,6 +1799,54 @@ class ProformaInvoice(CifMoneyLadder):
         like the base CifMoneyLadder."""
         return self.subtotal_usd
 
+    # ---- CIF-priced view of the goods lines -----------------------------
+    # The rate typed on the form is the FOB rate, but the rate the buyer reads
+    # on the sheet is the CIF rate: the charges between FOB and CIF are spread
+    # uniformly over the total ALT QTY and that per-unit share is added to
+    # every line. The exact inverse of ExportInvoice.fob_priced_lines.
+    @property
+    def charge_uplift_per_unit(self) -> float:
+        """One unit of ALT QTY's share of the FOB->CIF charges, rounded to the
+        two decimals a printed rate has room for - the closest printable
+        figure, not the exact share. What that rounding leaves over is
+        absorbed by the last printed line's Total; see printed_items."""
+        total_qty = sum(item.quantity_value or 0 for item in self.items)
+        return round(self.charges_total / total_qty, 2) if total_qty else 0.0
+
+    @property
+    def printed_items(self) -> List[ProformaInvoiceItem]:
+        """The goods lines as the sheet and the annexure print them: same
+        lines, but at the CIF rate, each line's Total worked out FROM that
+        printed rate. Copies - the stored items keep the FOB rate that was
+        typed.
+
+        A per-unit uplift rounded to the cent can't land the column exactly on
+        FOB + charges, and the few cents left over are absorbed into the LAST
+        line's Total rather than printed as a round-off row of their own: this
+        document is read by customs, which has no round-off line to accept,
+        while the FOB value it is all built up from is the figure the buyer
+        and the seller actually agreed. So the goods column always foots to
+        the CIF value exactly, and the ladder below it reconciles all the way
+        down to the agreed FOB value with no extra step to explain."""
+        uplift = self.charge_uplift_per_unit
+        printed = []
+        for item in self.items:
+            rate = round((item.price_usd or 0) + uplift, 2)
+            printed.append(replace(
+                item, price_usd=rate, total_usd=round(rate * (item.quantity_value or 0), 2),
+            ))
+        if printed:
+            leftover = round(self.cif_value_usd - sum(i.total_usd for i in printed), 2)
+            if leftover:
+                last = printed[-1]
+                printed[-1] = replace(last, total_usd=round(last.total_usd + leftover, 2))
+        return printed
+
+    @property
+    def printed_goods_total(self) -> float:
+        """What the printed goods column adds up to - the CIF value."""
+        return round(sum(item.total_usd for item in self.printed_items), 2)
+
 
 EXPORT_TAX_MODE_IGST = "igst"
 EXPORT_TAX_MODE_LUT = "lut"
