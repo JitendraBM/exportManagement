@@ -26,10 +26,17 @@
 </div>
 {% endmacro %}
 
-{% macro port_of_loading_select(chosen, options, label='Port of loading') %}
+{% macro port_of_loading_select(chosen, options, label='Port of loading', can_add=false) %}
 {# The port a shipment loads at. Options come from Administration ->
    Miscellaneous; a document can hold a port since removed from that list, so
-   the stored value stays selectable rather than silently blanking. #}
+   the stored value stays selectable rather than silently blanking.
+
+   With can_add (pass current_user.is_admin - the list itself is admin-only),
+   the dropdown also carries an "+ Add a new port" entry that adds one to
+   that list in place, so a missing port doesn't cost a detour to
+   Miscellaneous and a half-typed document. The panel's inputs deliberately
+   have NO name attribute: they belong to this dropdown, not to the document
+   form they sit inside, and must never be posted with it. #}
 <div class="field">
   <label for="port_of_loading">{{ label }}</label>
   <select id="port_of_loading" name="port_of_loading">
@@ -40,6 +47,76 @@
     {% for port in options %}
     <option value="{{ port.name }}" {{ 'selected' if port.name == chosen }}>{{ port.name }}</option>
     {% endfor %}
+    {% if can_add %}<option value="__add_port__">+ Add a new port&hellip;</option>{% endif %}
   </select>
+  {% if can_add %}
+  <div id="pol-add-panel" hidden style="margin-top:8px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="pol-add-name">Port of Loading<span class="required-mark">*</span></label>
+        <input type="text" id="pol-add-name" placeholder="e.g. MUNDRA">
+      </div>
+      <div class="field">
+        <label for="pol-add-pin">Port of loading Pincode<span class="required-mark">*</span></label>
+        <input type="text" id="pol-add-pin" placeholder="e.g. 370421">
+      </div>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm" id="pol-add-save">Add port</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="pol-add-cancel">Cancel</button>
+  </div>
+  <script>
+  (function () {
+    const select = document.getElementById('port_of_loading');
+    const panel = document.getElementById('pol-add-panel');
+    const nameEl = document.getElementById('pol-add-name');
+    const pinEl = document.getElementById('pol-add-pin');
+    // Whatever was selected before the "+ Add a new port" entry was picked -
+    // restored on cancel (and held while the panel is open) so choosing the
+    // entry can never leave the document itself pointing at it.
+    let previous = select.value;
+
+    function closePanel() {
+      panel.hidden = true;
+      nameEl.value = '';
+      pinEl.value = '';
+      select.value = previous;
+    }
+
+    select.addEventListener('change', () => {
+      if (select.value !== '__add_port__') { previous = select.value; return; }
+      select.value = previous;
+      panel.hidden = false;
+      nameEl.focus();
+    });
+
+    document.getElementById('pol-add-cancel').addEventListener('click', closePanel);
+
+    // Enter inside these inputs adds the port - it must never submit the
+    // document form they are nested in.
+    [nameEl, pinEl].forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addPort(); }
+    }));
+
+    document.getElementById('pol-add-save').addEventListener('click', addPort);
+
+    function addPort() {
+      const body = new FormData();
+      body.append('name', nameEl.value);
+      body.append('pin_code', pinEl.value);
+      fetch('/misc/api/ports-of-loading', { method: 'POST', body: body })
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) { alert(data.error || 'Could not add the port.'); return; }
+          // Straight above the "+ Add a new port" entry, which stays last.
+          const option = new Option(data.name, data.name, false, false);
+          select.add(option, select.options[select.options.length - 1]);
+          previous = data.name;
+          closePanel();
+        })
+        .catch(() => alert('Something went wrong adding the port.'));
+    }
+  })();
+  </script>
+  {% endif %}
 </div>
 {% endmacro %}

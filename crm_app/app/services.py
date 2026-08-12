@@ -1896,54 +1896,26 @@ class DocumentVersionService:
 # ============================================================
 # FOB-TYPED PRICING (shared by quotation / proforma / export invoice)
 # ============================================================
-def is_fob_pricing(fields: dict) -> bool:
-    """Reads the "Prices typed are FOB" checkbox off a posted form. An
-    unticked checkbox posts nothing at all, so anything falsy means off."""
-    return str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off")
-
-
 def apply_fob_uplift(document) -> None:
-    """Turns FOB-typed prices into the CIF prices the document stores.
+    """Clears the vestigial per-item `fob_price_usd`.
 
-    Every price this app prints is a CIF price (see CifMoneyLadder) - the ocean
-    leg and handling are already inside the per-unit rate. But a document is
-    often worked out the other way round: the goods have an FOB price, and the
-    freight/insurance/certification/other charges are known only as one lump
-    sum for the whole shipment. With `fob_pricing` ticked, that lump is divided
-    by the total ALT QTY of every line and the resulting per-unit figure is
-    added uniformly onto each line's price - so a heavier line carries
-    proportionally more of the charge, and the buyer sees a single all-in rate
-    per unit.
+    There used to be an FOB-typed-price mode on all three buyer-facing
+    documents: a "Prices typed are FOB" checkbox spread the charges over the
+    total ALT QTY and added that per-unit figure onto every line, so the
+    stored price_usd became a CIF price and fob_price_usd remembered what was
+    typed. That mode is gone from the quotation, the proforma invoice and the
+    export invoice alike - the typed price is now taken at face value and the
+    CIF value is a document-level figure (see Quotation.cif_value_usd /
+    ProformaInvoice.cif_value_usd, which add the charges on top of the FOB
+    goods total).
 
-    The discount is deliberately NOT part of the lump: it comes off above the
-    invoice value line, not between FOB and CIF.
-
-    The uplift is kept at full precision (only the line totals are rounded to
-    the cent) so that CIF - charges lands back exactly on the FOB total that
-    was typed - the FOB VALUE row is the figure the user reasoned in, so it is
-    the one that has to stay exact. Any cent the rounded totals can't carry is
-    absorbed silently into the Total column itself rather than tracked as a
-    separate round-off figure. `price_usd` stays the CIF price throughout,
-    which is why nothing downstream - the printed sheets, the money ladder,
-    the prefill from one document to the next - needs a special case;
-    `fob_price_usd` only remembers what was typed so reopening the form shows
-    the numbers back.
-
-    Written once for all three document types (they share CifMoneyLadder and
-    the same item shape) so their arithmetic can't drift apart. Mirrored by
-    recalcTotals() in each of the three forms, which previews the same figures.
+    `fob_pricing` is therefore hardcoded off in all three builders, and all
+    this does is make sure no line keeps a stale fob_price_usd. Kept as one
+    shared function (rather than three inline loops) so the three document
+    types can't drift apart if the field is ever revived.
     """
-    items = document.items or []
-    if not document.fob_pricing:
-        for item in items:
-            item.fob_price_usd = None
-        return
-    total_qty = sum(item.quantity_value for item in items)
-    uplift = (document.charges_total / total_qty) if total_qty else 0
-    for item in items:
-        item.fob_price_usd = item.price_usd
-        item.price_usd = item.price_usd + uplift
-        item.total_usd = round(item.quantity_value * item.price_usd, 2)
+    for item in document.items or []:
+        item.fob_price_usd = None
 
 
 # ============================================================
@@ -2058,8 +2030,9 @@ class QuotationService:
             raise ValidationError("Buyer name is compulsory.")
         quotation_date = (fields.get("quotation_date") or "").strip() or date.today().isoformat()
         # The delivery terms decide which charges are chargeable at all: FOB
-        # hands the whole ocean leg to the buyer (no freight, no insurance),
-        # CFR keeps the freight but leaves the buyer to insure the cargo. The
+        # hands the whole ocean leg to the buyer (no freight, no insurance and
+        # no certification), CFR keeps both but leaves the buyer to insure the
+        # cargo. The
         # form hides whichever inputs don't apply, and anything that still
         # reaches here (a stale form, an API post) is stored as zero. The two
         # questions are asked separately so a term can drop one charge without
@@ -2067,6 +2040,7 @@ class QuotationService:
         shipping_terms = (fields.get("shipping_terms") or "").strip() or None
         no_sea_freight = drops_sea_freight(shipping_terms)
         no_insurance = drops_insurance(shipping_terms)
+        no_certification = drops_certification(shipping_terms)
 
         def _float(key, default=0):
             raw = fields.get(key)
@@ -2116,7 +2090,7 @@ class QuotationService:
             remarks=(fields.get("remarks") or "").strip() or None,
             sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
             insurance=0 if no_insurance else _float("insurance", 0),
-            certification=_float("certification", 0),
+            certification=0 if no_certification else _float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
             # Quotations no longer have an FOB-typed-price mode - the typed
@@ -2399,11 +2373,12 @@ class ProformaInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
-        # See the quotation builder: FOB drops both charges, CFR drops the
-        # insurance only.
+        # See the quotation builder: FOB drops the freight, the insurance and
+        # the certification; CFR drops the insurance only.
         terms_of_delivery = (fields.get("terms_of_delivery") or "").strip() or None
         no_sea_freight = drops_sea_freight(terms_of_delivery)
         no_insurance = drops_insurance(terms_of_delivery)
+        no_certification = drops_certification(terms_of_delivery)
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -2462,7 +2437,7 @@ class ProformaInvoiceService:
             remarks=(fields.get("remarks") or "").strip() or None,
             sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
             insurance=0 if no_insurance else _float("insurance", 0),
-            certification=_float("certification", 0),
+            certification=0 if no_certification else _float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
             # Proforma invoices no longer have an FOB-typed-price mode - the
@@ -3311,9 +3286,22 @@ class ExportInvoiceService:
         first = proformas[0] if proformas else None
 
         # Goods: every line from every selected PI, in selection order.
+        #
+        # The two documents hold their prices differently, so the price is
+        # converted rather than copied: a proforma invoice's price_usd is the
+        # absolute FOB price and its CIF value is that goods total PLUS the
+        # charges (ProformaInvoice.cif_value_usd), while an export invoice's
+        # price_usd is the CIF price and its ladder runs the other way, down
+        # from the goods total. So each PI's own charges are spread over its
+        # own lines' total qty. That is exactly what ProformaInvoice.printed_items
+        # already works out for the PI's own printed Rate column, so the
+        # export invoice is prefilled straight from those - the two documents
+        # then quote a buyer the identical rate down to the cent, instead of
+        # the same figure computed twice. A PI with no charges (FOB terms,
+        # say) carries its prices over untouched.
         items = []
         for pi in proformas:
-            for it in pi.items:
+            for it in pi.printed_items:
                 items.append({
                     "product_id": it.product_id, "product_name": it.product_name,
                     "hsn_code": it.hsn_code, "surface": it.surface, "pallets": it.pallets,
@@ -3491,8 +3479,8 @@ class ExportInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
-        # See the quotation builder: FOB drops both charges, CFR drops the
-        # insurance only.
+        # See the quotation builder: FOB drops the freight, the insurance and
+        # the certification; CFR drops the insurance only.
         nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
         no_sea_freight = drops_sea_freight(nature_of_contract)
         no_insurance = drops_insurance(nature_of_contract)
@@ -3572,7 +3560,7 @@ class ExportInvoiceService:
             exchange_rate=_float("exchange_rate", 0),
             sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
             insurance=0 if no_insurance else _float("insurance", 0),
-            certification=_float("certification", 0),
+            certification=0 if no_certification else _float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
             fob_pricing=False if no_fob_pricing else is_fob_pricing(fields),

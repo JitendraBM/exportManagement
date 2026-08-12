@@ -31,7 +31,7 @@
      outer border, the nested table supplies the interior rules. Every row
      keeps its own border-bottom, including the last one: neighboring nested
      tables in the same host row can have different row counts (e.g. Purchase
-     Details grows with the supplier count while LUT IGST Details is always 5
+     Details grows with the supplier count while Invoice Value & IGST Details is always 5
      rows), so a shorter column must still close itself off right under its
      own last line rather than relying on the far-away host cell's edge. */
   .ei-nest > td { padding: 0; }
@@ -291,9 +291,10 @@
       {% endif %}
       {% set _ = money.append(('Discount', invoice.discount_amount, false, false)) %}
       {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}
-      {# The delivery terms decide which of these two apply: FOB puts the whole
-         ocean leg on the buyer so both drop out, CFR keeps the freight but
-         leaves the buyer to insure the cargo so only the insurance goes. Each
+      {# The delivery terms decide which of these apply: FOB puts the whole
+         ocean leg on the buyer so the insurance, the freight and the
+         certification all drop out, CFR keeps the freight and the
+         certification but leaves the buyer to insure the cargo. Each
          is appended on its own question. The money ladder drives the whole
          band's row count, so the left cell's rowspan and the Net/Gross split
          below re-derive themselves from whatever ends up in this list - a
@@ -304,7 +305,9 @@
       {% if not invoice.nature_of_contract | drops_sea_freight %}
       {% set _ = money.append(('Sea Freight', invoice.sea_freight, false, false)) %}
       {% endif %}
+      {% if not invoice.nature_of_contract | drops_certification %}
       {% set _ = money.append(('Certification', invoice.certification, false, false)) %}
+      {% endif %}
       {% set _ = money.append(('Other Charges', invoice.other_charges, false, false)) %}
       {# invoice.fob_value_usd directly - it's the pure goods total (quantity
          x the originally typed FOB price), the actual bottom of the ladder.
@@ -328,7 +331,7 @@
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
-          {# Four stacked lines, every one of them derived - see the same block
+          {# Three stacked lines, every one of them derived - see the same block
              on the export packing list sheet, which prints the identical
              structure so the two sheets can't disagree:
                1. the government scheme (this invoice's own export-under text
@@ -336,15 +339,15 @@
                2. the sheet's own SUPPLY MEANT FOR EXPORT heading, repeated
                   here because the cell is what customs reads,
                3. the EPCG licence, when the chain's purchase invoices carried
-                  one or it was typed straight onto this invoice,
-               4. the company's current LUT number.
-             Nothing else belongs in this cell. #}
+                  one or it was typed straight onto this invoice.
+             Nothing else belongs in this cell - in particular NOT the LUT
+             number, which prints in the sheet's own SUPPLY MEANT FOR EXPORT
+             heading above and has no place in this cell. #}
           {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
           <span class="ei-lbl">Export Under</span><br>
           {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
           SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
           {% if invoice.epcg_number %}<br>EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
-          {% if lut_no %}<br>LUT NO : {{ lut_no }}{% endif %}
         </td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
@@ -376,7 +379,7 @@
     </tr>
   </table>
 
-  <!-- ============ PURCHASE DETAILS (0.1% GST) | LUT IGST DETAILS ============ -->
+  <!-- ============ PURCHASE DETAILS (0.1% GST) | INVOICE VALUE & IGST DETAILS ============ -->
   {% set pd_list = invoice.purchase_details %}
   {% set pd_count = pd_list|length %}
   {% set pd_rows = ((pd_count + 1) // 2) %}
@@ -409,9 +412,8 @@
       <td>
         <table>
           <colgroup><col style="width:44%"><col style="width:12%"><col style="width:44%"></colgroup>
-          <tr><td colspan="3" class="ei-lbl ei-c">LUT IGST Details</td></tr>
+          <tr><td colspan="3" class="ei-lbl ei-c">Invoice Value &amp; IGST Details</td></tr>
           <tr><td>Invoice Value</td><td class="ei-c">{{ invoice.currency_prefix }}</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.invoice_value_usd) }}</td></tr>
-          <tr><td>Exchange Rate</td><td class="ei-c">₹</td><td class="ei-num">{{ '{:,.2f}'.format(invoice.exchange_rate) if invoice.exchange_rate else '-' }}</td></tr>
           <tr><td>Invoice Value INR</td><td class="ei-c">₹</td><td class="ei-num">{{ ind(invoice.invoice_value_inr) }}</td></tr>
           <tr>
             <td>IGST Amount</td><td class="ei-c">₹</td>

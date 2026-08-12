@@ -176,6 +176,12 @@ def drops_insurance(value) -> bool:
     return is_fob_terms(value) or is_cfr_terms(value)
 
 
+def drops_certification(value) -> bool:
+    """FOB stops at the ship's rail, so the destination certification is the
+    buyer's cost; CFR still carries it."""
+    return is_fob_terms(value)
+
+
 def register_template_helpers(app):
     """Small, presentation-only helpers exposed to every Jinja template."""
 
@@ -201,6 +207,12 @@ def register_template_helpers(app):
         (FOB and CFR). Asked separately from the freight so a term can drop one
         row without disturbing the other or the rows around them."""
         return drops_insurance(value)
+
+    @app.template_filter("drops_certification")
+    def drops_certification_filter(value):
+        """`{% if not terms | drops_certification %}` - hides the CERTIFICATION
+        row (FOB only)."""
+        return drops_certification(value)
 
     @app.template_filter("amount_in_words")
     def amount_in_words_filter(value, currency=None):

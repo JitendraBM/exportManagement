@@ -151,7 +151,8 @@ class TestProformaCrud:
         # ProformaInvoice.cif_value_usd) - it's only sea freight/insurance
         # that FOB holds at zero.
         pi = self._create(container, seed, terms_of_delivery="FOB MUNDRA",
-                          sea_freight="10", insurance="20", other_charges="5")
+                          sea_freight="10", insurance="20", certification="15",
+                          other_charges="5")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 0
         assert reloaded.insurance == 0
@@ -162,7 +163,7 @@ class TestProformaCrud:
         # CFR = cost AND FREIGHT: the seller keeps paying the freight, the
         # buyer insures the cargo.
         pi = self._create(container, seed, terms_of_delivery="CFR BEIRA",
-                          sea_freight="10", insurance="20")
+                          sea_freight="10", insurance="20", certification="15")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 10
         assert reloaded.insurance == 0

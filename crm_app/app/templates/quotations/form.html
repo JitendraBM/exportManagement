@@ -53,8 +53,9 @@
       <div class="field"><label for="price_validity_days">Price validity (days)</label><input type="number" id="price_validity_days" name="price_validity_days" value="{{ data.price_validity_days | default(30, true) }}"></div>
     </div>
     <div class="form-row">
-      {# Options come from Administration -> Miscellaneous (port_of_loading_options). #}
-      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options) }}
+      {# Options come from Administration -> Miscellaneous (port_of_loading_options);
+         an admin can also add one from the dropdown itself. #}
+      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options, can_add=current_user.is_admin) }}
       <div class="field"><label for="port_of_discharge">Port of discharge</label><input type="text" id="port_of_discharge" name="port_of_discharge" value="{{ data.port_of_discharge | default('', true) }}"></div>
       <div class="field"><label for="final_destination">Final destination</label><input type="text" id="final_destination" name="final_destination" value="{{ data.final_destination | default('', true) }}"></div>
     </div>
@@ -502,10 +503,10 @@
   });
 
   // ---- the delivery terms decide which charges apply --------------------------
-  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
-  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
-  // the insurance and nothing else. Each input is toggled on its own question -
-  // matching drops_sea_freight/drops_insurance in app/utils.py, which zero the
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance and
+  // no certification); CFR keeps the freight and the certification but leaves
+  // the buyer to insure the cargo, so it drops the insurance and nothing else. Each input is toggled on its own question -
+  // matching drops_sea_freight/drops_insurance/drops_certification in app/utils.py, which zero the
   // same charges server-side and leave the same rows off the printed sheet.
   const termsSelect = document.getElementById('shipping_terms');
   function applyDeliveryTermCharges() {

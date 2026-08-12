@@ -215,20 +215,21 @@
     </tbody>
   </table>
 
-  <!-- ============ EXPORT UNDER: the RoDTEP claim, the EPCG licence and the LUT line ============ -->
+  <!-- ============ EXPORT UNDER: the RoDTEP claim and the EPCG licence ============ -->
   <table>
     <colgroup><col style="width:65%"><col style="width:35%"></colgroup>
     <tr>
       <td rowspan="3" class="epl-left" style="font-weight:normal;">
-        {# Same three derived lines as the export invoice sheet's own Export
-           Under cell, read from the same places - the scheme text used to be
+        {# Same derived lines as the export invoice sheet's own Export Under
+           cell, read from the same places - the scheme text used to be
            hard-coded RoDTEP wording here, which meant it silently disagreed
-           with whatever the invoice actually printed. #}
+           with whatever the invoice actually printed. No LUT number: it
+           prints in this sheet's SUPPLY MEANT FOR EXPORT heading instead,
+           and the two sheets have to agree. #}
         {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
         <span class="epl-lbl">Export Under</span><br>
         {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
         SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
-        {% if lut_no %}LUT NO : {{ lut_no }}{% endif %}
         {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
       </td>
       <td rowspan="3" class="epl-lbl epl-mid epl-center" style="font-size:11px;">

@@ -13,7 +13,7 @@ just "how do I represent myself", not "how do I persist myself".
 """
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional, List
 
 from app.utils import is_fob_terms
@@ -1603,10 +1603,10 @@ class ProformaInvoice(CifMoneyLadder):
     certification: float = 0
     other_charges: float = 0
     discount_amount: float = 0
-    # Unused (kept so an old invoice's row still loads) - proforma invoices no
-    # longer have an FOB-typed-price mode; see ExportInvoice.fob_pricing,
-    # which has this now.
-    fob_pricing: bool = False
+    # Both unused (kept so an old row still loads): like the quotation, a
+    # proforma invoice no longer has an FOB-typed-price mode - price_usd is
+    # always the absolute FOB price the user typed. See cif_value_usd below.
+    fob_pricing: bool = False  # see Quotation.fob_pricing
     round_off: float = 0       # see Quotation.round_off
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None

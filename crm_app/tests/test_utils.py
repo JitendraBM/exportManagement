@@ -13,7 +13,7 @@ from app import utils
 from app.utils import (
     number_to_words, amount_in_words, number_to_words_indian, inr_in_words,
     _three_digit_words, register_template_helpers,
-    is_fob_terms, is_cfr_terms, drops_sea_freight, drops_insurance,
+    is_fob_terms, is_cfr_terms, drops_sea_freight, drops_insurance, drops_certification,
 )
 
 
@@ -36,16 +36,20 @@ class TestDeliveryTerms:
     def test_other_terms_are_neither(self, terms):
         assert not is_fob_terms(terms) and not is_cfr_terms(terms)
 
-    def test_fob_drops_both_charges(self):
+    def test_fob_drops_all_three_charges(self):
         assert drops_sea_freight("FOB MUNDRA") and drops_insurance("FOB MUNDRA")
+        assert drops_certification("FOB MUNDRA")
 
     def test_cfr_drops_the_insurance_only(self):
-        # The whole point of CFR: the seller still pays the freight.
+        # The whole point of CFR: the seller still pays the freight, and the
+        # certification stays with it.
         assert drops_insurance("CFR BEIRA")
         assert not drops_sea_freight("CFR BEIRA")
+        assert not drops_certification("CFR BEIRA")
 
     def test_cif_drops_nothing(self):
         assert not drops_sea_freight("CIF BEIRA") and not drops_insurance("CIF BEIRA")
+        assert not drops_certification("CIF BEIRA")
 
 
 # --------------------------------------------------------------------------

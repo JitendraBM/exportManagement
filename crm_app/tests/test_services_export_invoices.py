@@ -167,23 +167,25 @@ class TestExportCrud:
         assert got.items[0].price_usd == 5.92
         assert got.items[0].fob_price_usd is None
 
-    def test_fob_nature_of_contract_drops_sea_freight_and_insurance(self, container, seed):
-        # FOB puts the ocean leg on the buyer - neither charge is stored, and
-        # the printed sheet drops both rows with them.
+    def test_fob_nature_of_contract_drops_sea_freight_insurance_and_certification(self, container, seed):
+        # FOB puts the ocean leg on the buyer - none of the three charges is
+        # stored, and the printed sheet drops their rows with them.
         inv = make_export(container, seed, nature_of_contract="FOB",
-                          sea_freight="100", insurance="20")
+                          sea_freight="100", insurance="20", certification="30")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.sea_freight == 0
         assert got.insurance == 0
+        assert got.certification == 0
 
     def test_cfr_nature_of_contract_drops_only_the_insurance(self, container, seed):
         # CFR keeps the freight with the seller and moves only the cargo
         # insurance to the buyer, so only that row leaves the printed sheet.
         inv = make_export(container, seed, nature_of_contract="CFR - BEIRA",
-                          sea_freight="100", insurance="20")
+                          sea_freight="100", insurance="20", certification="30")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.sea_freight == 100
         assert got.insurance == 0
+        assert got.certification == 30
 
     def test_number_is_required(self, container, seed):
         with pytest.raises(ValidationError):
@@ -279,6 +281,34 @@ class TestExportProformaLinks:
         assert fields["certification"] == 5
         assert fields["other_charges"] == 10
         assert fields["discount_amount"] == 10
+
+    def test_prefill_converts_the_pis_fob_prices_into_cif_prices(self, container, seed):
+        """The two documents hold their prices differently: a PI's price_usd
+        is the FOB price (its CIF value is that goods total PLUS the charges),
+        an export invoice's is the CIF price (its ladder runs back down from
+        the goods total). So each PI's charges are spread over its own lines'
+        qty on the way across - it is the PI's own printed Rate column that is
+        carried over (rounded to the cent), so both sheets quote the buyer the
+        same rate and the two documents' CIF/FOB values agree."""
+        pi = make_proforma(container, seed, terms_of_delivery="CIF", sea_freight="100",
+                            insurance="20")   # 120 of charges over 100 SQM = 1.20/unit
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert built["items"][0]["price_usd"] == pytest.approx(5.92 + 1.20)
+        assert built["items"][0]["price_usd"] == pi.printed_items[0].price_usd
+        # The export invoice raised off that prefill lands on the PI's own ladder.
+        inv = make_export(container, seed, proforma_ids=[pi.id],
+                          nature_of_contract="CIF", sea_freight="100", insurance="20",
+                          items=[{"product_name": "Tiles", "quantity_value": "100", "unit": "SQM",
+                                  "price_usd": str(built["items"][0]["price_usd"])}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.cif_value_usd == pytest.approx(pi.cif_value_usd)
+        assert got.fob_value_usd == pytest.approx(pi.fob_value_usd)
+
+    def test_prefill_leaves_prices_alone_when_the_pi_has_no_charges(self, container, seed):
+        # FOB terms hold every charge at zero, so there is nothing to spread.
+        pi = make_proforma(container, seed, terms_of_delivery="FOB MUNDRA", sea_freight="100")
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert built["items"][0]["price_usd"] == 5.92
 
     def test_prefill_nature_of_contract_from_first_pi_terms_of_delivery(self, container, seed):
         p1 = make_proforma(container, seed, terms_of_delivery="CNF- (Beira)")

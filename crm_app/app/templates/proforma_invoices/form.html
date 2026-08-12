@@ -99,8 +99,9 @@
       <div class="field"><label for="delivery_period">Delivery period</label><input type="text" id="delivery_period" name="delivery_period" value="{{ data.delivery_period | default('', true) }}"></div>
     </div>
     <div class="form-row">
-      {# Options come from Administration -> Miscellaneous (port_of_loading_options). #}
-      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options) }}
+      {# Options come from Administration -> Miscellaneous (port_of_loading_options);
+         an admin can also add one from the dropdown itself. #}
+      {{ port_of_loading_select(data.port_of_loading | default('', true), port_of_loading_options, can_add=current_user.is_admin) }}
       <div class="field"><label for="port_of_discharge">Port of discharge</label><input type="text" id="port_of_discharge" name="port_of_discharge" value="{{ data.port_of_discharge | default('', true) }}"></div>
       <div class="field"><label for="final_destination">Final destination</label><input type="text" id="final_destination" name="final_destination" value="{{ data.final_destination | default('', true) }}"></div>
     </div>
@@ -191,7 +192,7 @@
       </table>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
-    <p class="hint">Choosing a catalog product prefills its name, HSN code, unit and pallet type options. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Pallet type starts on "Loose" — no pallets; picking one of the product's pallet types works out Plts from Boxes using that pallet's box capacity (the dropdown shows how much each pallet stores), and "Manual" lets Plts be typed by hand. Price is typed in per line (a specific design and its price are picked later, on the packing list).</p>
+    <p class="hint">Choosing a catalog product prefills its name, HSN code, unit and pallet type options. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Pallet type starts on "Loose" — no pallets; picking one of the product's pallet types works out Plts from Boxes using that pallet's box capacity (the dropdown shows how much each pallet stores), and "Manual" lets Plts be typed by hand. Price is typed in per line (a specific design and its price are picked later, on the packing list) and is always the absolute FOB price — quantity × price summed across every line is the FOB invoice total, the same no matter which terms of delivery are chosen below. The printed sheet quotes the CIF rate instead: this FOB price plus each unit's share of the charges below, to the nearest cent.</p>
     <div class="form-row" style="margin-top:14px;">
       {# Each charge is hidden (and forced to 0) by the delivery terms that
          don't charge it - see applyDeliveryTermCharges below. #}
@@ -543,10 +544,10 @@
   });
 
   // ---- the delivery terms decide which charges apply --------------------------
-  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
-  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
-  // the insurance and nothing else. Each input is toggled on its own question -
-  // matching drops_sea_freight/drops_insurance in app/utils.py, which zero the
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance and
+  // no certification); CFR keeps the freight and the certification but leaves
+  // the buyer to insure the cargo, so it drops the insurance and nothing else. Each input is toggled on its own question -
+  // matching drops_sea_freight/drops_insurance/drops_certification in app/utils.py, which zero the
   // same charges server-side and leave the same rows off the printed sheet.
   const termsSelect = document.getElementById('terms_of_delivery');
   function applyDeliveryTermCharges() {

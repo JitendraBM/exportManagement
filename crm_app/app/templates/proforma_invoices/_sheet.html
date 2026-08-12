@@ -12,8 +12,17 @@
 {% import 'proforma_invoices/_goods_rows.html' as goods %}
 {% set PI_ANNEX_START = 6 %}
 {% set pi_mode = invoice.display_mode or 'index' %}
-{% set main_items = invoice.items[:PI_ANNEX_START] %}
-{% set annex_items = invoice.items[PI_ANNEX_START:] %}
+{# printed_items, not items: the typed rate is the FOB rate, and what a
+   buyer reads here is the CIF rate - the charges spread over the total ALT
+   QTY, rounded to the printable two decimals and added to every line (see
+   ProformaInvoice.printed_items). The goods column therefore foots to the
+   CIF VALUE below it exactly - the cents a rounded per-unit uplift can't
+   carry are absorbed into the last line's Total, NOT shown as a round-off
+   step: customs has no round-off line to accept, and the FOB value this is
+   all built up from is the figure the buyer and the seller agreed. #}
+{% set printed_items = invoice.printed_items %}
+{% set main_items = printed_items[:PI_ANNEX_START] %}
+{% set annex_items = printed_items[PI_ANNEX_START:] %}
 {# The filler row's height is measured in the browser (templates/_page_filler.html)
    so the sheet fills its page exactly whatever the items wrap to. #}
 <style>
