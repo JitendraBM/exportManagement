@@ -1,12 +1,12 @@
 """
 app/routes/suppliers.py
 ------------------------
-HTTP layer for Suppliers. Unlike Buyer/Exporter (see app/routes/parties.py),
-a Supplier's profile mirrors OUR COMPANY's own shape - GSTIN/PAN/IEC/bank/
+HTTP layer for Suppliers. Unlike Buyer (see app/routes/parties.py), a
+Supplier's profile mirrors OUR COMPANY's own shape - GSTIN/PAN/IEC/bank/
 contacts - instead of a lead's phone/email/socials, so its edit form and
 extraction helpers below mirror app/routes/company.py rather than
 parties.py. Payments/documents/communications still reuse the same shared
-mechanism as Buyer/Exporter (parent_type='supplier').
+mechanism as Buyer (parent_type='supplier').
 """
 
 from flask import (

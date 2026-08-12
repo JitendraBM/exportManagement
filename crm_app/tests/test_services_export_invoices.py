@@ -360,6 +360,28 @@ class TestExportChainImport:
         assert built["fields"]["epcg_number"] == "2431000888"
         assert built["fields"]["epcg_date"] == "2021-09-17"
 
+    def test_creating_an_export_invoice_resolves_epcg_from_the_chain(self, container, seed):
+        """Unlike the prefill above (which only feeds the form), the export
+        invoice itself now resolves EPCG the same way at create() time - not
+        from a posted field, which is ignored even if a tampered POST sends
+        one. export_under is likewise always ignored; the sheet's own
+        fallback to the live company scheme is what actually prints it."""
+        pi, po, pinv = self._chain(container, seed)
+        inv = make_export(container, seed, proforma_ids=[pi.id],
+                           export_under="TYPED OVERRIDE ATTEMPT",
+                           epcg_number="SHOULD BE IGNORED", epcg_date="2000-01-01")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.epcg_number == "2431000888"
+        assert got.epcg_date == "2021-09-17"
+        assert got.export_under is None
+
+    def test_no_linked_pi_leaves_epcg_blank(self, container, seed):
+        make_company(container, seed)
+        inv = make_export(container, seed)
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.epcg_number is None
+        assert got.epcg_date is None
+
     def test_imports_supplier_exemption_purchase_details(self, container, seed):
         pi, po, pinv = self._chain(container, seed, purchase_type="exemption")
         built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
@@ -553,9 +575,23 @@ class TestExportChildLists:
         assert cd["max_permitted_weight"] == "36000"
 
     def test_vessel_voyage_no_round_trip(self, container, seed):
-        inv = make_export(container, seed, vessel_voyage_no="MSC ANNA / VOY 214W")
+        inv = make_export(container, seed, vessel_name="MSC ANNA", voyage_no="VOY 214W")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.vessel_name == "MSC ANNA"
+        assert got.voyage_no == "VOY 214W"
+        # The computed property joins them for the printed cell.
         assert got.vessel_voyage_no == "MSC ANNA / VOY 214W"
+
+    def test_vessel_voyage_no_falls_back_to_whichever_half_is_typed(self, container, seed):
+        inv = make_export(container, seed, vessel_name="MSC ANNA")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.vessel_voyage_no == "MSC ANNA"
+        inv2 = make_export(container, seed, export_invoice_number="1000000099", voyage_no="VOY 214W")
+        got2 = container.export_invoice_service.get(inv2.id, seed.company_id)
+        assert got2.vessel_voyage_no == "VOY 214W"
+        inv3 = make_export(container, seed, export_invoice_number="1000000098")
+        got3 = container.export_invoice_service.get(inv3.id, seed.company_id)
+        assert got3.vessel_voyage_no is None
 
     def test_weight_totals_and_shipping_bill_round_trip(self, container, seed):
         inv = make_export(

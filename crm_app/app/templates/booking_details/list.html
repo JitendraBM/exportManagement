@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Booking Detail{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Master data</div>
+    <h1>Booking Detail</h1>
+  </div>
+  {% if current_user.is_admin %}
+  <div class="topbar-actions">
+    <a href="{{ url_for('booking_details.new_booking_detail') }}" class="btn btn-primary">+ New booking detail</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% if bookings %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Buyer</th>
+          <th>Booking no.</th>
+          <th>Vessel / Voyage</th>
+          <th>Transporter</th>
+          <th class="num">Containers</th>
+          <th>Created by</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for booking in bookings %}
+        <tr>
+          <td><strong>{{ booking.buyer_name }}</strong></td>
+          <td class="mono">{{ booking.booking_no or '—' }}</td>
+          <td class="text-sm">
+            {{ booking.vessel_name or '—' }}{% if booking.voyage_no %} / {{ booking.voyage_no }}{% endif %}
+          </td>
+          <td class="text-sm">{{ booking.transporter_name or '—' }}</td>
+          <td class="num">{{ booking.container_count or 0 }}</td>
+          <td class="text-sm">{{ booking.created_by_name }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            {% if current_user.is_admin %}
+            <a href="{{ url_for('booking_details.edit_booking_detail', booking_detail_id=booking.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('booking_details.delete_booking_detail', booking_detail_id=booking.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete this booking detail? This cannot be undone.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No booking details yet.
+    {% if current_user.is_admin %}<a href="{{ url_for('booking_details.new_booking_detail') }}">Add one →</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

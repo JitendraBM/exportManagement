@@ -61,9 +61,9 @@ CREATE TABLE IF NOT EXISTS leads (
     created_by          INTEGER NOT NULL REFERENCES users(id),  -- employee who filled it
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    is_converted         INTEGER NOT NULL DEFAULT 0,     -- becomes 1 once turned into a buyer/supplier/exporter
-    converted_client_type TEXT CHECK (converted_client_type IN ('Buyer', 'Supplier', 'Exporter')),
-    converted_client_id  INTEGER   -- id in whichever of buyers/suppliers/exporters converted_client_type names
+    is_converted         INTEGER NOT NULL DEFAULT 0,     -- becomes 1 once turned into a buyer/supplier
+    converted_client_type TEXT CHECK (converted_client_type IN ('Buyer', 'Supplier')),
+    converted_client_id  INTEGER   -- id in whichever of buyers/suppliers converted_client_type names
 );
 
 -- Contact persons for a lead. "Multiple allowed, one compulsory" is enforced
@@ -78,11 +78,10 @@ CREATE TABLE IF NOT EXISTS lead_contacts (
 );
 
 -- ============================================================
--- BUYERS / EXPORTERS  (a lead "graduates" into one of these once approved
--- by an admin. The two tables are deliberately identical in shape - Buyer
--- and Exporter are treated as having the same data/documentation structure
--- for now, per the same "generated from a lead" pattern as clients used to
--- work; they may diverge later once exporter document types are defined.)
+-- BUYERS  (a lead "graduates" into one of these once approved by an admin,
+-- per the same "generated from a lead" pattern as clients used to work.
+-- Exporter used to be a second, identically-shaped table here alongside
+-- Buyer - retired along with the rest of that party type.)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS buyers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,36 +107,11 @@ CREATE TABLE IF NOT EXISTS buyers (
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS exporters (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id          INTEGER NOT NULL REFERENCES tenants(id),
-    lead_id             INTEGER REFERENCES leads(id),   -- originating lead
-    company_name        TEXT NOT NULL,
-    phone               TEXT NOT NULL,
-    email               TEXT NOT NULL,
-    facebook            TEXT,
-    instagram           TEXT,
-    other_social        TEXT,
-    address             TEXT,
-    status              TEXT NOT NULL DEFAULT 'proforma_invoice_submission_pending'
-                        CHECK (status IN (
-                            'proforma_invoice_submission_pending',
-                            'purchase_order_submission_pending',
-                            'purchase_invoice_submission_pending',
-                            'export_invoice_submission_pending',
-                            'commercial_invoice_submission_pending'
-                        )),
-    created_by          INTEGER NOT NULL REFERENCES users(id),  -- admin who approved conversion
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Contact persons for a Buyer or Exporter - identical shape, so one table
--- (with a parent_type discriminator, same pattern as `communications` below)
--- serves both instead of two near-identical tables.
+-- Contact persons for a Buyer (parent_type discriminator kept for the same
+-- pattern as `communications` below, even with a single type using it now).
 CREATE TABLE IF NOT EXISTS party_contacts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_type TEXT NOT NULL CHECK (parent_type IN ('buyer', 'exporter')),
+    parent_type TEXT NOT NULL CHECK (parent_type IN ('buyer')),
     parent_id   INTEGER NOT NULL,
     name        TEXT NOT NULL,
     phone       TEXT,
@@ -148,10 +122,10 @@ CREATE TABLE IF NOT EXISTS party_contacts (
 -- ============================================================
 -- SUPPLIERS  (also "graduates" from an approved lead, but its data mirrors
 -- OUR COMPANY's own profile shape - GSTIN/PAN/IEC/bank/contacts - instead of
--- a buyer/exporter's lead-shaped fields. Company logo, BIN and LUT are
--- deliberately NOT carried (those are our_company-specific). Document types
--- for suppliers aren't defined yet - status is borrowed from the buyer/
--- exporter pipeline for now and may change once that's specified.)
+-- a buyer's lead-shaped fields. Company logo, BIN and LUT are deliberately
+-- NOT carried (those are our_company-specific). Document types for
+-- suppliers aren't defined yet - status is borrowed from the buyer
+-- pipeline for now and may change once that's specified.)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS suppliers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,9 +201,8 @@ CREATE TABLE IF NOT EXISTS transporters (
 );
 
 -- Same name/phone/email/primary shape as party_contacts, but its own table
--- rather than a fourth parent_type on that one: party_contacts' CHECK is
--- ('buyer', 'exporter') and widening it would mean rebuilding the table on
--- every existing database for no gain.
+-- rather than another parent_type on that one - keeps this table's rows
+-- physically separate from Buyer's.
 CREATE TABLE IF NOT EXISTS transporter_contacts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     transporter_id  INTEGER NOT NULL REFERENCES transporters(id) ON DELETE CASCADE,
@@ -241,16 +214,16 @@ CREATE TABLE IF NOT EXISTS transporter_contacts (
 
 -- ============================================================
 -- COMMUNICATIONS
--- One shared table for lead, buyer, supplier and exporter communications.
+-- One shared table for lead, buyer and supplier communications.
 -- `parent_type` + `parent_id` act as a polymorphic foreign key - this keeps
 -- one CommunicationRepository usable for every parent (Liskov substitution:
--- a Lead, Buyer, Supplier and Exporter are all "communicable" parents)
--- instead of four near-identical tables/classes. Scoped transitively via the
+-- a Lead, Buyer and Supplier are all "communicable" parents) instead of
+-- near-identical tables/classes per type. Scoped transitively via the
 -- parent's own company_id - no company_id column here.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS communications (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_type     TEXT NOT NULL CHECK (parent_type IN ('lead', 'buyer', 'supplier', 'exporter')),
+    parent_type     TEXT NOT NULL CHECK (parent_type IN ('lead', 'buyer', 'supplier')),
     parent_id       INTEGER NOT NULL,
     employee_id     INTEGER NOT NULL REFERENCES users(id),
     comm_date       TEXT NOT NULL,              -- date/time of the communication
@@ -261,15 +234,14 @@ CREATE TABLE IF NOT EXISTS communications (
 );
 
 -- ============================================================
--- PAYMENT HISTORY (buyer/supplier/exporter only)
+-- PAYMENT HISTORY (buyer/supplier only)
 -- `parent_type` + `parent_id` is the same polymorphic pattern as
--- `communications` - buyers/exporters/suppliers each have their own id
--- space, so a plain client_id would be ambiguous once more than one type
--- has data.
+-- `communications` - buyers/suppliers each have their own id space, so a
+-- plain client_id would be ambiguous once more than one type has data.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS payment_history (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_type         TEXT NOT NULL CHECK (parent_type IN ('buyer', 'supplier', 'exporter')),
+    parent_type         TEXT NOT NULL CHECK (parent_type IN ('buyer', 'supplier')),
     parent_id           INTEGER NOT NULL,
     account_name        TEXT NOT NULL,          -- which of our accounts received/sent it
     payment_datetime    TEXT NOT NULL,
@@ -281,13 +253,13 @@ CREATE TABLE IF NOT EXISTS payment_history (
 );
 
 -- ============================================================
--- DOCUMENTS (buyer/supplier/exporter only) - metadata for now; future plan
--- will move this to its own dedicated database once file storage is
--- introduced. Same parent_type/parent_id pattern as payment_history above.
+-- DOCUMENTS (buyer/supplier only) - metadata for now; future plan will move
+-- this to its own dedicated database once file storage is introduced. Same
+-- parent_type/parent_id pattern as payment_history above.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS documents (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_type     TEXT NOT NULL CHECK (parent_type IN ('buyer', 'supplier', 'exporter')),
+    parent_type     TEXT NOT NULL CHECK (parent_type IN ('buyer', 'supplier')),
     parent_id       INTEGER NOT NULL,
     document_name   TEXT NOT NULL,
     document_type   TEXT NOT NULL,      -- e.g. Proforma Invoice, Purchase Order...
@@ -408,6 +380,16 @@ CREATE TABLE IF NOT EXISTS misc_ports_of_loading (
 );
 CREATE INDEX IF NOT EXISTS idx_misc_pol_company ON misc_ports_of_loading(company_id);
 
+CREATE TABLE IF NOT EXISTS misc_container_types (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "Container type", e.g. 20FT FCL
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_container_types_company ON misc_container_types(company_id);
+
 -- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
 -- Company" area. Each permit records a stuffing-place name + place of
@@ -431,6 +413,55 @@ CREATE TABLE IF NOT EXISTS permits (
     updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_permits_company ON permits(company_id);
+
+-- ============================================================
+-- BOOKING DETAILS  (a standalone shipping-booking log under Master Data,
+-- with the same field shape as an Export Invoice's own "Container details"
+-- card - booking no./vessel/voyage, one transporter for the whole booking,
+-- the container type/count list, and one row per physical container - but
+-- not tied to any invoice, so a booking can be logged on its own.)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS booking_details (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id          INTEGER NOT NULL REFERENCES tenants(id),
+    buyer_id            INTEGER NOT NULL REFERENCES buyers(id),
+    booking_no          TEXT,
+    vessel_name         TEXT,
+    voyage_no           TEXT,
+    transporter_name    TEXT,       -- one transporter for every container below, same idea as ExportInvoice's
+    created_by          INTEGER NOT NULL REFERENCES users(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_booking_details_company ON booking_details(company_id);
+CREATE INDEX IF NOT EXISTS idx_booking_details_buyer ON booking_details(buyer_id);
+
+-- Container type/count list, e.g. "2 x 20FT FCL" - same shape as
+-- export_invoice_containers.
+CREATE TABLE IF NOT EXISTS booking_detail_containers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_detail_id   INTEGER NOT NULL REFERENCES booking_details(id) ON DELETE CASCADE,
+    sr_no               INTEGER NOT NULL,
+    container_type      TEXT NOT NULL,
+    container_count     INTEGER NOT NULL DEFAULT 0
+);
+
+-- One row per physical container - same field shape as an export invoice's
+-- own section-11B table (minus the fields that only ever come from a later
+-- process outside a booking, like gross/net weight and the VGM/E-seal pair).
+CREATE TABLE IF NOT EXISTS booking_detail_container_details (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_detail_id     INTEGER NOT NULL REFERENCES booking_details(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    container_type        TEXT,
+    container_no          TEXT,
+    max_permitted_weight  TEXT,
+    tare_weight_kg        REAL,
+    vehicle_no            TEXT,
+    lr_no                 TEXT,
+    line_seal_no          TEXT,
+    rfid_seal_no          TEXT
+);
 
 -- ============================================================
 -- PRODUCT CATALOG  (category / product / sub category / design:
@@ -882,7 +913,8 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     examination_date            TEXT,          -- defaults to the creation date
     location_code_08b           TEXT,          -- section 08B, free text
     booking_no                  TEXT,          -- shipping line booking number, printed above the 11B container table
-    vessel_voyage_no            TEXT,          -- vessel name + voyage number, printed in the "Vessel / Flight Name & No" cell of both sheets
+    vessel_name                 TEXT,          -- vessel or flight name, printed together with voyage_no in the "Vessel / Flight Name & No" cell of both sheets
+    voyage_no                   TEXT,          -- voyage number, printed alongside vessel_name in the same cell
     -- The four columns the Tax Invoice attachment owns. All are typed on that
     -- document's own edit form, never on the export invoice form, so they are
     -- written by ExportInvoiceRepository.update_tax_invoice_details rather
@@ -1166,7 +1198,6 @@ CREATE INDEX IF NOT EXISTS idx_comms_employee ON communications(employee_id);
 -- column yet when this script runs (see the v13 rebuild there).
 CREATE INDEX IF NOT EXISTS idx_party_contacts_parent ON party_contacts(parent_type, parent_id);
 CREATE INDEX IF NOT EXISTS idx_buyers_company ON buyers(company_id);
-CREATE INDEX IF NOT EXISTS idx_exporters_company ON exporters(company_id);
 CREATE INDEX IF NOT EXISTS idx_suppliers_company ON suppliers(company_id);
 CREATE INDEX IF NOT EXISTS idx_transporters_company ON transporters(company_id);
 CREATE INDEX IF NOT EXISTS idx_transporter_contacts_transporter ON transporter_contacts(transporter_id);

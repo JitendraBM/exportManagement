@@ -1,7 +1,7 @@
 """
 app/routes/transporters.py
 ---------------------------
-HTTP layer for Transporters - the haulier directory. Unlike Buyer/Exporter
+HTTP layer for Transporters - the haulier directory. Unlike Buyer
 (app/routes/parties.py) and Supplier (app/routes/suppliers.py), a transporter
 never comes from a lead and has no status pipeline or payments/
 communications/documents feed, so this is a plain admin-gated CRUD over a

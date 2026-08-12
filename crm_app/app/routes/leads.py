@@ -182,7 +182,6 @@ def add_communication(lead_id):
 
 _CONVERT_TARGETS = {
     "Buyer": ("buyer_service", "buyers.view_party"),
-    "Exporter": ("exporter_service", "exporters.view_party"),
     "Supplier": ("supplier_service", "suppliers.view_supplier"),
 }
 

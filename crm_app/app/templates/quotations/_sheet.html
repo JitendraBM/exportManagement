@@ -68,7 +68,6 @@
   .qt-sign-cell { height: 92px; padding: 4px 6px; }
   .qt-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
   .qt-stamp { text-align: right; }
-  .qt-footnote { font-size: 9px; padding: 2px 0 6px; }
   @media print {
     .qt-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
   }
@@ -187,8 +186,6 @@
       </tr>
     </tbody>
   </table>
-
-  <div class="qt-footnote">Price validity: {{ quotation.price_validity_days }} days from date of quotation.</div>
 
   <!-- Amount in words / charges -->
   {# The ladder builds up from FOB VALUE (goods total) through OTHER CHARGES /

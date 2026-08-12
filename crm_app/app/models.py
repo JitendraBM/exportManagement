@@ -95,7 +95,7 @@ class ContactPerson:
 @dataclass
 class Communication:
     id: Optional[int]
-    parent_type: str  # 'lead' | 'buyer' | 'supplier' | 'exporter'
+    parent_type: str  # 'lead' | 'buyer' | 'supplier'
     parent_id: int
     employee_id: int
     comm_date: str
@@ -152,7 +152,7 @@ CLIENT_STATUS_ADVANCE_ON = {
     "export_invoice": "commercial_invoice_submission_pending",
 }
 
-CLIENT_TYPES = ["Supplier", "Exporter", "Buyer"]  # the lead-conversion picker only; each type now lives in its own table
+CLIENT_TYPES = ["Supplier", "Buyer"]  # the lead-conversion picker only; each type now lives in its own table
 
 COMMUNICATION_MODES = ["WhatsApp", "WeChat", "Call", "Email", "In Person", "Other"]
 
@@ -188,7 +188,7 @@ class Lead:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_converted: bool = False
-    converted_client_type: Optional[str] = None  # 'Buyer' | 'Supplier' | 'Exporter' - says which table converted_client_id names
+    converted_client_type: Optional[str] = None  # 'Buyer' | 'Supplier' - says which table converted_client_id names
     converted_client_id: Optional[int] = None
     # populated by joins / repository convenience methods, not stored columns
     created_by_name: Optional[str] = None
@@ -222,12 +222,8 @@ class Lead:
 
 @dataclass
 class Party:
-    """A Buyer or Exporter record - the two are treated as having identical
-    data/documentation structure for now (see CLIENT_TYPES), so one
-    dataclass and one table shape serves both; only which table a row lives
-    in (`buyers` vs `exporters`) says which type it is. Supplier has since
-    diverged into its own shape (see Supplier below), modeled on OurCompany
-    instead of on a lead."""
+    """A Buyer record. Supplier has since diverged into its own shape (see
+    Supplier below), modeled on OurCompany instead of on a lead."""
     id: Optional[int]
     company_id: int
     lead_id: Optional[int]
@@ -275,7 +271,7 @@ class Supplier:
     a Party's lead-shaped fields - company logo, BIN and LUT are
     deliberately not carried. Document types for suppliers aren't defined
     yet; `status` is borrowed from the same CLIENT_STATUSES pipeline as
-    Buyer/Exporter for now and may change once that's specified."""
+    Buyer for now and may change once that's specified."""
     id: Optional[int]
     company_id: int
     lead_id: Optional[int]
@@ -318,7 +314,7 @@ class Supplier:
 
 @dataclass
 class Transporter:
-    """The haulier a consignment moves with. Unlike Buyer/Supplier/Exporter
+    """The haulier a consignment moves with. Unlike Buyer/Supplier
     this one never comes from a lead - nobody prospects a transporter, we
     just keep the registration details that have to be quoted on the
     paperwork - so there's no lead_id and no status pipeline, and none of
@@ -357,7 +353,7 @@ class Transporter:
 @dataclass
 class PaymentEntry:
     id: Optional[int]
-    parent_type: str  # 'buyer' | 'supplier' | 'exporter'
+    parent_type: str  # 'buyer' | 'supplier'
     parent_id: int
     account_name: str
     payment_datetime: str
@@ -386,7 +382,7 @@ class PaymentEntry:
 @dataclass
 class DocumentEntry:
     """Metadata-only placeholder for now (see the hint on the buyer/
-    supplier/exporter detail page) - a future update will auto-generate and
+    supplier detail page) - a future update will auto-generate and
     file-store these the same way Quotation already works. When that
     happens, give the new document type its own optional `lead_id` (like
     Quotation.lead_id) instead of a parent link - a party has no document
@@ -395,7 +391,7 @@ class DocumentEntry:
     created against the lead (before OR after conversion) stays visible on
     the party automatically, with nothing to copy or keep in sync by hand."""
     id: Optional[int]
-    parent_type: str  # 'buyer' | 'supplier' | 'exporter'
+    parent_type: str  # 'buyer' | 'supplier'
     parent_id: int
     document_name: str
     document_type: str
@@ -503,6 +499,26 @@ class MiscNatureOfContract:
 
 
 @dataclass
+class MiscContainerType:
+    """One row of the CONTAINER TYPE drop list maintained under
+    Administration -> Miscellaneous. Feeds the container-type dropdown on
+    the Booking Detail form (the master-data table Export Invoice's
+    Container details card is auto-filled from)."""
+    id: Optional[int]
+    company_id: int
+    name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @staticmethod
+    def from_row(row) -> "MiscContainerType":
+        return MiscContainerType(
+            id=row["id"], company_id=row["company_id"], name=row["name"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+@dataclass
 class MiscPortOfLoading:
     """One row of the PORT OF LOADING drop list maintained under
     Administration -> Miscellaneous: the port a shipment leaves from and that
@@ -535,6 +551,12 @@ DEFAULT_CURRENCIES = [
     ("USD", "$"), ("EUR", "€"), ("GBP", "£"),
     ("AED", "د.إ"), ("CNY", "¥"), ("SAR", "﷼"),
 ]
+
+# Same idea for CONTAINER TYPE: this used to be a hard-coded list feeding the
+# Booking Detail form's dropdown directly; now that it is an admin-managed
+# Miscellaneous list, this is what that dropdown falls back to until a
+# company adds its own rows, so nothing goes empty on upgrade.
+DEFAULT_CONTAINER_TYPES = ["20FT FCL", "40FT FCL", "20FT LCL", "40FT LCL", "40FT HC"]
 
 
 def currency_display(code: Optional[str], symbol: Optional[str],
@@ -591,6 +613,48 @@ class Permit:
             pdf_path=row["pdf_path"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+
+@dataclass
+class BookingDetail:
+    """A standalone shipping-booking record under Master Data, with the same
+    field shape as an Export Invoice's own "Container details" card - but
+    not tied to any invoice, so a booking can be logged on its own for a
+    buyer. containers/container_details are plain dicts, the same idiom
+    ExportInvoice uses for its own two child lists of the same shape."""
+    id: Optional[int]
+    company_id: int
+    buyer_id: int
+    created_by: int
+    booking_no: Optional[str] = None
+    vessel_name: Optional[str] = None
+    voyage_no: Optional[str] = None
+    transporter_name: Optional[str] = None  # one transporter for every container below
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    buyer_name: Optional[str] = None  # populated by joined queries only
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    container_count: Optional[int] = None  # list-view only: how many 11B rows this booking has
+    containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, max_permitted_weight, tare_weight_kg, vehicle_no, lr_no, line_seal_no, rfid_seal_no}]
+
+    @staticmethod
+    def from_row(row) -> "BookingDetail":
+        keys = row.keys()
+        return BookingDetail(
+            id=row["id"],
+            company_id=row["company_id"],
+            buyer_id=row["buyer_id"],
+            created_by=row["created_by"],
+            booking_no=row["booking_no"],
+            vessel_name=row["vessel_name"],
+            voyage_no=row["voyage_no"],
+            transporter_name=row["transporter_name"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            buyer_name=row["buyer_name"] if "buyer_name" in keys else None,
+            created_by_name=row["created_by_name"] if "created_by_name" in keys else None,
         )
 
 
@@ -1735,6 +1799,54 @@ class ProformaInvoice(CifMoneyLadder):
         like the base CifMoneyLadder."""
         return self.subtotal_usd
 
+    # ---- CIF-priced view of the goods lines -----------------------------
+    # The rate typed on the form is the FOB rate, but the rate the buyer reads
+    # on the sheet is the CIF rate: the charges between FOB and CIF are spread
+    # uniformly over the total ALT QTY and that per-unit share is added to
+    # every line. The exact inverse of ExportInvoice.fob_priced_lines.
+    @property
+    def charge_uplift_per_unit(self) -> float:
+        """One unit of ALT QTY's share of the FOB->CIF charges, rounded to the
+        two decimals a printed rate has room for - the closest printable
+        figure, not the exact share. What that rounding leaves over is
+        absorbed by the last printed line's Total; see printed_items."""
+        total_qty = sum(item.quantity_value or 0 for item in self.items)
+        return round(self.charges_total / total_qty, 2) if total_qty else 0.0
+
+    @property
+    def printed_items(self) -> List[ProformaInvoiceItem]:
+        """The goods lines as the sheet and the annexure print them: same
+        lines, but at the CIF rate, each line's Total worked out FROM that
+        printed rate. Copies - the stored items keep the FOB rate that was
+        typed.
+
+        A per-unit uplift rounded to the cent can't land the column exactly on
+        FOB + charges, and the few cents left over are absorbed into the LAST
+        line's Total rather than printed as a round-off row of their own: this
+        document is read by customs, which has no round-off line to accept,
+        while the FOB value it is all built up from is the figure the buyer
+        and the seller actually agreed. So the goods column always foots to
+        the CIF value exactly, and the ladder below it reconciles all the way
+        down to the agreed FOB value with no extra step to explain."""
+        uplift = self.charge_uplift_per_unit
+        printed = []
+        for item in self.items:
+            rate = round((item.price_usd or 0) + uplift, 2)
+            printed.append(replace(
+                item, price_usd=rate, total_usd=round(rate * (item.quantity_value or 0), 2),
+            ))
+        if printed:
+            leftover = round(self.cif_value_usd - sum(i.total_usd for i in printed), 2)
+            if leftover:
+                last = printed[-1]
+                printed[-1] = replace(last, total_usd=round(last.total_usd + leftover, 2))
+        return printed
+
+    @property
+    def printed_goods_total(self) -> float:
+        """What the printed goods column adds up to - the CIF value."""
+        return round(sum(item.total_usd for item in self.printed_items), 2)
+
 
 EXPORT_TAX_MODE_IGST = "igst"
 EXPORT_TAX_MODE_LUT = "lut"
@@ -1865,7 +1977,10 @@ class ExportInvoice(CifMoneyLadder):
     examination_date: Optional[str] = None
     location_code_08b: Optional[str] = None
     booking_no: Optional[str] = None
-    vessel_voyage_no: Optional[str] = None  # printed in the "Vessel / Flight Name & No" cell of both sheets
+    vessel_name: Optional[str] = None  # vessel or flight name
+    voyage_no: Optional[str] = None
+    # Both print together in the "Vessel / Flight Name & No" cell of both
+    # sheets - see ExportInvoice.vessel_voyage_no below.
     eway_bill_no: Optional[str] = None  # printed on the Tax Invoice attachment only
     eway_bill_date: Optional[str] = None
     # The Tax Invoice attachment's own number/date. Blank means "the export
@@ -1908,7 +2023,7 @@ class ExportInvoice(CifMoneyLadder):
     items: List[ExportInvoiceItem] = field(default_factory=list)
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
-    container_details: List[dict] = field(default_factory=list)  # [{container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
+    container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
@@ -1967,7 +2082,8 @@ class ExportInvoice(CifMoneyLadder):
             examination_date=g("examination_date"),
             location_code_08b=g("location_code_08b"),
             booking_no=g("booking_no"),
-            vessel_voyage_no=g("vessel_voyage_no"),
+            vessel_name=g("vessel_name"),
+            voyage_no=g("voyage_no"),
             eway_bill_no=g("eway_bill_no"),
             eway_bill_date=g("eway_bill_date"),
             tax_invoice_number=g("tax_invoice_number"),
@@ -2181,6 +2297,16 @@ class ExportInvoice(CifMoneyLadder):
     def tax_invoice_date_printed(self) -> str:
         """As above, for the Invoice Date cell."""
         return self.tax_invoice_date or self.invoice_date
+
+    @property
+    def vessel_voyage_no(self) -> Optional[str]:
+        """What prints in the "Vessel / Flight Name & No" cell of both the
+        export invoice and export packing list sheets - vessel_name and
+        voyage_no joined with a slash, same as the single field they used to
+        be typed as one. Falls back to whichever half is actually filled in,
+        and to None (prints as N/A on the sheets) when both are blank."""
+        parts = [p for p in (self.vessel_name, self.voyage_no) if p and p.strip()]
+        return " / ".join(parts) if parts else None
 
     # ---- VGM declaration defaults ---------------------------------------
     # The manual-entry cells are optional; each falls back to what the app

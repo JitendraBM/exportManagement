@@ -29,7 +29,7 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, Transporter, Permit, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, DEFAULT_CURRENCIES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Transporter, Permit, BookingDetail, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, DEFAULT_CURRENCIES, DEFAULT_CONTAINER_TYPES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
@@ -47,8 +47,8 @@ from app.repositories import (
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository,
+    PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository,
 )
 from app.database import Database, SCHEMA_VERSION
 from app.utils import drops_insurance, drops_sea_freight, is_fob_terms
@@ -184,10 +184,12 @@ class MiscListService:
 
     def __init__(self, currency_repo: MiscCurrencyRepository,
                  nature_of_contract_repo: Optional[MiscNatureOfContractRepository] = None,
-                 port_of_loading_repo: Optional[MiscPortOfLoadingRepository] = None):
+                 port_of_loading_repo: Optional[MiscPortOfLoadingRepository] = None,
+                 container_type_repo: Optional[MiscContainerTypeRepository] = None):
         self.currency_repo = currency_repo
         self.nature_of_contract_repo = nature_of_contract_repo
         self.port_of_loading_repo = port_of_loading_repo
+        self.container_type_repo = container_type_repo
 
     # ---- reads --------------------------------------------------
     def list_currencies(self, company_id: int) -> List[MiscCurrency]:
@@ -346,6 +348,54 @@ class MiscListService:
         self.port_of_loading_repo.delete(entry_id)
         return entry
 
+    # ---- container type --------------------------------------------------
+    def list_container_types(self, company_id: int) -> List[MiscContainerType]:
+        """Only what the company actually saved - what the Miscellaneous
+        page manages."""
+        return self.container_type_repo.list_all(company_id)
+
+    def container_type_options(self, company_id: int) -> List[MiscContainerType]:
+        """What the Booking Detail dropdown shows: the saved list, or the
+        built-in fallback (the list this used to be hard-coded to) while it
+        is still empty."""
+        stored = self.container_type_repo.list_all(company_id)
+        if stored:
+            return stored
+        return [MiscContainerType(id=None, company_id=company_id, name=name)
+                for name in DEFAULT_CONTAINER_TYPES]
+
+    def get_container_type(self, entry_id: int, company_id: int) -> MiscContainerType:
+        entry = self.container_type_repo.get_by_id(entry_id)
+        if not entry or entry.company_id != company_id:
+            raise NotFoundError(f"Container type #{entry_id} not found.")
+        return entry
+
+    def _clean_container_type(self, current_user: User, fields: dict) -> MiscContainerType:
+        name = (fields.get("name") or "").strip()
+        if not name:
+            raise ValidationError("Name is compulsory.")
+        return MiscContainerType(id=None, company_id=current_user.company_id, name=name)
+
+    def create_container_type(self, current_user: User, fields: dict) -> MiscContainerType:
+        entry = self._clean_container_type(current_user, fields)
+        if self.container_type_repo.find_by_name(current_user.company_id, entry.name):
+            raise ValidationError(f"'{entry.name}' is already on the container type list.")
+        return self.container_type_repo.create(entry)
+
+    def update_container_type(self, current_user: User, entry_id: int, fields: dict) -> MiscContainerType:
+        self.get_container_type(entry_id, current_user.company_id)
+        entry = self._clean_container_type(current_user, fields)
+        clash = self.container_type_repo.find_by_name(current_user.company_id, entry.name)
+        if clash and clash.id != entry_id:
+            raise ValidationError(f"'{entry.name}' is already on the container type list.")
+        self.container_type_repo.update(entry_id, entry)
+        return self.get_container_type(entry_id, current_user.company_id)
+
+    def delete_container_type(self, current_user: User, entry_id: int) -> MiscContainerType:
+        entry = self.get_container_type(entry_id, current_user.company_id)
+        self.container_type_repo.delete(entry_id)
+        return entry
+
 
 # ============================================================
 # COMMUNICATION SERVICE (shared by leads and clients)
@@ -482,9 +532,10 @@ class LeadService:
 
 
 # ============================================================
-# PARTY SERVICE (Buyer / Exporter - identical behaviour; one instance per
-# type, constructed with that type's repo and parent_type. Supplier has its
-# own SupplierService below since its shape has diverged.)
+# PARTY SERVICE (currently just Buyer - constructed with that type's repo
+# and parent_type, generic enough to serve more than one type again if
+# another one shows up. Supplier has its own SupplierService below since
+# its shape has diverged.)
 # ============================================================
 class PartyService:
     def __init__(self, party_repo: PartyRepositoryBase, parent_type: str, lead_repo: LeadRepositoryBase,
@@ -495,7 +546,7 @@ class PartyService:
                  packing_list_repo: Optional[PackingListRepository] = None,
                  purchase_order_repo: Optional[PurchaseOrderRepository] = None):
         self.party_repo = party_repo
-        self.parent_type = parent_type  # 'buyer' | 'exporter'
+        self.parent_type = parent_type  # 'buyer'
         self.lead_repo = lead_repo
         self.comm_service = comm_service
         self.payment_repo = payment_repo
@@ -508,7 +559,7 @@ class PartyService:
 
     @property
     def client_type(self) -> str:
-        return self.parent_type.capitalize()  # 'Buyer' | 'Exporter' - matches leads.converted_client_type
+        return self.parent_type.capitalize()  # 'Buyer' - matches leads.converted_client_type
 
     # ---- lead -> party conversion (admin only) --------------------------------------------------
     def convert_lead(self, lead_id: int, admin_user: User) -> Party:
@@ -693,7 +744,7 @@ class PartyService:
 # modeled on CompanyService but per-supplier rather than per-tenant, since a
 # company can have many suppliers. Document types for suppliers aren't
 # defined yet, so payments/documents/communications reuse the same shared
-# satellite tables as Buyer/Exporter, tagged parent_type='supplier'.)
+# satellite tables as Buyer, tagged parent_type='supplier'.)
 # ============================================================
 class SupplierService:
     def __init__(self, supplier_repo: SupplierRepositoryBase, lead_repo: LeadRepositoryBase,
@@ -860,8 +911,8 @@ class SupplierService:
     def document_feed(self, supplier: Supplier) -> List[dict]:
         """Manually recorded documents plus every Purchase Order where this
         supplier was picked as the seller - a Supplier's natural link to POs
-        is seller_supplier_id, not an originating lead (unlike Buyer/
-        Exporter, whose auto-generated documents are found via lead_id)."""
+        is seller_supplier_id, not an originating lead (unlike Buyer,
+        whose auto-generated documents are found via lead_id)."""
         rows = [
             {
                 "name": d.document_name, "type": d.document_type, "date": d.document_date,
@@ -887,7 +938,7 @@ class TransporterService:
     """The haulier directory. The one party type with no lead behind it and
     no status pipeline (see models.Transporter), so this service is a plain
     company-scoped CRUD: reads for anyone signed in, writes admin-only, in
-    line with how Buyer/Supplier/Exporter gate their own edits."""
+    line with how Buyer/Supplier gate their own edits."""
 
     def __init__(self, transporter_repo: TransporterRepositoryBase):
         self.transporter_repo = transporter_repo
@@ -959,14 +1010,14 @@ class TransporterService:
 
 def advance_client_status(party_repos: dict, lead_repo: LeadRepositoryBase,
                            lead_id: Optional[int], document_type: str) -> None:
-    """Moves the buyer/supplier/exporter tied to `lead_id` forward to
-    whatever CLIENT_STATUSES stage becomes pending once `document_type` has
-    just been generated - e.g. generating a Proforma Invoice clears
+    """Moves the buyer/supplier tied to `lead_id` forward to whatever
+    CLIENT_STATUSES stage becomes pending once `document_type` has just
+    been generated - e.g. generating a Proforma Invoice clears
     "proforma invoice submission pending" and lands on "purchase order
     submission pending". Every document service calls this same helper
     after create/update; adding a new document type only means registering
     it in models.CLIENT_STATUS_ADVANCE_ON, no other wiring needed.
-    `party_repos` maps 'Buyer'/'Supplier'/'Exporter' -> that type's repo, so
+    `party_repos` maps 'Buyer'/'Supplier' -> that type's repo, so
     the right table can be looked up once `lead.converted_client_type` is
     known. No-op for document types that don't map to a stage (e.g. Packing
     List), leads that haven't converted yet, or when the record is already
@@ -1200,18 +1251,123 @@ class PermitService:
         self.permit_repo.delete(permit_id)
 
 
+class BookingDetailService:
+    """A standalone shipping-booking log under Master Data, with the same
+    field shape as an Export Invoice's own "Container details" card
+    (booking no. / vessel / voyage, one transporter for the whole booking,
+    the container type/count list, and one row per physical container) -
+    but owned directly by a buyer rather than any invoice, so a booking can
+    be logged on its own. Admin-only, like the rest of the master-data
+    directory entities (Transporter, Buyer); the service still keeps
+    everything company-scoped."""
+
+    def __init__(self, booking_detail_repo: BookingDetailRepository, buyer_repo: PartyRepositoryBase):
+        self.booking_detail_repo = booking_detail_repo
+        self.buyer_repo = buyer_repo
+
+    # ---- reads --------------------------------------------------
+    def get(self, booking_detail_id: int, company_id: int) -> BookingDetail:
+        booking = self.booking_detail_repo.get_by_id(booking_detail_id)
+        if not booking or booking.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's booking exists.
+            raise NotFoundError(f"Booking detail #{booking_detail_id} not found.")
+        return booking
+
+    def list_all(self, company_id: int) -> List[BookingDetail]:
+        return self.booking_detail_repo.list_all(company_id)
+
+    # ---- validation --------------------------------------------------
+    def _build(self, current_user: User, fields: dict) -> BookingDetail:
+        try:
+            buyer_id = int(fields.get("buyer_id") or 0)
+        except (TypeError, ValueError):
+            buyer_id = 0
+        buyer = self.buyer_repo.get_by_id(buyer_id) if buyer_id else None
+        if not buyer or buyer.company_id != current_user.company_id:
+            raise ValidationError("Pick a buyer for this booking.")
+
+        return BookingDetail(
+            id=None, company_id=current_user.company_id, buyer_id=buyer_id,
+            created_by=current_user.id,
+            booking_no=(fields.get("booking_no") or "").strip() or None,
+            vessel_name=(fields.get("vessel_name") or "").strip() or None,
+            voyage_no=(fields.get("voyage_no") or "").strip() or None,
+            transporter_name=(fields.get("transporter_name") or "").strip() or None,
+        )
+
+    @staticmethod
+    def _clean_containers(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            ctype = (r.get("container_type") or "").strip()
+            try:
+                count = int(r.get("container_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not ctype and count <= 0:
+                continue
+            rows.append({"container_type": ctype, "container_count": max(count, 0)})
+        return rows
+
+    @staticmethod
+    def _clean_container_details(raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            values = {k: (r.get(k) or "").strip() or None
+                      for k in ("container_type", "container_no", "max_permitted_weight", "vehicle_no", "lr_no",
+                                "line_seal_no", "rfid_seal_no")}
+            tare_raw = (r.get("tare_weight_kg") or "").strip()
+            if tare_raw:
+                try:
+                    values["tare_weight_kg"] = float(tare_raw)
+                except ValueError:
+                    raise ValidationError("Container details: tare weight must be a number.")
+            else:
+                values["tare_weight_kg"] = None
+            if any(v is not None for v in values.values()):
+                rows.append(values)
+        return rows
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, containers: list, container_details: list) -> BookingDetail:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can add a booking detail.")
+        booking = self._build(current_user, fields)
+        booking.containers = self._clean_containers(containers)
+        booking.container_details = self._clean_container_details(container_details)
+        created = self.booking_detail_repo.create(booking)
+        return created
+
+    def update(self, booking_detail_id: int, current_user: User, fields: dict,
+               containers: list, container_details: list) -> BookingDetail:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can edit a booking detail.")
+        self.get(booking_detail_id, current_user.company_id)  # 404s if missing/another company's
+        booking = self._build(current_user, fields)
+        booking.containers = self._clean_containers(containers)
+        booking.container_details = self._clean_container_details(container_details)
+        self.booking_detail_repo.update(booking_detail_id, booking)
+        return self.get(booking_detail_id, current_user.company_id)
+
+    def delete(self, booking_detail_id: int, current_user: User) -> BookingDetail:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can delete a booking detail.")
+        booking = self.get(booking_detail_id, current_user.company_id)
+        self.booking_detail_repo.delete(booking_detail_id)
+        return booking
+
+
 # ============================================================
 # STATS SERVICE (powers the admin dashboard)
 # ============================================================
 class StatsService:
     def __init__(self, user_repo: UserRepositoryBase, lead_repo: LeadRepositoryBase,
                  comm_repo: CommunicationRepository, buyer_repo: PartyRepositoryBase,
-                 exporter_repo: PartyRepositoryBase, supplier_repo: SupplierRepositoryBase):
+                 supplier_repo: SupplierRepositoryBase):
         self.user_repo = user_repo
         self.lead_repo = lead_repo
         self.comm_repo = comm_repo
         self.buyer_repo = buyer_repo
-        self.exporter_repo = exporter_repo
         self.supplier_repo = supplier_repo
 
     def employee_performance(self, company_id: int) -> List[dict]:
@@ -1233,11 +1389,10 @@ class StatsService:
 
     def overview_counts(self, company_id: int) -> dict:
         all_leads = self.lead_repo.list_all(company_id)
-        # "Clients" on the dashboard now spans all three separate entities -
-        # a buyer, a supplier and an exporter each still count as one client.
+        # "Clients" on the dashboard spans both separate entities - a buyer
+        # and a supplier each still count as one client.
         all_clients = (
             self.buyer_repo.list_all(company_id)
-            + self.exporter_repo.list_all(company_id)
             + self.supplier_repo.list_all(company_id)
         )
         status_breakdown = {}
@@ -1281,8 +1436,6 @@ class ReportService:
                    (SELECT
                         (SELECT COUNT(*) FROM buyers b WHERE b.lead_id IN (SELECT id FROM leads WHERE created_by = u.id)
                            AND b.company_id = ? AND date(b.created_at) BETWEEN date(?) AND date(?)) +
-                        (SELECT COUNT(*) FROM exporters e WHERE e.lead_id IN (SELECT id FROM leads WHERE created_by = u.id)
-                           AND e.company_id = ? AND date(e.created_at) BETWEEN date(?) AND date(?)) +
                         (SELECT COUNT(*) FROM suppliers s WHERE s.lead_id IN (SELECT id FROM leads WHERE created_by = u.id)
                            AND s.company_id = ? AND date(s.created_at) BETWEEN date(?) AND date(?))
                    ) AS clients_converted
@@ -1292,7 +1445,7 @@ class ReportService:
             """,
             (company_id, start_date, end_date, start_date, end_date,
              company_id, start_date, end_date, company_id, start_date, end_date,
-             company_id, start_date, end_date, company_id),
+             company_id),
         )
         return [dict(r) for r in rows]
 
@@ -1303,10 +1456,9 @@ class ReportService:
                WHERE date(ph.payment_datetime) BETWEEN date(?) AND date(?)
                  AND (
                    (ph.parent_type = 'buyer' AND ph.parent_id IN (SELECT id FROM buyers WHERE company_id = ?))
-                   OR (ph.parent_type = 'exporter' AND ph.parent_id IN (SELECT id FROM exporters WHERE company_id = ?))
                    OR (ph.parent_type = 'supplier' AND ph.parent_id IN (SELECT id FROM suppliers WHERE company_id = ?))
                  )""",
-            (start_date, end_date, company_id, company_id, company_id),
+            (start_date, end_date, company_id, company_id),
         )
         return dict(row) if row else {"payment_count": 0, "total_inr": 0}
 
@@ -2189,7 +2341,7 @@ class ProformaInvoiceService:
         self.lead_repo = lead_repo
         self.quotation_repo = quotation_repo
         self.version_service = version_service
-        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ..., 'Exporter': ...} for advance_client_status
+        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ...} for advance_client_status
 
     # ---- reads --------------------------------------------------
     def get(self, invoice_id: int, company_id: int) -> ProformaInvoice:
@@ -2527,7 +2679,7 @@ class PurchaseOrderService:
         self.lead_repo = lead_repo
         self.proforma_invoice_repo = proforma_invoice_repo
         self.version_service = version_service
-        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ..., 'Exporter': ...} for advance_client_status
+        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ...} for advance_client_status
         self.supplier_repo = supplier_repo  # for validating seller_supplier_id belongs to this company
         self.company_repo = company_repo  # our own GSTIN, for the intra/inter-state tax split
         # Optional: when present, a new PO's product lines are cut down to
@@ -2889,7 +3041,7 @@ class PurchaseInvoiceService:
         self.lead_repo = lead_repo
         self.purchase_order_repo = purchase_order_repo
         self.version_service = version_service
-        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ..., 'Exporter': ...} for advance_client_status
+        self.party_repos = party_repos  # {'Buyer': ..., 'Supplier': ...} for advance_client_status
         self.supplier_repo = supplier_repo  # for validating seller_supplier_id belongs to this company
         self.upload_folder = upload_folder
         self.allowed_extensions = allowed_extensions
@@ -3462,6 +3614,29 @@ class ExportInvoiceService:
             raise ValidationError("At least one product line is compulsory.")
         return items
 
+    def _resolve_epcg(self, proforma_ids: List[int], company_id: int):
+        """EPCG licence no./date are never typed on the export invoice itself -
+        they're read off whichever purchase invoice under the linked
+        proforma invoices' purchase orders has one, same chain (and same
+        first-match-wins rule) build_prefill_from_proformas walks for the
+        "Load from PIs" prefill. Recomputed on every save rather than
+        trusting a posted value, so it can't go stale if the purchase-side
+        data changes after the export invoice was first created."""
+        epcg_number = epcg_date = None
+        for pid in proforma_ids or []:
+            pi = self.proforma_invoice_repo.get_by_id(pid)
+            if not pi or pi.company_id != company_id:
+                continue
+            for po in self.purchase_order_repo.list_for_proforma(pi.id):
+                if po.company_id != company_id:
+                    continue
+                for pinv in self.purchase_invoice_repo.list_for_purchase_order(po.id):
+                    if pinv.company_id == company_id and not epcg_number and pinv.epcg_number:
+                        epcg_number, epcg_date = pinv.epcg_number, pinv.epcg_date
+            if epcg_number:
+                break
+        return epcg_number, epcg_date
+
     def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem],
                        invoice_id: Optional[int] = None) -> ExportInvoice:
         export_invoice_number = self._clean_export_invoice_number(
@@ -3501,6 +3676,7 @@ class ExportInvoiceService:
         # below) so the linked PIs' currency is known before the currency
         # resolution just below needs it.
         proforma_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
+        epcg_number, epcg_date = self._resolve_epcg(proforma_ids, current_user.company_id)
 
         tax_mode = fields.get("tax_mode") if fields.get("tax_mode") in dict(EXPORT_TAX_MODES) else EXPORT_TAX_MODE_IGST
         loading_type = fields.get("loading_type") if fields.get("loading_type") in dict(EXPORT_LOADING_TYPES) else EXPORT_LOADING_SELF_SEALING
@@ -3553,9 +3729,14 @@ class ExportInvoiceService:
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             buyer_order_no=(fields.get("buyer_order_no") or "").strip() or None,
             buyer_order_date=(fields.get("buyer_order_date") or "").strip() or None,
-            export_under=(fields.get("export_under") or "").strip() or None,
-            epcg_number=(fields.get("epcg_number") or "").strip() or None,
-            epcg_date=(fields.get("epcg_date") or "").strip() or None,
+            # Government scheme is never stored per-invoice any more - the
+            # printed sheets already fall back to OurCompany.government_schemes
+            # whenever export_under is blank (see _sheet.html), so leaving it
+            # None here means every sheet always shows the company's current
+            # scheme, live, with no per-invoice copy to go stale.
+            export_under=None,
+            epcg_number=epcg_number,
+            epcg_date=epcg_date,
             loading_type=loading_type, tax_mode=tax_mode,
             exchange_rate=_float("exchange_rate", 0),
             sea_freight=0 if no_sea_freight else _float("sea_freight", 0),
@@ -3576,7 +3757,8 @@ class ExportInvoiceService:
             examination_date=(fields.get("examination_date") or "").strip() or None,
             location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
             booking_no=(fields.get("booking_no") or "").strip() or None,
-            vessel_voyage_no=(fields.get("vessel_voyage_no") or "").strip() or None,
+            vessel_name=(fields.get("vessel_name") or "").strip() or None,
+            voyage_no=(fields.get("voyage_no") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
             issuing_authority_address=(fields.get("issuing_authority_address") or "").strip() or None,
             permission_no=(fields.get("permission_no") or "").strip() or None,
@@ -3640,11 +3822,18 @@ class ExportInvoiceService:
         # (unlike tare_weight_kg and the other typed fields above), so they
         # default to None here and update() carries the stored values forward
         # by row position - see the comment on that constant.
+        #
+        # transporter_name is excluded from the "is this row blank" check
+        # below: the form now sends one invoice-level transporter stamped
+        # onto every row (see routes/export_invoices.py _extract_container_details),
+        # so a genuinely empty placeholder row (nothing else typed) must
+        # still be dropped even though it carries that stamped value.
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("container_no", "line_seal_no", "rfid_seal_no", "vehicle_no",
-                                "lr_no", "transporter_name", "max_permitted_weight")}
+                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no", "vehicle_no",
+                                "lr_no", "max_permitted_weight")}
+            transporter_name = (r.get("transporter_name") or "").strip() or None
             tare_raw = (r.get("tare_weight_kg") or "").strip()
             if tare_raw:
                 try:
@@ -3656,6 +3845,7 @@ class ExportInvoiceService:
             for key in ExportInvoiceService.CARRIED_CONTAINER_FIELDS:
                 values[key] = None
             if any(v is not None for v in values.values()):
+                values["transporter_name"] = transporter_name
                 rows.append(values)
         return rows
 

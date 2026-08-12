@@ -18,7 +18,7 @@ import pytest
 class TestAppBoots:
     def test_create_app_registers_all_blueprints(self, app):
         expected = {
-            "auth", "dashboard", "leads", "buyers", "suppliers", "exporters", "admin", "company",
+            "auth", "dashboard", "leads", "buyers", "suppliers", "admin", "company",
             "reports", "products", "quotations", "proforma_invoices",
             "purchase_orders", "packing_lists", "profile", "backup",
         }

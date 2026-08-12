@@ -22,13 +22,21 @@
       <nav class="sidebar-nav">
       <div class="nav-section-label">Workspace</div>
       <a class="nav-link {{ 'active' if request.endpoint == 'dashboard.home' }}" href="{{ url_for('dashboard.home') }}">📊 Dashboard</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('leads.') }}" href="{{ url_for('leads.list_leads') }}">🧭 Leads</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('buyers.') }}" href="{{ url_for('buyers.list_parties') }}">🤝 Buyer</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('suppliers.') }}" href="{{ url_for('suppliers.list_suppliers') }}">🏭 Supplier</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('exporters.') }}" href="{{ url_for('exporters.list_parties') }}">🚢 Exporter</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('transporters.') }}" href="{{ url_for('transporters.list_transporters') }}">🚚 Transporter</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('products.') }}" href="{{ url_for('products.list_products') }}">📦 Products</a>
-      <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('inventory.') }}" href="{{ url_for('inventory.list_inventory') }}">📊 Inventory</a>
+
+      {% set master_prefixes = ['leads.', 'buyers.', 'suppliers.', 'transporters.', 'products.', 'inventory.', 'booking_details.'] %}
+      {% set master_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in master_prefixes %}
+      <details class="nav-dropdown" {{ 'open' if master_open }}>
+        <summary class="nav-link nav-dropdown-summary {{ 'active' if master_open }}">🗂️ Master Data</summary>
+        <div class="nav-dropdown-panel">
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('leads.') }}" href="{{ url_for('leads.list_leads') }}">🧭 Leads</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('buyers.') }}" href="{{ url_for('buyers.list_parties') }}">🤝 Buyer</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('suppliers.') }}" href="{{ url_for('suppliers.list_suppliers') }}">🏭 Supplier</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('transporters.') }}" href="{{ url_for('transporters.list_transporters') }}">🚚 Transporter</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('products.') }}" href="{{ url_for('products.list_products') }}">📦 Products</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('inventory.') }}" href="{{ url_for('inventory.list_inventory') }}">📊 Inventory</a>
+          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('booking_details.') }}" href="{{ url_for('booking_details.list_booking_details') }}">🚢 Booking Detail</a>
+        </div>
+      </details>
 
       {% set doc_prefixes = ['quotations.', 'proforma_invoices.', 'purchase_orders.', 'purchase_invoices.', 'export_invoices.', 'export_packing_lists.', 'export_annexures.', 'tax_invoices.', 'bl_drafts.', 'vgm_attachments.', 'vgm_declarations.', 'eseals.', 'eway_bills.', 'commercial_invoices.', 'commercial_packing_lists.', 'customer_invoices.', 'packing_lists.'] %}
       {% set doc_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in doc_prefixes %}

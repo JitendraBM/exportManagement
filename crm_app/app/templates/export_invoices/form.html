@@ -21,6 +21,15 @@
   <div class="card">
     <div class="card-header"><h3>Reference proforma invoices</h3></div>
     <div class="field">
+      <label for="buyer_select">Buyer <span class="text-soft text-sm">(pick a buyer to narrow the proforma invoice list below to just theirs — auto-selected when a PI is already ticked)</span></label>
+      <select id="buyer_select">
+        <option value="">— All buyers —</option>
+        {% for b in buyers %}
+        <option value="{{ b.id }}" data-company-key="{{ b.lead_id or ((b.company_name or '') | lower | trim) }}">{{ b.company_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
       <label>Proforma invoices under this export invoice <span class="text-soft text-sm">(tick one or more — order doesn't matter)</span></label>
       {% set selected_ids = (data.proforma_invoice_ids if data and data.proforma_invoice_ids else (invoice.proforma_invoice_ids if invoice else [])) %}
       {% set selected_str = selected_ids | map('string') | list %}
@@ -36,7 +45,7 @@
         <div class="text-soft text-sm">No proforma invoices yet.</div>
         {% endfor %}
       </div>
-      <p class="hint">One export invoice covers a single buyer — ticking a PI narrows the list above to that same buyer's other PIs; untick all to pick a different buyer.</p>
+      <p class="hint">One export invoice covers a single buyer — picking a buyer above (or ticking a PI) narrows the list above to that same buyer's other PIs; clear the buyer to see everyone again.</p>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load goods &amp; details from selected PIs</button>
     <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. Only the fields that come from the PIs are replaced &mdash; anything else you've already typed (invoice no., permit details, containers) is kept, so re-loading after a wrong pick is safe.</p>
@@ -137,7 +146,7 @@
       <div class="field"><label for="shipping_bill_date">Shipping bill date</label><input type="date" id="shipping_bill_date" name="shipping_bill_date" value="{{ (data.shipping_bill_date | default('', true))[:10] }}"></div>
     </div>
     <div class="field">
-      <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — prefills the Permit Details section below from Our Company permits)</span></label>
+      <label for="permit_select">Permit no. <span class="text-soft text-sm">(optional — fills the invoice's permit details in from Our Company permits; printed on the export invoice, packing list and Annexure-C)</span></label>
       <select id="permit_select">
         <option value="">— Select a permit —</option>
         {% for p in permits %}
@@ -156,38 +165,25 @@
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-header"><h3>Permit Details</h3></div>
-    <div class="form-row">
-      <div class="field"><label for="examination_date">Date of examination</label><input type="date" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}"></div>
-      <div class="field"><label for="location_code_08b">Location code (08B)</label><input type="text" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="manufacturer_name">Manufacturer name</label><input type="text" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="2">{{ data.manufacturer_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="issuing_authority">Issuing authority</label><input type="text" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="issuing_authority_address">Issuing authority address</label><textarea id="issuing_authority_address" name="issuing_authority_address" rows="2">{{ data.issuing_authority_address | default('', true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="permission_no">Permission no.</label><input type="text" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}"></div>
-      <div class="field"><label for="permission_date">Permission date</label><input type="date" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}"></div>
-      <div class="field">
-        <label for="permission_expiry">Permission expiry</label>
-        {% set is_one_time = data.permission_is_one_time in (true, 1, '1') %}
-        <input type="date" id="permission_expiry" name="permission_expiry" value="{{ (data.permission_expiry | default('', true))[:10] }}" {{ 'disabled' if is_one_time }}>
-        <input type="hidden" id="permission_is_one_time" name="permission_is_one_time" value="{{ '1' if is_one_time else '0' }}">
-        <label class="text-sm text-soft" style="display:flex; align-items:center; gap:.3rem; margin-top:.3rem;">
-          <input type="checkbox" id="permission_is_one_time_toggle" {{ 'checked' if is_one_time }}> One time (no expiry)
-        </label>
-      </div>
-    </div>
-    <div class="field">
-      <label for="stuffing_location">Stuff at <span class="text-soft text-sm">(prefilled from the permit above; printed on the export packing list and as the Annexure-C's Factory/Place of Stuffing)</span></label>
-      <textarea id="stuffing_location" name="stuffing_location" rows="2">{{ data.stuffing_location | default('', true) }}</textarea>
-    </div>
-  </div>
+  {# Permit Details used to be its own visible card - every field in it comes
+     from the permit picked above (or, for examination_date/location_code_08b,
+     was typed once and rarely touched again), so it's now all hidden inputs:
+     the permit_select JS handler below still fills them in on pick, they
+     still round-trip on every save (so re-saving the form without touching
+     the dropdown can't blank them), and they still print on the invoice,
+     packing list and Annexure-C sheets exactly as before. #}
+  {% set is_one_time = data.permission_is_one_time in (true, 1, '1') %}
+  <input type="hidden" id="examination_date" name="examination_date" value="{{ (data.examination_date | default('', true))[:10] if data and data.examination_date else (invoice.examination_date[:10] if invoice and invoice.examination_date else today) }}">
+  <input type="hidden" id="location_code_08b" name="location_code_08b" value="{{ data.location_code_08b | default('', true) }}">
+  <input type="hidden" id="manufacturer_name" name="manufacturer_name" value="{{ data.manufacturer_name | default('', true) }}">
+  <input type="hidden" id="manufacturer_address" name="manufacturer_address" value="{{ data.manufacturer_address | default('', true) }}">
+  <input type="hidden" id="issuing_authority" name="issuing_authority" value="{{ data.issuing_authority | default('', true) }}">
+  <input type="hidden" id="issuing_authority_address" name="issuing_authority_address" value="{{ data.issuing_authority_address | default('', true) }}">
+  <input type="hidden" id="permission_no" name="permission_no" value="{{ data.permission_no | default('', true) }}">
+  <input type="hidden" id="permission_date" name="permission_date" value="{{ (data.permission_date | default('', true))[:10] }}">
+  <input type="hidden" id="permission_expiry" name="permission_expiry" value="{{ '' if is_one_time else (data.permission_expiry | default('', true))[:10] }}">
+  <input type="hidden" id="permission_is_one_time" name="permission_is_one_time" value="{{ '1' if is_one_time else '0' }}">
+  <input type="hidden" id="stuffing_location" name="stuffing_location" value="{{ data.stuffing_location | default('', true) }}">
 
   <div class="card">
     <div class="card-header"><h3>Consignee</h3></div>
@@ -231,141 +227,94 @@
 
   <div class="card">
     <div class="card-header"><h3>Container details</h3></div>
-    <div id="container-rows">
+    <div class="form-row">
+      <div class="field">
+        <label for="booking_no">Booking no. <span class="text-soft text-sm">(from Booking Details under Master Data — fills in vessel/voyage, transporter and every container row below)</span></label>
+        <select id="booking_no" name="booking_no">
+          <option value="">— Select a booking —</option>
+          {% if data.booking_no and data.booking_no not in bookings | map(attribute='booking_no') | list %}
+          <option value="{{ data.booking_no }}" selected>{{ data.booking_no }}</option>
+          {% endif %}
+          {% for b in bookings if b.booking_no %}
+          <option value="{{ b.booking_no }}" {{ 'selected' if b.booking_no == data.booking_no }}
+                  data-vessel-name="{{ b.vessel_name or '' }}"
+                  data-voyage-no="{{ b.voyage_no or '' }}"
+                  data-transporter-name="{{ b.transporter_name or '' }}"
+                  data-containers='{{ b.containers | tojson }}'
+                  data-container-details='{{ b.container_details | tojson }}'>
+            {{ b.booking_no }}{% if b.buyer_name %} — {{ b.buyer_name }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label for="vessel_name">Vessel Name/Flight name <span class="text-soft text-sm">(printed together with Voyage no. as "Vessel / Flight Name &amp; No" on the invoice and packing list; filled in from the booking picked above)</span></label><input type="text" id="vessel_name" name="vessel_name" placeholder="e.g. MSC ANNA" value="{{ data.vessel_name | default('', true) }}" readonly></div>
+      <div class="field"><label for="voyage_no">Voyage No.</label><input type="text" id="voyage_no" name="voyage_no" placeholder="e.g. VOY 214W" value="{{ data.voyage_no | default('', true) }}" readonly></div>
+    </div>
+
+    <div id="container-rows" style="margin-top:14px;">
       {% set c_rows = form_containers if form_containers is not none else (invoice.containers if invoice else []) %}
       {% for c in c_rows %}
       <div class="form-row container-row">
-        <div class="field"><label>Container type</label>
-          <select name="container_type[]" class="js-container-type">
-            {% for ct in container_types %}<option value="{{ ct }}" {{ 'selected' if c.container_type == ct }}>{{ ct }}</option>{% endfor %}
-            {% if c.container_type and c.container_type not in container_types %}<option value="{{ c.container_type }}" selected>{{ c.container_type }}</option>{% endif %}
-          </select>
-        </div>
+        <div class="field"><label>Container type</label><input type="text" name="container_type[]" class="js-container-type" value="{{ c.container_type or '' }}" readonly></div>
         <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count" value="{{ c.container_count or '' }}"></div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>
       </div>
       {% endfor %}
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-container-btn">+ Add container type</button>
-    <p class="hint">The total number of containers here drives how many rows the page-2 container table (11B) below asks for.</p>
+    <p class="hint">Pick a booking above to fill this and the 11B table in below; No. of containers can be corrected by hand afterwards (e.g. if this invoice only covers part of the booking) — use Remove to drop a row this invoice doesn't need.</p>
 
+    {# Transporter used to be typed per container; every container on one
+       invoice is in practice carried by the same transporter, so it's now a
+       single invoice-level pick that gets applied to every 11B row at save
+       time (see _extract_container_details) - storage and printing are
+       still per-row and untouched. Defaults from whatever the first saved
+       row already carries. #}
+    {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
+    {% set cd_transporter = (cd_rows[0].transporter_name if cd_rows else '') %}
     <div class="form-row" style="margin-top:14px;">
-      <div class="field"><label for="booking_no">Booking no.</label><input type="text" id="booking_no" name="booking_no" value="{{ data.booking_no | default('', true) }}"></div>
-      <div class="field"><label for="vessel_voyage_no">Vessel and voyage no. <span class="text-soft text-sm">(printed as "Vessel / Flight Name &amp; No" on the invoice and packing list)</span></label><input type="text" id="vessel_voyage_no" name="vessel_voyage_no" placeholder="e.g. MSC ANNA / VOY 214W" value="{{ data.vessel_voyage_no | default('', true) }}"></div>
+      <div class="field">
+        <label for="cd_transporter_name">Transporter <span class="text-soft text-sm">(applies to every container below; filled in from the booking picked above)</span></label>
+        <input type="text" id="cd_transporter_name" name="cd_transporter_name" value="{{ cd_transporter | default('', true) }}" readonly>
+      </div>
     </div>
 
     <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
     <div class="table-wrap">
       <table class="ledger" id="cd-table">
         <thead>
-          <tr><th>Sr</th><th>Container no.</th><th>Line seal no.</th><th>RFID seal no.</th><th>Vehicle no.</th><th>LR no.</th><th>Transporter name</th><th>Max permitted weight</th><th>Tare weight</th><th></th></tr>
+          <tr><th>Sr</th><th class="cd-type-col">Container type</th><th>Container no.</th><th>Max permitted weight</th><th>Tare weight</th><th>Vehicle no.</th><th>LR no.</th><th>Line seal no.</th><th>RFID seal no.</th><th></th></tr>
         </thead>
         <tbody id="cd-body">
-          {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
           {% for cd in cd_rows %}
           <tr class="cd-row">
             <td class="cd-sr">{{ loop.index }}</td>
-            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}"></td>
-            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}"></td>
-            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}"></td>
-            <td><input type="text" name="cd_lr_no[]" value="{{ cd.lr_no or '' }}"></td>
-            {# Options are the tenant's Transporters; a row can hold a name since
-               removed from that list, so the stored value stays selectable. #}
-            <td>
-              <select name="cd_transporter_name[]">
-                <option value="">&mdash; none &mdash;</option>
-                {% if cd.transporter_name and cd.transporter_name not in transporters | map(attribute='name') | list %}
-                <option value="{{ cd.transporter_name }}" selected>{{ cd.transporter_name }}</option>
-                {% endif %}
-                {% for t in transporters %}
-                <option value="{{ t.name }}" {{ 'selected' if t.name == cd.transporter_name }}>{{ t.name }}</option>
-                {% endfor %}
-              </select>
-            </td>
-            <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}"></td>
-            <td><input type="number" step="any" name="cd_tare_weight_kg[]" value="{{ cd.tare_weight_kg if cd.tare_weight_kg is not none else '' }}"></td>
+            <td class="cd-type-col"><input type="text" name="cd_container_type[]" value="{{ cd.container_type or '' }}" readonly></td>
+            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}" readonly></td>
+            <td><input type="number" step="any" name="cd_tare_weight_kg[]" value="{{ cd.tare_weight_kg if cd.tare_weight_kg is not none else '' }}" readonly></td>
+            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_lr_no[]" value="{{ cd.lr_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}" readonly></td>
             <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="sync-cd-btn">↻ Match rows to container count</button>
-    <p class="hint">Rows are generated from the container count above — use the button to add/remove rows so they always match; there's no manual blank-row add.</p>
+    <p class="hint">Only readable here — pick a booking above to fill this table in; use Remove to drop a container this invoice doesn't carry.</p>
   </div>
 
-  <div class="card">
-    <div class="card-header"><h3>Export under</h3></div>
-    <p class="hint">
-      The Export Under block on both sheets is built from three parts: the <strong>government scheme</strong> below,
-      the <strong>SUPPLY MEANT FOR EXPORT …</strong> heading (which follows the Tax treatment picked above), and the
-      <strong>EPCG licence</strong> when there is one. Only the first is typed here — the other two are added
-      automatically, along with the company's current LUT number.
-    </p>
-    <div class="field"><label for="export_under">Government scheme <span class="text-soft text-sm">(leave blank to use the government schemes set under Our Company)</span></label><textarea id="export_under" name="export_under" rows="3" placeholder="e.g. WE INTEND TO CLAIM REWARDS UNDER RoDTEP &amp; DBK">{{ data.export_under | default((company.government_schemes if company else ''), true) }}</textarea></div>
-    <div class="form-row">
-      <div class="field"><label for="epcg_number">EPCG licence no. <span class="text-soft text-sm">(imported from the purchase invoices under this order's POs when present)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
-      <div class="field"><label for="epcg_date">EPCG date</label><input type="date" id="epcg_date" name="epcg_date" value="{{ (data.epcg_date | default('', true))[:10] }}"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Bank information</h3></div>
-    <div class="field">
-      <label for="bank_select">Prefill from Our Company bank details <span class="text-soft text-sm">(optional)</span></label>
-      <select id="bank_select">
-        <option value="">— Select a bank account —</option>
-        {% for b in bank_options %}
-          <option value="{{ loop.index0 }}" data-name="{{ b.bank_name }}" data-account="{{ b.account_number }}"
-                  data-ifsc="{{ b.ifsc_code or '' }}" data-swift="{{ b.swift_code or '' }}"
-                  data-branch="{{ b.branch or '' }}" data-address="{{ b.bank_address or '' }}">
-            {{ b.bank_name }} — {{ b.account_number }}{% if b.is_primary %} (Primary){% endif %}
-          </option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="bank_name">Bank name</label><input type="text" id="bank_name" name="bank_name" value="{{ data.bank_name | default('', true) }}"></div>
-      <div class="field"><label for="bank_account_number">Account number</label><input type="text" id="bank_account_number" name="bank_account_number" value="{{ data.bank_account_number | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="bank_ifsc_code">IFSC code</label><input type="text" id="bank_ifsc_code" name="bank_ifsc_code" value="{{ data.bank_ifsc_code | default('', true) }}"></div>
-      <div class="field"><label for="bank_swift_code">SWIFT code</label><input type="text" id="bank_swift_code" name="bank_swift_code" value="{{ data.bank_swift_code | default('', true) }}"></div>
-      <div class="field"><label for="bank_branch">Branch</label><input type="text" id="bank_branch" name="bank_branch" value="{{ data.bank_branch | default('', true) }}"></div>
-    </div>
-    <div class="field"><label for="bank_address">Bank address</label><textarea id="bank_address" name="bank_address" rows="2">{{ data.bank_address | default('', true) }}</textarea></div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Signatory &amp; declaration</h3></div>
-    <div class="field">
-      <label for="authorised_person_name">Authorised signatory</label>
-      <select id="authorised_person_name" name="authorised_person_name">
-        <option value="">— Select —</option>
-        {% for p in persons %}
-          <option value="{{ p.name }}" {{ 'selected' if data and (data.authorised_person_name | default('', true)) == p.name }}>{{ p.name }}{% if p.designation %} — {{ p.designation }}{% endif %}</option>
-        {% endfor %}
-      </select>
-      <div class="text-sm text-soft">Manage names &amp; designations under Our Company → Contact persons.</div>
-    </div>
-    <div class="field">
-      <label for="self_sealing_declaration">Self-sealing declaration</label>
-      <textarea id="self_sealing_declaration" name="self_sealing_declaration" rows="4">{{ data.self_sealing_declaration | default((company.self_sealing_declaration if company else ''), true) }}</textarea>
-      <div class="text-sm text-soft">Defaults from Our Company → Self-sealing declaration; editable per invoice.</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Shipping bill (optional)</h3></div>
-    {% if invoice and invoice.shipping_bill_pdf_path %}
-    <div class="text-sm" style="margin-bottom:8px;">
-      Current: <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank">View shipping bill PDF ↗</a>
-      &nbsp;·&nbsp; <label><input type="checkbox" name="remove_shipping_bill_pdf" value="1"> Remove</label>
-    </div>
-    {% endif %}
-    <div class="field"><label for="shipping_bill_pdf">Upload shipping bill PDF</label><input type="file" id="shipping_bill_pdf" name="shipping_bill_pdf" accept="application/pdf"></div>
-  </div>
+  {# Export Under used to be its own visible card (a "Government scheme"
+     textarea plus EPCG licence no./date). Government scheme is now always
+     OurCompany.government_schemes, live at print time - see the printed
+     sheets' own `invoice.export_under or company.government_schemes`
+     fallback, which now always takes the company branch since export_under
+     is never stored per-invoice any more. EPCG licence no./date are read
+     off whichever purchase invoice under this invoice's linked proforma
+     invoices' purchase orders has one - see
+     ExportInvoiceService._resolve_epcg, run fresh on every save. Neither
+     is typed here any more, so there's nothing left on this card to show. #}
 
   <div class="card">
     <div class="card-header"><h3>Products</h3></div>
@@ -513,6 +462,63 @@
     {# Rows to restore: whatever was submitted, else this invoice's saved
        packing list. Empty means "seed the default split in JS". #}
     <script type="application/json" id="alloc-initial">{{ (form_allocations or []) | tojson }}</script>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Bank information</h3></div>
+    <div class="field">
+      <label for="bank_select">Prefill from Our Company bank details <span class="text-soft text-sm">(optional)</span></label>
+      <select id="bank_select">
+        <option value="">— Select a bank account —</option>
+        {% for b in bank_options %}
+          <option value="{{ loop.index0 }}" data-name="{{ b.bank_name }}" data-account="{{ b.account_number }}"
+                  data-ifsc="{{ b.ifsc_code or '' }}" data-swift="{{ b.swift_code or '' }}"
+                  data-branch="{{ b.branch or '' }}" data-address="{{ b.bank_address or '' }}">
+            {{ b.bank_name }} — {{ b.account_number }}{% if b.is_primary %} (Primary){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="bank_name">Bank name</label><input type="text" id="bank_name" name="bank_name" value="{{ data.bank_name | default('', true) }}"></div>
+      <div class="field"><label for="bank_account_number">Account number</label><input type="text" id="bank_account_number" name="bank_account_number" value="{{ data.bank_account_number | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="bank_ifsc_code">IFSC code</label><input type="text" id="bank_ifsc_code" name="bank_ifsc_code" value="{{ data.bank_ifsc_code | default('', true) }}"></div>
+      <div class="field"><label for="bank_swift_code">SWIFT code</label><input type="text" id="bank_swift_code" name="bank_swift_code" value="{{ data.bank_swift_code | default('', true) }}"></div>
+      <div class="field"><label for="bank_branch">Branch</label><input type="text" id="bank_branch" name="bank_branch" value="{{ data.bank_branch | default('', true) }}"></div>
+    </div>
+    <div class="field"><label for="bank_address">Bank address</label><textarea id="bank_address" name="bank_address" rows="2">{{ data.bank_address | default('', true) }}</textarea></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Signatory &amp; declaration</h3></div>
+    <div class="field">
+      <label for="authorised_person_name">Authorised signatory</label>
+      <select id="authorised_person_name" name="authorised_person_name">
+        <option value="">— Select —</option>
+        {% for p in persons %}
+          <option value="{{ p.name }}" {{ 'selected' if data and (data.authorised_person_name | default('', true)) == p.name }}>{{ p.name }}{% if p.designation %} — {{ p.designation }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      <div class="text-sm text-soft">Manage names &amp; designations under Our Company → Contact persons.</div>
+    </div>
+    <div class="field">
+      <label for="self_sealing_declaration">Self-sealing declaration</label>
+      <textarea id="self_sealing_declaration" name="self_sealing_declaration" rows="4">{{ data.self_sealing_declaration | default((company.self_sealing_declaration if company else ''), true) }}</textarea>
+      <div class="text-sm text-soft">Defaults from Our Company → Self-sealing declaration; editable per invoice.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Shipping bill (optional)</h3></div>
+    {% if invoice and invoice.shipping_bill_pdf_path %}
+    <div class="text-sm" style="margin-bottom:8px;">
+      Current: <a href="{{ url_for('static', filename=invoice.shipping_bill_pdf_path) }}" target="_blank">View shipping bill PDF ↗</a>
+      &nbsp;·&nbsp; <label><input type="checkbox" name="remove_shipping_bill_pdf" value="1"> Remove</label>
+    </div>
+    {% endif %}
+    <div class="field"><label for="shipping_bill_pdf">Upload shipping bill PDF</label><input type="file" id="shipping_bill_pdf" name="shipping_bill_pdf" accept="application/pdf"></div>
   </div>
 
   <div class="card">
@@ -811,32 +817,64 @@
   if (cifApplied) pushCifCalculation(); else applyCifDisplay();
   applyDeliveryTermCharges();
 
-  // ---- reference-PI picker: restrict to one buyer at a time -----------------
-  // One export invoice covers a single buyer's PIs, so once any box is
-  // checked, every other checkbox whose PI belongs to a different buyer
-  // (same lead if the PI is linked to one, else its consignee name) is
-  // disabled and dimmed rather than removed, so the reason stays visible.
+  // ---- reference-PI picker: pick a buyer, then just their PIs ---------------
+  // One export invoice covers a single buyer's PIs. The Buyer dropdown is the
+  // primary filter - picking one hides every other buyer's PI from the list
+  // below (and unticks any that were checked). Ticking a PI directly (without
+  // touching the dropdown - e.g. editing an invoice, or a prefill from a PI
+  // link that arrives with a box already checked) drives the same filter off
+  // that PI's own key and syncs the dropdown to match, so the two controls
+  // never disagree about which buyer is active.
   const proformaPicker = document.getElementById('proforma-picker');
+  const buyerSelect = document.getElementById('buyer_select');
   const currencySelect = document.getElementById('currency_code');
+
+  function buyerOptionForKey(key) {
+    return Array.from(buyerSelect.options).find((o) => o.value && o.dataset.companyKey === key);
+  }
+
   function refreshProformaPickerFilter() {
     const checked = Array.from(proformaPicker.querySelectorAll('.js-pi-check:checked'));
-    const keys = new Set(checked.map((c) => c.dataset.companyKey));
-    const activeKey = keys.size === 1 ? [...keys][0] : null;
+    const checkedKeys = new Set(checked.map((c) => c.dataset.companyKey));
+    const checkedKey = checkedKeys.size === 1 ? [...checkedKeys][0] : null;
+    const buyerOpt = buyerSelect.selectedOptions[0];
+    const buyerKey = buyerOpt && buyerOpt.value ? buyerOpt.dataset.companyKey : null;
+    // The buyer dropdown wins when set; a ticked PI of a different buyer
+    // decides it otherwise (e.g. before any buyer has been picked yet).
+    const activeKey = buyerKey !== null ? buyerKey : checkedKey;
     proformaPicker.querySelectorAll('.js-pi-check').forEach((cb) => {
       const label = cb.closest('.js-pi-label');
-      const blocked = activeKey !== null && cb.dataset.companyKey !== activeKey && !cb.checked;
-      cb.disabled = blocked;
-      if (label) label.style.opacity = blocked ? '0.4' : '';
+      const matches = activeKey === null || cb.dataset.companyKey === activeKey;
+      if (!matches && cb.checked) cb.checked = false;
+      if (label) label.style.display = matches ? '' : 'none';
     });
     // Tying the invoice to a PI locks the currency to whatever that PI was
     // raised in (see currency_code's server-rendered `disabled` above and
     // _build_header, which enforces the same rule either way).
-    currencySelect.disabled = checked.length > 0;
+    currencySelect.disabled = proformaPicker.querySelectorAll('.js-pi-check:checked').length > 0;
   }
+
   if (proformaPicker) {
     proformaPicker.addEventListener('change', (e) => {
-      if (e.target.classList.contains('js-pi-check')) refreshProformaPickerFilter();
+      if (!e.target.classList.contains('js-pi-check')) return;
+      // Ticking a PI whose buyer the dropdown doesn't already reflect syncs
+      // the dropdown to it, so a manual tick (or a pre-ticked prefill from a
+      // PI's "New export invoice" link) still shows the right buyer picked.
+      if (e.target.checked) {
+        const opt = buyerOptionForKey(e.target.dataset.companyKey);
+        if (opt && buyerSelect.value !== opt.value) buyerSelect.value = opt.value;
+      }
+      refreshProformaPickerFilter();
     });
+    buyerSelect.addEventListener('change', refreshProformaPickerFilter);
+    // On load: a checkbox pre-ticked by a PI-prefill or by editing an
+    // already-linked invoice should default-select its buyer, same as a
+    // manual tick would - see the change handler above.
+    const preChecked = proformaPicker.querySelector('.js-pi-check:checked');
+    if (preChecked && !buyerSelect.value) {
+      const opt = buyerOptionForKey(preChecked.dataset.companyKey);
+      if (opt) buyerSelect.value = opt.value;
+    }
     refreshProformaPickerFilter();
   }
 
@@ -863,14 +901,15 @@
     'final_destination', 'nature_of_contract', 'payment_terms', 'currency_code',
     'buyer_order_no', 'buyer_order_date', 'remarks',
     'bank_name', 'bank_account_number', 'bank_ifsc_code', 'bank_swift_code', 'bank_branch', 'bank_address',
-    'epcg_number', 'epcg_date',
   ];
   // Charges are summed across the selected PIs, so 0 is a real answer and is
   // written back even though it is "empty".
   const PI_CHARGE_FIELDS = ['sea_freight', 'insurance', 'certification', 'other_charges', 'discount_amount'];
   // Company defaults the prefill carries along - only filled in when blank,
-  // never overwriting an edit.
-  const PI_DEFAULT_FIELDS = ['export_under', 'self_sealing_declaration'];
+  // never overwriting an edit. Government scheme (export_under) used to be
+  // one of these too, but it's no longer a form field at all - see the
+  // Export Under removal note near the top of this file.
+  const PI_DEFAULT_FIELDS = ['self_sealing_declaration'];
 
   function setFieldValue(name, value) {
     const el = document.querySelector(`[name="${name}"]`) || document.getElementById(name);
@@ -977,18 +1016,19 @@
     });
   }
 
-  const containerTypeOptions = `{% for ct in container_types %}<option value="{{ ct }}">{{ ct }}</option>{% endfor %}`;
-  document.getElementById('add-container-btn').addEventListener('click', () => {
-    const wrap = document.getElementById('container-rows');
-    const div = document.createElement('div');
-    div.className = 'form-row container-row';
-    div.innerHTML = `
-      <div class="field"><label>Container type</label><select name="container_type[]" class="js-container-type">${containerTypeOptions}</select></div>
-      <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count"></div>
-      <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>`;
-    wrap.appendChild(div);
-  });
-  bindRemove('container-rows', 'container-row', 'js-remove-container');
+  // The 11B table's "Container type" column only earns its place once the
+  // picked booking actually mixes more than one container type - with a
+  // single type it would just repeat the same word down every row.
+  function updateTypeColumnVisibility() {
+    const multi = document.querySelectorAll('#container-rows .container-row').length > 1;
+    document.querySelectorAll('.cd-type-col').forEach((el) => { el.style.display = multi ? '' : 'none'; });
+  }
+
+  // Container type/count rows are filled in by the booking dropdown handler
+  // below; No. of containers can then be corrected by hand (e.g. an invoice
+  // covering only part of a booking), and Remove drops a row this invoice
+  // doesn't need at all.
+  bindRemove('container-rows', 'container-row', 'js-remove-container', updateTypeColumnVisibility);
 
   document.getElementById('add-pd-btn').addEventListener('click', () => {
     const wrap = document.getElementById('purchase-detail-rows');
@@ -1003,9 +1043,6 @@
   bindRemove('purchase-detail-rows', 'purchase-detail-row', 'js-remove-pd');
 
   // ---- 11B container-detail rows --------------------------------------------------
-  // Same Transporters list the server-rendered rows above offer, so a row added
-  // here gets the same dropdown (blank by default, like every other new cell).
-  const cdTransporterOptions = `<option value="">&mdash; none &mdash;</option>{% for t in transporters %}<option value="{{ t.name }}">{{ t.name }}</option>{% endfor %}`;
   const cdBody = document.getElementById('cd-body');
   function cdRenumber() { cdBody.querySelectorAll('.cd-row').forEach((tr, i) => { tr.querySelector('.cd-sr').textContent = i + 1; }); }
   function cdRowTemplate() {
@@ -1013,32 +1050,66 @@
     tr.className = 'cd-row';
     tr.innerHTML = `
       <td class="cd-sr"></td>
-      <td><input type="text" name="cd_container_no[]"></td>
-      <td><input type="text" name="cd_line_seal_no[]"></td>
-      <td><input type="text" name="cd_rfid_seal_no[]"></td>
-      <td><input type="text" name="cd_vehicle_no[]"></td>
-      <td><input type="text" name="cd_lr_no[]"></td>
-      <td><select name="cd_transporter_name[]">${cdTransporterOptions}</select></td>
-      <td><input type="text" name="cd_max_permitted_weight[]"></td>
-      <td><input type="number" step="any" name="cd_tare_weight_kg[]"></td>
+      <td class="cd-type-col"><input type="text" name="cd_container_type[]" readonly></td>
+      <td><input type="text" name="cd_container_no[]" readonly></td>
+      <td><input type="text" name="cd_max_permitted_weight[]" readonly></td>
+      <td><input type="number" step="any" name="cd_tare_weight_kg[]" readonly></td>
+      <td><input type="text" name="cd_vehicle_no[]" readonly></td>
+      <td><input type="text" name="cd_lr_no[]" readonly></td>
+      <td><input type="text" name="cd_line_seal_no[]" readonly></td>
+      <td><input type="text" name="cd_rfid_seal_no[]" readonly></td>
       <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>`;
     return tr;
   }
+  // Rows are only ever built by the booking dropdown handler below; Remove
+  // still works so a container the booking carries but this invoice
+  // doesn't can be dropped.
   cdBody.addEventListener('click', (e) => { if (e.target.classList.contains('js-remove-cd')) { e.target.closest('tr').remove(); cdRenumber(); } });
 
-  // Rebuild the 11B table so it has exactly one row per physical container
-  // implied by the total Container Details count, preserving already-typed rows.
-  document.getElementById('sync-cd-btn').addEventListener('click', () => {
-    let wantedCount = 0;
-    document.querySelectorAll('#container-rows .container-row').forEach((r) => {
-      wantedCount += parseInt(r.querySelector('.js-container-count').value, 10) || 0;
+  // ---- booking dropdown prefill --------------------------------------------------
+  // Every field here is filled in from whichever booking is picked (replacing
+  // the container type/count rows and the whole 11B table wholesale, rather
+  // than trying to merge into whatever was there) - a booking logged in
+  // Master Data is meant to be dropped in as a complete unit. No. of
+  // containers stays editable afterwards, and Remove still works per-row for
+  // trimming down to what this invoice actually carries.
+  document.getElementById('booking_no').addEventListener('change', (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt.value) return;
+    document.getElementById('vessel_name').value = opt.dataset.vesselName || '';
+    document.getElementById('voyage_no').value = opt.dataset.voyageNo || '';
+    document.getElementById('cd_transporter_name').value = opt.dataset.transporterName || '';
+
+    const containerWrap = document.getElementById('container-rows');
+    containerWrap.innerHTML = '';
+    let containers = [];
+    try { containers = JSON.parse(opt.dataset.containers || '[]'); } catch (err) {}
+    containers.forEach((c) => {
+      const div = document.createElement('div');
+      div.className = 'form-row container-row';
+      div.innerHTML = `
+        <div class="field"><label>Container type</label><input type="text" name="container_type[]" class="js-container-type" value="${c.container_type || ''}" readonly></div>
+        <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count" value="${c.container_count || ''}"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>`;
+      containerWrap.appendChild(div);
     });
-    const existing = Array.from(cdBody.querySelectorAll('.cd-row'));
-    if (wantedCount > existing.length) {
-      for (let i = existing.length; i < wantedCount; i++) cdBody.appendChild(cdRowTemplate());
-    } else if (wantedCount < existing.length) {
-      for (let i = existing.length - 1; i >= wantedCount; i--) existing[i].remove();
-    }
+    updateTypeColumnVisibility();
+
+    cdBody.innerHTML = '';
+    let containerDetails = [];
+    try { containerDetails = JSON.parse(opt.dataset.containerDetails || '[]'); } catch (err) {}
+    containerDetails.forEach((cd) => {
+      const tr = cdRowTemplate();
+      tr.querySelector('[name="cd_container_type[]"]').value = cd.container_type || '';
+      tr.querySelector('[name="cd_container_no[]"]').value = cd.container_no || '';
+      tr.querySelector('[name="cd_max_permitted_weight[]"]').value = cd.max_permitted_weight || '';
+      tr.querySelector('[name="cd_tare_weight_kg[]"]').value = cd.tare_weight_kg != null ? cd.tare_weight_kg : '';
+      tr.querySelector('[name="cd_vehicle_no[]"]').value = cd.vehicle_no || '';
+      tr.querySelector('[name="cd_lr_no[]"]').value = cd.lr_no || '';
+      tr.querySelector('[name="cd_line_seal_no[]"]').value = cd.line_seal_no || '';
+      tr.querySelector('[name="cd_rfid_seal_no[]"]').value = cd.rfid_seal_no || '';
+      cdBody.appendChild(tr);
+    });
     cdRenumber();
   });
 
@@ -1055,13 +1126,13 @@
   });
 
   // ---- permit dropdown prefill --------------------------------------------------
+  // Permit Details is no longer its own visible card - every field it used to
+  // show is a hidden input now, filled in here from whichever permit is
+  // picked (see the comment above those inputs in the template).
   const permissionExpiryInput = document.getElementById('permission_expiry');
   const permissionIsOneTimeInput = document.getElementById('permission_is_one_time');
-  const permissionIsOneTimeToggle = document.getElementById('permission_is_one_time_toggle');
   function setPermissionOneTime(isOneTime) {
-    permissionIsOneTimeToggle.checked = isOneTime;
     permissionIsOneTimeInput.value = isOneTime ? '1' : '0';
-    permissionExpiryInput.disabled = isOneTime;
     if (isOneTime) permissionExpiryInput.value = '';
   }
   document.getElementById('permit_select').addEventListener('change', (e) => {
@@ -1078,7 +1149,6 @@
     if (opt.dataset.stuffingPlaceName) document.getElementById('manufacturer_name').value = opt.dataset.stuffingPlaceName;
     if (opt.dataset.placeOfStuffing) document.getElementById('manufacturer_address').value = opt.dataset.placeOfStuffing;
   });
-  permissionIsOneTimeToggle.addEventListener('change', (e) => setPermissionOneTime(e.target.checked));
 
   // ---- product picker --------------------------------------------------
   const overlay = document.getElementById('product-picker-overlay');
@@ -1144,6 +1214,7 @@
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
   applyCifDisplay();  // ends in recalcTotals()
+  updateTypeColumnVisibility();
 })();
 </script>
 
