@@ -454,7 +454,7 @@ class TestExportPackingListRoutes:
         assert payload["fields"]["sea_freight"] == 100
         assert [i["product_name"] for i in payload["items"]] == ["GVT 600X1200"]
         # Fields no PI decides are simply absent - the form leaves them alone.
-        for key in ("export_invoice_number", "permission_no", "stuffing_location", "booking_no", "vessel_voyage_no"):
+        for key in ("export_invoice_number", "permission_no", "stuffing_location", "booking_no", "vessel_name", "voyage_no"):
             assert key not in payload["fields"]
 
     def test_export_invoice_print_page_renders(self, admin_ctx):
@@ -480,11 +480,33 @@ class TestExportPackingListRoutes:
         return [line.strip() for line in seg.split("\n") if line.strip()]
 
     def test_export_under_block_is_composed_of_scheme_heading_and_epcg(self, admin_ctx):
-        """All three parts are derived - only the scheme line is ever typed."""
+        """Export under is no longer typed anywhere: the scheme line always
+        comes from OurCompany.government_schemes, and the EPCG line is
+        resolved from the linked PI's own purchase-order chain at creation
+        time (see ExportInvoiceService._resolve_epcg) - not from a posted
+        field."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44")
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-01-01"},
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_value": "144", "price_usd": "5.92"}])
+        po = container.purchase_order_service.create(
+            admin, {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+                    "proforma_invoice_id": str(proforma.id), "purchase_type": "exemption"},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+        container.purchase_invoice_service.create(
+            admin, {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
+                    "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id),
+                    "epcg_number": "2431000888", "epcg_date": "2021-09-17"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_inr": "500", "price_per": "BOX",
+              "quantity_boxes": "10"}], [])
+
         invoice = self._create_export_invoice(client, container, admin, company_id, extra={
-            "epcg_number": "2431000888", "epcg_date": "2019-09-17",
+            "proforma_invoice_ids[]": str(proforma.id),
         })
 
         lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
@@ -500,41 +522,36 @@ class TestExportPackingListRoutes:
         lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
         assert not any("EPCG" in line for line in lines)
 
-    def test_a_typed_export_under_overrides_only_the_scheme_line(self, admin_ctx):
-        client, container, admin, company_id = admin_ctx
-        self._set_government_schemes(container, admin, "COMPANY DEFAULT SCHEME")
-        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
-            "export_under": "CLAIMING UNDER ADVANCE AUTHORISATION",
-        })
-
-        lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
-        assert lines[0] == "CLAIMING UNDER ADVANCE AUTHORISATION"
-        assert "COMPANY DEFAULT SCHEME" not in " ".join(lines)
-        # The heading still follows tax_mode, not what was typed.
-        assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
-
-    def test_a_blank_export_under_falls_back_to_the_live_company_scheme(self, admin_ctx):
+    def test_export_under_is_always_the_live_company_scheme(self, admin_ctx):
+        """export_under is no longer a per-invoice field - the form doesn't
+        even show it any more, and whatever a tampered POST sends for it is
+        ignored server-side (see ExportInvoiceService._build_header). The
+        sheet always shows OurCompany.government_schemes as it stands
+        today, so changing it later changes what an already-created invoice
+        prints too."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "FIRST SCHEME TEXT")
-        invoice = self._create_export_invoice(client, container, admin, company_id, extra={"export_under": ""})
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "export_under": "TYPED OVERRIDE ATTEMPT",
+        })
         self._set_government_schemes(container, admin, "SECOND SCHEME TEXT")
 
         lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
         assert lines[0] == "SECOND SCHEME TEXT"
+        assert "TYPED OVERRIDE ATTEMPT" not in " ".join(lines)
 
     def test_the_packing_list_prints_the_same_scheme_line_as_its_invoice(self, admin_ctx):
         """The packing list used to hard-code RoDTEP wording, so it could
-        disagree with the invoice it belongs to."""
+        disagree with the invoice it belongs to - both now read the same
+        live company scheme, so they can never drift."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
-        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
-            "export_under": "CLAIMING UNDER ADVANCE AUTHORISATION",
-        })
+        invoice = self._create_export_invoice(client, container, admin, company_id)
         packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
 
         lines = self._export_under_cell(
             client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True))
-        assert lines[0] == "CLAIMING UNDER ADVANCE AUTHORISATION"
+        assert lines[0] == "WE INTEND TO CLAIM REWARDS UNDER RODTEP & DBK"
         assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
 
     def test_the_lut_number_stays_out_of_the_export_under_cell(self, admin_ctx):
@@ -1226,16 +1243,17 @@ class TestTaxInvoiceRoutes:
         assert "ROBUST INTERNATIONAL PTE LTD" in body
 
     def test_the_road_leg_comes_off_the_11b_rows_with_the_transporters_gstin(self, admin_ctx):
-        """Transporter name / vehicle / LR are typed per container on the
-        export invoice's 11B table; the registration number is looked up from
-        the Transporters list by the name snapshotted on the row."""
+        """Transporter is one invoice-level pick applied to every container on
+        the export invoice's 11B table (vehicle / LR stay typed per
+        container); the registration number is looked up from the
+        Transporters list by the name stamped on the row."""
         client, container, admin, company_id = admin_ctx
         container.transporter_service.create(
             admin, {"name": "FORTUNE SHIPPPING PVT LTD",
                     "gstin_transporter_no": "24AADCF9974G1ZB"}, [])
         invoice = self._create_export_invoice(
             client, container, admin, company_id,
-            extra={"cd_transporter_name[]": ["FORTUNE SHIPPPING PVT LTD", ""],
+            extra={"cd_transporter_name": "FORTUNE SHIPPPING PVT LTD",
                    "cd_vehicle_no[]": ["GJ12BX4611", "GJ99ZZ0000"],
                    "cd_lr_no[]": ["LR 0001", "LR 0002"]})
         body = client.get(f"/tax-invoices/{invoice.id}").get_data(as_text=True)
@@ -1403,13 +1421,13 @@ class TestBlDraftRoutes:
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(
             client, container, admin, company_id,
-            extra={"booking_no": "EBKG16522374", "vessel_voyage_no": "KOTKA - IV618A",
+            extra={"booking_no": "EBKG16522374", "vessel_name": "KOTKA", "voyage_no": "IV618A",
                    "place_of_receipt": "MUNDRA - INDIA", "port_of_discharge": "BEIRA - MOZAMBIQUE",
                    "final_destination": "BEIRA - MOZAMBIQUE"})
         body = client.get(f"/bl-drafts/{invoice.id}").get_data(as_text=True)
         assert "BL DRAFT" in body
         assert "EBKG16522374" in body                 # booking no
-        assert "KOTKA - IV618A" in body               # vessel and voyage
+        assert "KOTKA / IV618A" in body               # vessel + voyage, joined for the printed cell
         assert "BEIRA - MOZAMBIQUE" in body           # discharge + delivery
         # Container rows come off the packing list split.
         assert "BLJU2253726" in body and "SEGU3227471" in body

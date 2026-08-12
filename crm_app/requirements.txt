@@ -12,6 +12,11 @@ requests==2.33.1
 # Used to load configuration (SECRET_KEY, DB path, etc.) from a .env file
 python-dotenv==1.2.2
 
+# Used to read uploaded .xlsx files (Booking Detail's "Upload from Excel" -
+# app/xlsx.py writes .xlsx by hand to avoid this dependency, but parsing an
+# arbitrary user-uploaded sheet is worth a real library)
+openpyxl==3.1.5
+
 # NOTE: The database layer uses Python's built-in `sqlite3` module, so no
 # separate database driver is required. See README.md -> "Swapping the
 # database" for how to move to PostgreSQL/MySQL later without touching

@@ -200,4 +200,61 @@
   </form>
 </div>
 
+<div class="card">
+  <div class="card-header">
+    <h3>Container type</h3>
+    <span class="text-sm text-soft">Fills the container-type dropdown on the Booking Detail form</span>
+  </div>
+
+  {% if container_types %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr><th>Name</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for entry in container_types %}
+        {% if edit_list == 'container_type' and edit_id == entry.id %}
+        <tr>
+          <form method="POST" action="{{ url_for('misc.edit_container_type', entry_id=entry.id) }}" id="edit-ctype-{{ entry.id }}"></form>
+          <td><input type="text" name="name" value="{{ entry.name }}" form="edit-ctype-{{ entry.id }}" required></td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <button type="submit" class="btn btn-primary btn-sm" form="edit-ctype-{{ entry.id }}">Save</button>
+            <a href="{{ url_for('misc.index') }}" class="btn btn-ghost btn-sm">Cancel</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td>{{ entry.name }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <a href="{{ url_for('misc.index', list='container_type', edit=entry.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('misc.delete_container_type', entry_id=entry.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete {{ entry.name }} from the container type list? Bookings already saved keep the container type they were saved with.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    No container types added yet — the Booking Detail dropdown is showing the built-in list
+    ({{ fallback_container_types | map(attribute='name') | join(', ') }}) until you add your own.
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('misc.add_container_type') }}" style="margin-top:18px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="ctype_name">Name<span class="required-mark">*</span></label>
+        <input type="text" id="ctype_name" name="name" placeholder="e.g. 20FT FCL" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add container type</button>
+  </form>
+</div>
+
 {% endblock %}

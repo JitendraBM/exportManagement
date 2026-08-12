@@ -100,8 +100,8 @@ class TestLead:
 
 
 class TestParty:
-    """Buyer and Exporter share this one dataclass - which table the row came
-    from is what says which type it is, so there is no type column to map."""
+    """Buyer's dataclass - kept generic (no type column) in case another
+    party type with this same shape shows up again."""
 
     def _row(self, status="proforma_invoice_submission_pending", **over):
         row = FakeRow(id=1, company_id=1, lead_id=5, company_name="Acme", phone="1",

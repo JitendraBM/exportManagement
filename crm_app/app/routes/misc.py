@@ -37,6 +37,8 @@ def index():
         fallback_currencies=service.currency_options(g.user.company_id),
         nature_of_contracts=service.list_nature_of_contracts(g.user.company_id),
         ports_of_loading=service.list_ports_of_loading(g.user.company_id),
+        container_types=service.list_container_types(g.user.company_id),
+        fallback_container_types=service.container_type_options(g.user.company_id),
         edit_id=request.args.get("edit", type=int),
         edit_list=request.args.get("list", ""),
     )
@@ -182,3 +184,45 @@ def api_quick_create_port_of_loading():
     except (ValidationError, PermissionDeniedError) as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"id": entry.id, "name": entry.name, "pin_code": entry.pin_code})
+
+
+@misc_bp.route("/container-types", methods=["POST"])
+@admin_required
+def add_container_type():
+    try:
+        entry = current_app.container.misc_list_service.create_container_type(g.user, _fields(request.form))
+        flash(f"Container type {entry.name} added.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/container-types/<int:entry_id>/edit", methods=["POST"])
+@admin_required
+def edit_container_type(entry_id):
+    try:
+        entry = current_app.container.misc_list_service.update_container_type(
+            g.user, entry_id, _fields(request.form),
+        )
+        flash(f"Container type {entry.name} updated.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/container-types/<int:entry_id>/delete", methods=["POST"])
+@admin_required
+def delete_container_type(entry_id):
+    if not verify_delete_password(g.user, request.form):
+        flash("Incorrect password. Container type not deleted.", "error")
+        return redirect(url_for("misc.index"))
+    try:
+        entry = current_app.container.misc_list_service.delete_container_type(g.user, entry_id)
+        flash(f"Container type {entry.name} deleted.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("misc.index"))

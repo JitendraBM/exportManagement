@@ -18,7 +18,7 @@ from typing import Optional, List, Sequence
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, Permit, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
@@ -169,14 +169,13 @@ class ContactRepository:
 
 
 class PartyContactRepository:
-    """Contact persons for a Buyer or Exporter (the `party_contacts` table) -
-    same shape/behaviour as ContactRepository above, but keyed by
-    (parent_type, parent_id) since buyers and exporters share one table
-    instead of each getting their own."""
+    """Contact persons for a Buyer (the `party_contacts` table) - same
+    shape/behaviour as ContactRepository above, but keyed by (parent_type,
+    parent_id) rather than each type getting its own table."""
 
     def __init__(self, db: Database, parent_type: str):
         self.db = db
-        self.parent_type = parent_type  # 'buyer' | 'exporter'
+        self.parent_type = parent_type  # 'buyer'
 
     def list_for(self, parent_id: int) -> List[ContactPerson]:
         rows = self.db.query(
@@ -304,9 +303,9 @@ class SqliteLeadRepository(LeadRepositoryBase):
 
 
 # ============================================================
-# PARTY REPOSITORY (Buyer / Exporter - identical shape; see models.Party.
-# One instance per type, parametrized by which table a row lives in - the
-# table name IS what says whether a row is a Buyer or an Exporter.)
+# PARTY REPOSITORY (currently just Buyer; see models.Party. Parametrized by
+# which table a row lives in and stays generic enough to serve more than
+# one type again if another one shows up.)
 # ============================================================
 class PartyRepositoryBase(ABC):
     @abstractmethod
@@ -334,8 +333,8 @@ class PartyRepositoryBase(ABC):
 class SqlitePartyRepository(PartyRepositoryBase):
     def __init__(self, db: Database, table: str, client_type: str):
         self.db = db
-        self.table = table                  # 'buyers' | 'exporters'
-        self.client_type = client_type      # 'Buyer' | 'Exporter' - only used to stamp leads.converted_client_type
+        self.table = table                  # 'buyers'
+        self.client_type = client_type      # 'Buyer' - only used to stamp leads.converted_client_type
         self.contacts = PartyContactRepository(db, client_type.lower())
 
     def get_by_id(self, party_id: int) -> Optional[Party]:
@@ -425,7 +424,7 @@ class SqlitePartyRepository(PartyRepositoryBase):
         hang off the originating lead (see PartyService.document_feed), not
         off this row. If the party came from a lead, that lead is put back
         to un-converted so it can be converted again."""
-        parent = self.client_type.lower()   # 'buyer' | 'exporter'
+        parent = self.client_type.lower()   # 'buyer'
         with self.db.get_connection() as conn:
             row = conn.execute(
                 f"SELECT lead_id FROM {self.table} WHERE id = ?", (party_id,)
@@ -757,7 +756,7 @@ class CommunicationRepository:
 # PAYMENT REPOSITORY
 # ============================================================
 class PaymentRepository:
-    """Shared by Buyer, Supplier and Exporter - parent_type/parent_id is the
+    """Shared by Buyer and Supplier - parent_type/parent_id is the
     same polymorphic pattern as CommunicationRepository below."""
 
     def __init__(self, db: Database):
@@ -787,7 +786,7 @@ class PaymentRepository:
 # DOCUMENT REPOSITORY
 # ============================================================
 class DocumentRepository:
-    """Shared by Buyer, Supplier and Exporter - same parent_type/parent_id
+    """Shared by Buyer and Supplier - same parent_type/parent_id
     pattern as PaymentRepository above."""
 
     def __init__(self, db: Database):
@@ -1040,6 +1039,49 @@ class MiscNatureOfContractRepository:
         self.db.execute("DELETE FROM misc_nature_of_contracts WHERE id = ?", (row_id,))
 
 
+class MiscContainerTypeRepository:
+    """The CONTAINER TYPE drop list (Administration -> Miscellaneous):
+    one name per row, feeding the Booking Detail form's container-type
+    dropdown."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscContainerType]:
+        row = self.db.query_one("SELECT * FROM misc_container_types WHERE id = ?", (row_id,))
+        return MiscContainerType.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscContainerType]:
+        rows = self.db.query(
+            "SELECT * FROM misc_container_types WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscContainerType.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscContainerType]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_container_types WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscContainerType.from_row(row) if row else None
+
+    def create(self, entry: MiscContainerType) -> MiscContainerType:
+        new_id = self.db.execute(
+            "INSERT INTO misc_container_types (company_id, name) VALUES (?, ?)",
+            (entry.company_id, entry.name),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscContainerType) -> None:
+        self.db.execute(
+            "UPDATE misc_container_types SET name = ?, updated_at = datetime('now') WHERE id = ?",
+            (entry.name, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_container_types WHERE id = ?", (row_id,))
+
+
 class MiscPortOfLoadingRepository:
     """The PORT OF LOADING drop list (Administration -> Miscellaneous): a
     port name plus that port's PIN code."""
@@ -1128,6 +1170,122 @@ class PermitRepository:
 
     def delete(self, permit_id: int) -> None:
         self.db.execute("DELETE FROM permits WHERE id = ?", (permit_id,))
+
+
+class BookingDetailRepository:
+    """Standalone shipping-booking log under Master Data - the same field
+    shape as an Export Invoice's own "Container details" card (booking no. /
+    vessel / voyage, one transporter for the whole booking, the container
+    type/count list, and one row per physical container), owned directly by
+    a buyer rather than any invoice. Mirrors ExportInvoiceRepository's own
+    handling of those same two child lists, minus everything invoice-only
+    (items, money, the fields another per-container document carries
+    forward)."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, booking_detail_id: int) -> Optional[BookingDetail]:
+        row = self.db.query_one(
+            """SELECT bd.*, b.company_name AS buyer_name, u.full_name AS created_by_name
+               FROM booking_details bd
+               JOIN buyers b ON b.id = bd.buyer_id
+               JOIN users u ON u.id = bd.created_by
+               WHERE bd.id = ?""",
+            (booking_detail_id,),
+        )
+        if not row:
+            return None
+        booking = BookingDetail.from_row(row)
+        booking.containers = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_count FROM booking_detail_containers "
+                "WHERE booking_detail_id = ? ORDER BY sr_no", (booking_detail_id,)
+            )
+        ]
+        booking.container_details = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_no, max_permitted_weight, tare_weight_kg, vehicle_no, lr_no, "
+                "line_seal_no, rfid_seal_no FROM booking_detail_container_details "
+                "WHERE booking_detail_id = ? ORDER BY sr_no", (booking_detail_id,)
+            )
+        ]
+        return booking
+
+    def list_all(self, company_id: int) -> List[BookingDetail]:
+        rows = self.db.query(
+            """SELECT bd.*, b.company_name AS buyer_name, u.full_name AS created_by_name,
+                      (SELECT COUNT(*) FROM booking_detail_container_details
+                       WHERE booking_detail_id = bd.id) AS container_count
+               FROM booking_details bd
+               JOIN buyers b ON b.id = bd.buyer_id
+               JOIN users u ON u.id = bd.created_by
+               WHERE bd.company_id = ?
+               ORDER BY bd.created_at DESC, bd.id DESC""",
+            (company_id,),
+        )
+        bookings = []
+        for r in rows:
+            booking = BookingDetail.from_row(r)
+            booking.container_count = r["container_count"]
+            bookings.append(booking)
+        return bookings
+
+    def create(self, booking: BookingDetail) -> BookingDetail:
+        new_id = self.db.execute(
+            """INSERT INTO booking_details
+               (company_id, buyer_id, booking_no, vessel_name, voyage_no, transporter_name, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (booking.company_id, booking.buyer_id, booking.booking_no, booking.vessel_name,
+             booking.voyage_no, booking.transporter_name, booking.created_by),
+        )
+        self._replace_containers(new_id, booking.containers)
+        self._replace_container_details(new_id, booking.container_details)
+        return self.get_by_id(new_id)
+
+    def update(self, booking_detail_id: int, booking: BookingDetail) -> None:
+        self.db.execute(
+            """UPDATE booking_details SET buyer_id = ?, booking_no = ?, vessel_name = ?, voyage_no = ?,
+                                          transporter_name = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (booking.buyer_id, booking.booking_no, booking.vessel_name, booking.voyage_no,
+             booking.transporter_name, booking_detail_id),
+        )
+        self._replace_containers(booking_detail_id, booking.containers)
+        self._replace_container_details(booking_detail_id, booking.container_details)
+
+    def _replace_containers(self, booking_detail_id: int, containers: list) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM booking_detail_containers WHERE booking_detail_id = ?", (booking_detail_id,))
+            for i, c in enumerate(containers, start=1):
+                conn.execute(
+                    "INSERT INTO booking_detail_containers (booking_detail_id, sr_no, container_type, container_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (booking_detail_id, i, c["container_type"], c["container_count"]),
+                )
+
+    def _replace_container_details(self, booking_detail_id: int, rows: list) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM booking_detail_container_details WHERE booking_detail_id = ?", (booking_detail_id,))
+            for i, cd in enumerate(rows, start=1):
+                conn.execute(
+                    """INSERT INTO booking_detail_container_details
+                       (booking_detail_id, sr_no, container_type, container_no, max_permitted_weight, tare_weight_kg,
+                        vehicle_no, lr_no, line_seal_no, rfid_seal_no)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (booking_detail_id, i, cd.get("container_type"), cd.get("container_no"), cd.get("max_permitted_weight"),
+                     cd.get("tare_weight_kg"), cd.get("vehicle_no"), cd.get("lr_no"),
+                     cd.get("line_seal_no"), cd.get("rfid_seal_no")),
+                )
+
+    def delete(self, booking_detail_id: int) -> None:
+        """Child rows are ON DELETE CASCADE, but foreign keys are only
+        enforced when the pragma is on, so they're removed explicitly - and
+        in the same transaction, so no orphan set can be left behind."""
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM booking_detail_container_details WHERE booking_detail_id = ?", (booking_detail_id,))
+            conn.execute("DELETE FROM booking_detail_containers WHERE booking_detail_id = ?", (booking_detail_id,))
+            conn.execute("DELETE FROM booking_details WHERE id = ?", (booking_detail_id,))
 
 
 class CategoryRepository:
@@ -1937,7 +2095,7 @@ class ExportInvoiceRepository:
         ]
         invoice.container_details = [
             dict(r) for r in self.db.query(
-                "SELECT sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, "
+                "SELECT sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, "
                 "max_permitted_weight, tare_weight_kg, gross_weight, net_weight, "
                 "weighbridge_name, weighing_slip_no, sealing_time, sealing_date "
                 "FROM export_invoice_container_details WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
@@ -1997,7 +2155,7 @@ class ExportInvoiceRepository:
                 fob_pricing, round_off, fob_value, cnf_value,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch, bank_address,
                 authorised_person_name, authorised_person_designation, self_sealing_declaration,
-                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, vessel_voyage_no,
+                shipping_bill_pdf_path, examination_date, location_code_08b, booking_no, vessel_name, voyage_no,
                 issuing_authority,
                 issuing_authority_address, permission_no, permission_date, permission_expiry,
                 permission_is_one_time,
@@ -2005,7 +2163,7 @@ class ExportInvoiceRepository:
                 total_net_weight_kg, total_gross_weight_kg, shipping_bill_no,
                 shipping_bill_date, currency_code, currency_symbol, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.export_invoice_number) + self._header_params(invoice) + (invoice.created_by,),
         )
         self._replace_children(new_id, invoice)
@@ -2022,7 +2180,7 @@ class ExportInvoiceRepository:
                    fob_pricing = ?, round_off = ?, fob_value = ?, cnf_value = ?, bank_name = ?, bank_account_number = ?, bank_ifsc_code = ?,
                    bank_swift_code = ?, bank_branch = ?, bank_address = ?, authorised_person_name = ?,
                    authorised_person_designation = ?, self_sealing_declaration = ?, shipping_bill_pdf_path = ?,
-                   examination_date = ?, location_code_08b = ?, booking_no = ?, vessel_voyage_no = ?,
+                   examination_date = ?, location_code_08b = ?, booking_no = ?, vessel_name = ?, voyage_no = ?,
                    issuing_authority = ?, issuing_authority_address = ?,
                    permission_no = ?, permission_date = ?, permission_expiry = ?, permission_is_one_time = ?, manufacturer_name = ?,
                    manufacturer_address = ?, stuffing_location = ?, remarks = ?,
@@ -2102,7 +2260,7 @@ class ExportInvoiceRepository:
             invoice.bank_ifsc_code, invoice.bank_swift_code, invoice.bank_branch, invoice.bank_address,
             invoice.authorised_person_name, invoice.authorised_person_designation, invoice.self_sealing_declaration,
             invoice.shipping_bill_pdf_path, invoice.examination_date, invoice.location_code_08b, invoice.booking_no,
-            invoice.vessel_voyage_no, invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
+            invoice.vessel_name, invoice.voyage_no, invoice.issuing_authority, invoice.issuing_authority_address, invoice.permission_no,
             invoice.permission_date, invoice.permission_expiry, int(bool(invoice.permission_is_one_time)), invoice.manufacturer_name,
             invoice.manufacturer_address, invoice.stuffing_location, invoice.remarks,
             invoice.total_net_weight_kg, invoice.total_gross_weight_kg,
@@ -2144,12 +2302,12 @@ class ExportInvoiceRepository:
             for i, cd in enumerate(invoice.container_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_container_details "
-                    "(export_invoice_id, sr_no, container_no, line_seal_no, rfid_seal_no, vehicle_no, "
+                    "(export_invoice_id, sr_no, container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, "
                     "lr_no, transporter_name, max_permitted_weight, tare_weight_kg, "
                     "gross_weight, net_weight, weighbridge_name, weighing_slip_no, "
                     "sealing_time, sealing_date) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (invoice_id, i, cd.get("container_no") or None,
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (invoice_id, i, cd.get("container_type") or None, cd.get("container_no") or None,
                      cd.get("line_seal_no") or None, cd.get("rfid_seal_no") or None, cd.get("vehicle_no") or None,
                      cd.get("lr_no") or None, cd.get("transporter_name") or None,
                      cd.get("max_permitted_weight") or None,
@@ -2345,8 +2503,8 @@ class PurchaseOrderRepository:
 
     def list_for_seller(self, supplier_id: int) -> List[PurchaseOrder]:
         """A Supplier's natural link to its purchase orders is
-        seller_supplier_id, not an originating lead - unlike Buyer/Exporter,
-        which see their documents through lead_id instead."""
+        seller_supplier_id, not an originating lead - unlike Buyer,
+        which sees its documents through lead_id instead."""
         rows = self.db.query(
             self._SELECT.format(items_total=self._ITEMS_TOTAL) +
             " WHERE po.seller_supplier_id = ? ORDER BY po.po_date DESC, po.id DESC",

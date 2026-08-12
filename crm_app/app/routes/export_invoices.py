@@ -25,21 +25,18 @@ from app.utils import login_required, admin_required, verify_delete_password
 
 export_invoices_bp = Blueprint("export_invoices", __name__, url_prefix="/export-invoices")
 
-# The container types a user can pick from for the Container Details list.
-CONTAINER_TYPES = ["20FT FCL", "40FT FCL", "20FT LCL", "40FT LCL", "40FT HC"]
-
 _HEADER_FIELDS = [
     "export_invoice_number",
     "invoice_date", "lead_id", "consignee_name", "consignee_address", "notify_name", "notify_address",
     "country_of_origin", "country_of_destination", "place_of_receipt", "pre_carriage_by",
     "port_of_loading", "port_of_discharge", "final_destination", "nature_of_contract", "payment_terms",
     "buyer_order_no", "buyer_order_date",
-    "export_under", "epcg_number", "epcg_date", "loading_type", "tax_mode", "exchange_rate",
+    "loading_type", "tax_mode", "exchange_rate",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",
     "fob_pricing",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "authorised_person_name", "authorised_person_designation", "self_sealing_declaration",
-    "examination_date", "location_code_08b", "booking_no", "vessel_voyage_no",
+    "examination_date", "location_code_08b", "booking_no", "vessel_name", "voyage_no",
     "issuing_authority", "issuing_authority_address",
     "permission_no", "permission_date", "permission_expiry", "permission_is_one_time", "manufacturer_name", "manufacturer_address",
     "stuffing_location", "remarks",
@@ -100,25 +97,32 @@ def _extract_containers(form) -> list:
 
 
 def _extract_container_details(form) -> list:
+    types = form.getlist("cd_container_type[]")
     nos = form.getlist("cd_container_no[]")
     line_seals = form.getlist("cd_line_seal_no[]")
     rfids = form.getlist("cd_rfid_seal_no[]")
     vehicles = form.getlist("cd_vehicle_no[]")
     lr_nos = form.getlist("cd_lr_no[]")
-    transporters = form.getlist("cd_transporter_name[]")
     max_weights = form.getlist("cd_max_permitted_weight[]")
     tares = form.getlist("cd_tare_weight_kg[]")
-    n = max(len(nos), len(line_seals), len(rfids), len(vehicles),
-            len(lr_nos), len(transporters), len(max_weights), len(tares))
+    # Transporter is now one invoice-level pick (not typed per container) -
+    # the same value is stamped onto every row here so storage/printing,
+    # which are still per-row, don't need to change. A row that ends up with
+    # nothing else typed is still dropped by
+    # ExportInvoiceService._clean_container_details regardless of this.
+    transporter = form.get("cd_transporter_name", "")
+    n = max(len(types), len(nos), len(line_seals), len(rfids), len(vehicles),
+            len(lr_nos), len(max_weights), len(tares))
     rows = []
     for i in range(n):
         rows.append({
+            "container_type": types[i] if i < len(types) else "",
             "container_no": nos[i] if i < len(nos) else "",
             "line_seal_no": line_seals[i] if i < len(line_seals) else "",
             "rfid_seal_no": rfids[i] if i < len(rfids) else "",
             "vehicle_no": vehicles[i] if i < len(vehicles) else "",
             "lr_no": lr_nos[i] if i < len(lr_nos) else "",
-            "transporter_name": transporters[i] if i < len(transporters) else "",
+            "transporter_name": transporter,
             "max_permitted_weight": max_weights[i] if i < len(max_weights) else "",
             "tare_weight_kg": tares[i] if i < len(tares) else "",
         })
@@ -244,23 +248,33 @@ def _form_context():
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
     proforma_invoices = container.proforma_invoice_service.list_all(g.user.company_id)
+    buyers = container.buyer_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
     permits = container.permit_service.list_all(g.user.company_id)
-    # Feeds the 11B table's Transporter name dropdown; only the chosen name is
-    # stored on the row, so this list is display-only.
-    transporters = container.transporter_service.list_all(g.user.company_id)
-    return leads, proforma_invoices, company, permits, transporters
+    # The Booking no. dropdown - list_all only returns the header + a row
+    # count, so each one is re-fetched for its full containers/
+    # container_details to drive the client-side auto-fill (see the
+    # booking_no <select> in form.html). Master-data sized list, so the
+    # extra per-row fetch isn't worth a bespoke bulk query. This also feeds
+    # the Transporter field, which - like every other field in the Container
+    # details card except Booking no. itself - is now read-only, filled in
+    # from whichever booking is picked rather than chosen separately.
+    bookings = [
+        container.booking_detail_service.get(b.id, g.user.company_id)
+        for b in container.booking_detail_service.list_all(g.user.company_id)
+    ]
+    return leads, proforma_invoices, buyers, company, permits, bookings
 
 
 def _render_form(invoice, form_data, form_items, containers=None,
                  container_details=None, purchase_details=None, allocations=None, status_code=200):
-    leads, proforma_invoices, company, permits, transporters = _form_context()
+    leads, proforma_invoices, buyers, company, permits, bookings = _form_context()
     rows = form_items if form_items is not None else (invoice.items if invoice else [])
     pallet_types_map, product_meta_map = _product_maps(rows)
     html = render_template(
         "export_invoices/form.html", invoice=invoice, leads=leads, proforma_invoices=proforma_invoices,
-        company=company, permits=permits, transporters=transporters,
-        container_types=CONTAINER_TYPES, form_data=form_data, form_items=form_items,
+        buyers=buyers, company=company, permits=permits, bookings=bookings,
+        form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
         form_allocations=_allocation_rows(invoice, allocations),

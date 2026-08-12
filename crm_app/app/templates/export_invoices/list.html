@@ -21,10 +21,7 @@
           <th>Invoice no.</th>
           <th>Invoice date</th>
           <th>Consignee</th>
-          <th>Ref. PIs</th>
-          <th>Created by</th>
-          <th class="num">Net wt (KG)</th>
-          <th class="num">Gross wt (KG)</th>
+          <th>Buyer If Other Then Consignee[Notify]</th>
           <th class="num">Invoice value</th>
           <th></th>
         </tr>
@@ -35,10 +32,7 @@
           <td class="mono">{{ inv.export_invoice_number }}</td>
           <td class="text-sm">{{ inv.invoice_date }}</td>
           <td><strong>{{ inv.consignee_name }}</strong></td>
-          <td class="text-sm">{{ inv.proforma_invoice_ids | length }}</td>
-          <td class="text-sm">{{ inv.created_by_name }}</td>
-          <td class="num">{{ '{:,.2f}'.format(inv.total_net_weight_kg) if inv.total_net_weight_kg else '-' }}</td>
-          <td class="num">{{ '{:,.2f}'.format(inv.total_gross_weight_kg) if inv.total_gross_weight_kg else '-' }}</td>
+          <td class="text-sm">{{ inv.notify_name or '-' }}</td>
           <td class="num">$ {{ '{:,.2f}'.format(inv.invoice_value_usd) }}</td>
           <td><a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=inv.id) }}" class="text-sm">Open →</a></td>
         </tr>

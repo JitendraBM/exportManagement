@@ -1,15 +1,15 @@
 """
 app/routes/parties.py
 ----------------------
-HTTP layer shared by Buyer and Exporter (the "clients" tab used to cover
-both, plus Supplier, via one client_type field on one table - it's now
-three separate tabs backed by three separate tables). Buyer and Exporter
-are treated as having identical data/documentation structure for now, so
-one blueprint FACTORY builds both blueprints instead of duplicating the
-same routes twice - `build_party_blueprint("buyers", ...)` and
-`build_party_blueprint("exporters", ...)` are called once each in
-app/__init__.py. Supplier's shape has diverged (see app/routes/suppliers.py),
-so it gets its own module instead of a third call here.
+HTTP layer for Buyer (the "clients" tab used to cover Buyer, Exporter and
+Supplier together via one client_type field on one table - it's now
+separate tabs backed by separate tables; Exporter was retired since,
+Supplier's shape had already diverged into its own module - see
+app/routes/suppliers.py). Kept as a blueprint FACTORY rather than an
+inline blueprint so a future party type with this same identical
+data/documentation shape can reuse it via another
+`build_party_blueprint(...)` call in app/__init__.py, instead of
+duplicating these routes.
 """
 
 from flask import (
@@ -21,8 +21,8 @@ from app.utils import login_required, admin_required, verify_delete_password
 
 
 def build_party_blueprint(name: str, service_attr: str) -> Blueprint:
-    """name: 'buyers' | 'exporters' - the blueprint name AND url_prefix.
-    service_attr: 'buyer_service' | 'exporter_service' - the ServiceContainer
+    """name: 'buyers' - the blueprint name AND url_prefix.
+    service_attr: 'buyer_service' - the ServiceContainer
     attribute this blueprint's routes should call."""
     bp = Blueprint(name, __name__, url_prefix=f"/{name}")
 

@@ -24,8 +24,8 @@ from app.repositories import (
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository,
+    PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
@@ -33,7 +33,7 @@ from app.services import (
     QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
     ExportInvoiceService, ExportPackingListService, PackingListService, BackupService,
     DocumentVersionService, ProformaFulfilmentService,
-    InventoryService, PermitService, MiscListService,
+    InventoryService, PermitService, BookingDetailService, MiscListService,
 )
 from app.utils import register_template_helpers
 
@@ -52,7 +52,6 @@ class ServiceContainer:
         self.user_repo = SqliteUserRepository(db)
         self.lead_repo = SqliteLeadRepository(db)
         self.buyer_repo = SqlitePartyRepository(db, table="buyers", client_type="Buyer")
-        self.exporter_repo = SqlitePartyRepository(db, table="exporters", client_type="Exporter")
         self.supplier_repo = SqliteSupplierRepository(db)
         self.transporter_repo = SqliteTransporterRepository(db)
         self.comm_repo = CommunicationRepository(db)
@@ -73,9 +72,11 @@ class ServiceContainer:
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
+        self.booking_detail_repo = BookingDetailRepository(db)
         self.misc_currency_repo = MiscCurrencyRepository(db)
         self.misc_nature_of_contract_repo = MiscNatureOfContractRepository(db)
         self.misc_port_of_loading_repo = MiscPortOfLoadingRepository(db)
+        self.misc_container_type_repo = MiscContainerTypeRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -84,12 +85,6 @@ class ServiceContainer:
         self.lead_service = LeadService(self.lead_repo, self.communication_service)
         self.buyer_service = PartyService(
             self.buyer_repo, "buyer", self.lead_repo, self.communication_service,
-            self.payment_repo, self.document_repo, self.currency_service,
-            self.quotation_repo, self.proforma_invoice_repo, self.packing_list_repo,
-            self.purchase_order_repo,
-        )
-        self.exporter_service = PartyService(
-            self.exporter_repo, "exporter", self.lead_repo, self.communication_service,
             self.payment_repo, self.document_repo, self.currency_service,
             self.quotation_repo, self.proforma_invoice_repo, self.packing_list_repo,
             self.purchase_order_repo,
@@ -104,10 +99,10 @@ class ServiceContainer:
         self.transporter_service = TransporterService(self.transporter_repo)
         # Keyed by leads.converted_client_type - advance_client_status looks
         # up the right repo once it knows which type a lead converted to.
-        self.party_repos = {"Buyer": self.buyer_repo, "Exporter": self.exporter_repo, "Supplier": self.supplier_repo}
+        self.party_repos = {"Buyer": self.buyer_repo, "Supplier": self.supplier_repo}
         self.stats_service = StatsService(
             self.user_repo, self.lead_repo, self.comm_repo,
-            self.buyer_repo, self.exporter_repo, self.supplier_repo,
+            self.buyer_repo, self.supplier_repo,
         )
         self.company_service = CompanyService(
             self.company_repo, Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
@@ -125,7 +120,9 @@ class ServiceContainer:
         )
         self.misc_list_service = MiscListService(
             self.misc_currency_repo, self.misc_nature_of_contract_repo, self.misc_port_of_loading_repo,
+            self.misc_container_type_repo,
         )
+        self.booking_detail_service = BookingDetailService(self.booking_detail_repo, self.buyer_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)
         self.quotation_service = QuotationService(
             self.quotation_repo, self.product_repo, self.lead_repo, self.document_version_service,
@@ -228,12 +225,17 @@ def create_app(config_class=Config) -> Flask:
         port_of_loading_options = (
             app.container.misc_list_service.list_ports_of_loading(user.company_id) if user else []
         )
+        # ...and for the container types the Booking Detail form picks from.
+        container_type_options = (
+            app.container.misc_list_service.container_type_options(user.company_id) if user else []
+        )
         return dict(
             current_user=g.get("user"),
             our_company=our_company,
             currency_options=currency_options,
             nature_of_contract_options=nature_of_contract_options,
             port_of_loading_options=port_of_loading_options,
+            container_type_options=container_type_options,
             LEAD_STATUSES=LEAD_STATUSES,
             CLIENT_STATUSES=CLIENT_STATUSES,
             CLIENT_TYPES=CLIENT_TYPES,
@@ -260,6 +262,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.reports import reports_bp
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
+    from app.routes.booking_details import booking_details_bp
     from app.routes.quotations import quotations_bp
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
@@ -281,14 +284,12 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.backup import backup_bp
 
     buyers_bp = build_party_blueprint("buyers", "buyer_service")
-    exporters_bp = build_party_blueprint("exporters", "exporter_service")
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(leads_bp)
     app.register_blueprint(buyers_bp)
     app.register_blueprint(suppliers_bp)
-    app.register_blueprint(exporters_bp)
     app.register_blueprint(transporters_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(company_bp)
@@ -297,6 +298,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(reports_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)
+    app.register_blueprint(booking_details_bp)
     app.register_blueprint(quotations_bp)
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)

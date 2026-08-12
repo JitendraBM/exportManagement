@@ -50,7 +50,6 @@
     <div class="card-header"><h3>Quotation &amp; shipping details</h3></div>
     <div class="form-row">
       <div class="field"><label for="quotation_date">Date<span class="required-mark">*</span></label><input type="date" id="quotation_date" name="quotation_date" required value="{{ data.quotation_date | default(today, true) }}"></div>
-      <div class="field"><label for="price_validity_days">Price validity (days)</label><input type="number" id="price_validity_days" name="price_validity_days" value="{{ data.price_validity_days | default(30, true) }}"></div>
     </div>
     <div class="form-row">
       {# Options come from Administration -> Miscellaneous (port_of_loading_options);

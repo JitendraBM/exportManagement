@@ -60,7 +60,7 @@
     {% set rest = (item.product_name or '').split('\n')[1:] | join('\n') %}
     <tr class="pi-goods">
       <td class="pi-val pi-center">{{ gs.sr }}</td>
-      <td class="pi-val pi-bottom">
+      <td class="pi-val">
         {%- if inline_into_row -%}
           {{ (item.product_name or '').split('\n')[0]|upper }}
         {%- else -%}
