@@ -1,0 +1,23 @@
+{# Shared goods-row renderer for the quotation sheet and the annexure sheet.
+   Unlike proforma_invoices/_goods_rows.html, quotation items don't group
+   under a shared category heading (no display_mode toggle here) - just a
+   flat numbered list, one row per item. Sr No comes straight off the item's
+   own stored sr_no (assigned sequentially across the whole item list at
+   save time - see QuotationService._build_items), so numbering already
+   continues correctly onto the annexure with no running counter needed. #}
+
+{% macro rows(items, currency_prefix='$') %}
+  {% for item in items %}
+  <tr class="qt-goods">
+    <td class="qt-val qt-center">{{ item.sr_no }}</td>
+    <td class="qt-val qt-mid">{{ (item.product_name or '')|upper|replace('\n', '<br>')|safe }}</td>
+    <td class="qt-val qt-center qt-mid">{{ item.hsn_code or '' }}</td>
+    <td class="qt-val qt-center">{{ '{:,.2f}'.format(item.pallets) if item.pallets else '' }}</td>
+    <td class="qt-val qt-right">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="qt-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
+    <td class="qt-val qt-right">{{ '{:,.2f}'.format(item.quantity_value or 0) }} <span class="qt-unit-sm">{{ item.unit }}</span></td>
+    <td class="qt-val qt-right">{{ currency_prefix }}{{ '{:,.2f}'.format(item.price_usd or 0) }}</td>
+    <td class="qt-val qt-center">{{ item.unit }}</td>
+    <td class="qt-val qt-right">{{ currency_prefix }}&nbsp;{{ '{:,.2f}'.format(item.total_usd or 0) }}</td>
+  </tr>
+  {% endfor %}
+{% endmacro %}

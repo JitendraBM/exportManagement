@@ -77,12 +77,79 @@ class TestExportCrud:
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
 
-    def test_fob_pricing_is_never_revived_even_if_posted(self, container, seed):
-        """Export invoices no longer have an FOB-typed-price mode - a stale
-        client (or a direct API call) posting the old fob_pricing checkbox
-        must not trigger the removed uplift. The typed price is always the
-        CIF price, exactly as if fob_pricing had never existed."""
+    def test_fob_pricing_spreads_the_charges_at_full_precision(self, container, seed):
+        # Same shared uplift the quotation/proforma invoice used to use
+        # (services.apply_fob_uplift): 100 of charges over 3 units is
+        # 33.333..., kept at full precision rather than rounded to the cent,
+        # so the line total lands exactly on 121.0 with no round-off to carry.
         inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
+                          fob_pricing="1",
+                          items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
+                                  "price_usd": "7", "igst_percent": "18"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        item = got.items[0]
+        assert item.fob_price_usd == 7.0
+        assert item.price_usd == pytest.approx(7 + 100 / 3)
+        assert item.total_usd == 121.0
+        assert got.round_off == 0
+        assert got.cif_value_usd == pytest.approx(121.0)
+        assert got.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+
+    def test_invoice_value_includes_certification_and_other_under_fob_terms(self, container, seed):
+        # The actual bug being fixed: under FOB terms, FOB value must move
+        # only when a line's typed price or quantity changes - never with
+        # the discount, and (unlike the base CifMoneyLadder ladder) never
+        # with the four charges either, when fob_pricing was never ticked.
+        # Invoice value is then built back UP from it: FOB + every charge -
+        # discount (ExportInvoice.invoice_value_usd). sea_freight/insurance
+        # are auto-zeroed by _build_header under FOB terms, but
+        # certification/other are not - they still have to reach the buyer's
+        # payable figure rather than silently vanishing.
+        inv = make_export(container, seed, nature_of_contract="FOB", sea_freight="100",
+                          insurance="50", certification="20", other_charges="10", discount_amount="10",
+                          items=[{"product_name": "Tiles", "quantity_value": "10", "unit": "SQM",
+                                  "price_usd": "6", "igst_percent": "18"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.items[0].fob_price_usd is None          # fob_pricing was never ticked
+        assert got.sea_freight == 0 and got.insurance == 0  # dropped by FOB terms
+        assert got.cif_value_usd == 60.0
+        assert got.fob_value_usd == 60.0                    # goods total only - discount/charges don't touch it
+        assert got.invoice_value_usd == 80.0                # 60 + (0+0+20+10) - 10
+
+    def test_fob_value_falls_back_to_the_base_ladder_under_cif_terms_without_a_push(self, container, seed):
+        # Genuine CIF/CFR terms with the price typed directly as the CIF
+        # price and "Calculate CIF pricing" never pushed - price_usd is
+        # assumed CIF-inclusive already (see CifMoneyLadder's docstring), so
+        # FOB and Invoice value both fall back to the base ladder's own
+        # top-down subtraction instead of the FOB-terms formula above. This
+        # is the scenario the first, over-broad version of this fix
+        # accidentally broke (see test_routes_pages.py::
+        # TestCommercialInvoiceRoutes::
+        # test_money_is_the_invoices_own_currency_with_indian_grouping).
+        inv = make_export(container, seed, nature_of_contract="CIF", insurance="50", discount_amount="100",
+                          items=[{"product_name": "Tiles", "quantity_value": "144", "unit": "SQM",
+                                  "price_usd": "5.92", "igst_percent": "18"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.cif_value_usd == pytest.approx(852.48)
+        assert got.invoice_value_usd == pytest.approx(752.48)   # 852.48 - 100
+        assert got.fob_value_usd == pytest.approx(702.48)       # 852.48 - 100 - 50
+
+    def test_fob_pricing_plus_discount_still_reports_the_typed_fob_total(self, container, seed):
+        # Extends test_fob_pricing_spreads_the_charges_at_full_precision with
+        # a non-zero discount - the case the old formula got wrong.
+        inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
+                          fob_pricing="1", discount_amount="15",
+                          items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
+                                  "price_usd": "7", "igst_percent": "18"}])
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.fob_value_usd == pytest.approx(21.0)     # exactly 3 x the typed 7, discount doesn't touch it
+
+    def test_fob_pricing_is_ignored_under_fob_terms(self, container, seed):
+        # "Prices typed above are FOB" only means something when there's a
+        # CIF figure to build up to - under FOB terms there's none (the form
+        # hides the checkbox entirely there), so a stale client/API call
+        # posting it anyway is ignored rather than uplifting the price.
+        inv = make_export(container, seed, nature_of_contract="FOB", sea_freight="100",
                           fob_pricing="1",
                           items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
                                   "price_usd": "7", "igst_percent": "18"}])
@@ -92,7 +159,6 @@ class TestExportCrud:
         assert item.fob_price_usd is None
         assert item.price_usd == 7.0
         assert item.total_usd == 21.0
-        assert got.cif_value_usd == pytest.approx(21.0)
 
     def test_without_fob_pricing_the_export_prices_are_untouched(self, container, seed):
         got = container.export_invoice_service.get(
@@ -463,12 +529,12 @@ class TestExportChildLists:
         # excise_seal_no/plts/boxes were dropped in v37 - anything still
         # sending them is ignored rather than stored.
         inv = make_export(container, seed, container_details_list=[
-            {"container_no": "BLJU2253726", "tare_weight": "3800",
+            {"container_no": "BLJU2253726", "tare_weight_kg": "3800",
              "excise_seal_no": "WIND02432727", "plts": "24", "boxes": "1919"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         cd = got.container_details[0]
         assert cd["container_no"] == "BLJU2253726"
-        assert cd["tare_weight"] == "3800"
+        assert cd["tare_weight_kg"] == 3800
         assert not {"excise_seal_no", "plts", "boxes"} & set(cd)
 
     def test_booking_no_round_trip(self, container, seed):

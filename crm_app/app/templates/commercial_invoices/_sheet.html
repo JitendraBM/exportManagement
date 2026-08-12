@@ -6,8 +6,7 @@
    else is that invoice's too, so the two sheets can never disagree. Compared
    with the export invoice's own sheet this one drops the customs apparatus -
    no Export Under block, no purchase details, no LUT/IGST panel, and no
-   registration numbers beyond the contact details - and its money ladder runs
-   straight from CIF to FOB with no intermediate Invoice Value line.
+   registration numbers beyond the contact details.
 
    The style and the header band are shared with the commercial invoice
    packing list, which prints them identically.
@@ -82,32 +81,42 @@
          the items table's column grid, so one row reads as one line across the
          band - the same structure the export invoice sheet uses.
 
-         The ladder is the app-wide one (CifMoneyLadder in app/models.py) run
-         straight from CIF to FOB: this sheet shows no intermediate Invoice
-         Value line, so the discount and the charges come off in one run and
-         FOB is still the bottom. Certification appears only when it is
-         non-zero - the reference has no such row, but silently dropping a real
-         charge would leave the subtraction not reconciling.
+         The ladder is the app-wide one (CifMoneyLadder in app/models.py):
+         CIF -> Discount -> Invoice Value -> charges -> FOB Value. Certification
+         appears only when it is non-zero - the reference has no such row, but
+         silently dropping a real charge would leave the subtraction not
+         reconciling.
 
-         Each entry is (label, value, signed) - `signed` only for ROUND-OFF,
-         which has to read as an amount added or taken back out. #}
+         Each entry is (label, value, is_total, signed) - `is_total` lifts the
+         Invoice Value row out with a shaded band (see .ci-tiv), `signed` only
+         for ROUND-OFF, which has to read as an amount added or taken back
+         out. #}
       {% set money_rows = [] %}
-      {% set _ = money_rows.append(('CIF Invoice Value', invoice.cif_value_usd, false)) %}
-      {% set _ = money_rows.append(('Discount', invoice.discount_amount, false)) %}
+      {% set _ = money_rows.append(('CFR Invoice Value' if invoice.nature_of_contract | is_cfr else 'CIF Invoice Value', invoice.cif_value_usd, false, false)) %}
+      {% set _ = money_rows.append(('Discount', invoice.discount_amount, false, false)) %}
+      {# invoice.invoice_value_usd = fob_value_usd + charges_total -
+         discount_amount (ExportInvoice.invoice_value_usd, app/models.py) -
+         the authoritative figure, printed here between Discount and the
+         charges exactly as the export invoice sheet does. #}
+      {% set _ = money_rows.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}
       {# FOB terms put the whole ocean leg on the buyer so both drop out; CFR
          keeps the freight but leaves the buyer to insure, so only insurance
          goes. Each is appended on its own question. #}
       {% if not invoice.nature_of_contract | drops_insurance %}
-      {% set _ = money_rows.append(('Insurance', invoice.insurance, false)) %}
+      {% set _ = money_rows.append(('Insurance', invoice.insurance, false, false)) %}
       {% endif %}
       {% if not invoice.nature_of_contract | drops_sea_freight %}
-      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight, false)) %}
+      {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight, false, false)) %}
       {% endif %}
       {% if invoice.certification %}
-      {% set _ = money_rows.append(('Certification', invoice.certification, false)) %}
+      {% set _ = money_rows.append(('Certification', invoice.certification, false, false)) %}
       {% endif %}
-      {% set _ = money_rows.append(('Other Charges', invoice.other_charges, false)) %}
-      {% set _ = money_rows.append(('FOB Value', invoice.fob_value_usd, false)) %}
+      {% set _ = money_rows.append(('Other Charges', invoice.other_charges, false, false)) %}
+      {# invoice.fob_value_usd directly - the pure goods total (quantity x
+         the originally typed FOB price), the actual bottom of the ladder;
+         invoice_value_usd above is built up from it the other way round, so
+         the two agree by construction. #}
+      {% set _ = money_rows.append(('FOB Value', invoice.fob_value_usd, false, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          split evenly between Net and Gross Weight, an odd remainder going to
@@ -118,12 +127,12 @@
       {% set net_rows = weight_rows // 2 %}
       {% set gross_rows = weight_rows - net_rows %}
 
-      {% for label, value, signed in money_rows %}
-      <tr class="ci-tot">
+      {% for label, value, is_total, signed in money_rows %}
+      <tr class="ci-tot{% if is_total %} ci-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money_rows|length }}" style="font-weight:normal;">
           <span class="ci-lbl">Invoice Value In Word</span><br>
-          <span class="ci-lbl">{{ invoice.cif_value_usd | amount_in_words(invoice.currency_name) }}</span>
+          <span class="ci-lbl">{{ invoice.invoice_value_usd | amount_in_words(invoice.currency_name) }}</span>
         </td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>

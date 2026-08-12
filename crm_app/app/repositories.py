@@ -1589,16 +1589,16 @@ class QuotationRepository:
         new_id = self.db.execute(
             """INSERT INTO quotations
                (company_id, quotation_number, quotation_date, lead_id, buyer_name, buyer_address,
-                buyer_reference_no, port_of_loading, port_of_discharge, packing_details,
+                buyer_reference_no, port_of_loading, port_of_discharge, final_destination, packing_details,
                 container_details, shipping_mode, shipping_terms, payment_terms,
                 price_validity_days, remarks,
                 sea_freight, insurance, certification, other_charges,
                 discount_amount, fob_pricing, round_off, cif_adjust_usd, bank_name, bank_account_number, bank_ifsc_code,
                 bank_swift_code, bank_branch, bank_address, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (quotation.company_id, quotation.quotation_number, quotation.quotation_date, quotation.lead_id,
              quotation.buyer_name, quotation.buyer_address, quotation.buyer_reference_no,
-             quotation.port_of_loading, quotation.port_of_discharge, quotation.packing_details,
+             quotation.port_of_loading, quotation.port_of_discharge, quotation.final_destination, quotation.packing_details,
              quotation.container_details, quotation.shipping_mode, quotation.shipping_terms,
              quotation.payment_terms,
              quotation.price_validity_days, quotation.remarks,
@@ -1616,7 +1616,7 @@ class QuotationRepository:
         self.db.execute(
             """UPDATE quotations SET quotation_date = ?, lead_id = ?, buyer_name = ?,
                                       buyer_address = ?, buyer_reference_no = ?, port_of_loading = ?,
-                                      port_of_discharge = ?, packing_details = ?, container_details = ?,
+                                      port_of_discharge = ?, final_destination = ?, packing_details = ?, container_details = ?,
                                       shipping_mode = ?, shipping_terms = ?, payment_terms = ?,
                                       price_validity_days = ?,
                                       remarks = ?, sea_freight = ?, insurance = ?, certification = ?,
@@ -1629,7 +1629,7 @@ class QuotationRepository:
                WHERE id = ?""",
             (quotation.quotation_date, quotation.lead_id, quotation.buyer_name,
              quotation.buyer_address, quotation.buyer_reference_no, quotation.port_of_loading,
-             quotation.port_of_discharge, quotation.packing_details, quotation.container_details,
+             quotation.port_of_discharge, quotation.final_destination, quotation.packing_details, quotation.container_details,
              quotation.shipping_mode, quotation.shipping_terms, quotation.payment_terms,
              quotation.price_validity_days,
              quotation.remarks, quotation.sea_freight, quotation.insurance, quotation.certification,
@@ -1773,19 +1773,19 @@ class ProformaInvoiceRepository:
                 buyer_order_no, other_reference, consignee_name, consignee_address, notify_name,
                 notify_address, country_of_origin, country_of_destination,
                 port_of_loading, port_of_discharge, final_destination, transhipment, partial_shipment,
-                variation_in_qty, delivery_period, container_details, terms_of_delivery, payment_terms,
-                remarks, sea_freight, insurance, certification, other_charges, discount_amount,
+                variation_in_qty, delivery_period, container_details, packing_details, terms_of_delivery,
+                payment_terms, remarks, sea_freight, insurance, certification, other_charges, discount_amount,
                 fob_pricing, round_off,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
                 bank_address, display_mode, status, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
              invoice.country_of_origin, invoice.country_of_destination,
              invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
-             invoice.delivery_period, invoice.container_details, invoice.terms_of_delivery,
+             invoice.delivery_period, invoice.container_details, invoice.packing_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount,
              int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
@@ -1809,7 +1809,7 @@ class ProformaInvoiceRepository:
                                              port_of_loading = ?, port_of_discharge = ?,
                                              final_destination = ?, transhipment = ?, partial_shipment = ?,
                                              variation_in_qty = ?, delivery_period = ?, container_details = ?,
-                                             terms_of_delivery = ?, payment_terms = ?, remarks = ?,
+                                             packing_details = ?, terms_of_delivery = ?, payment_terms = ?, remarks = ?,
                                              sea_freight = ?, insurance = ?, certification = ?,
                                              other_charges = ?, discount_amount = ?,
                                              fob_pricing = ?, round_off = ?, bank_name = ?,
@@ -1824,7 +1824,7 @@ class ProformaInvoiceRepository:
              invoice.country_of_origin, invoice.country_of_destination,
              invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
-             invoice.delivery_period, invoice.container_details, invoice.terms_of_delivery,
+             invoice.delivery_period, invoice.container_details, invoice.packing_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount,
              int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
@@ -1970,6 +1970,21 @@ class ExportInvoiceRepository:
             invoice.proforma_invoice_ids = [None] * (r["proforma_link_count"] or 0)
             invoices.append(invoice)
         return invoices
+
+    def list_for_proforma(self, proforma_invoice_id: int, company_id: int) -> List[ExportInvoice]:
+        """Every export invoice generated from this proforma invoice, newest
+        first - the reverse of proforma_invoice_ids, for the PI page's link
+        back to whatever export invoice(s) it was already used to build."""
+        rows = self.db.query(
+            """SELECT ei.*, u.full_name AS created_by_name
+               FROM export_invoices ei
+               JOIN users u ON u.id = ei.created_by
+               JOIN export_invoice_proforma_links l ON l.export_invoice_id = ei.id
+               WHERE l.proforma_invoice_id = ? AND ei.company_id = ?
+               ORDER BY ei.id DESC""",
+            (proforma_invoice_id, company_id),
+        )
+        return [ExportInvoice.from_row(r) for r in rows]
 
     def create(self, invoice: ExportInvoice) -> ExportInvoice:
         new_id = self.db.execute(

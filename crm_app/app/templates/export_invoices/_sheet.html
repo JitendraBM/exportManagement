@@ -266,16 +266,29 @@
          The money side drives the row count (it's the longest), so it's built
          as a list here and the left-hand cells rowspan down to meet it.
 
-         The ladder is the app-wide one (see CifMoneyLadder in app/models.py):
-         the rate is a CIF rate, so it runs DOWNWARDS - CIF less the discount
-         is what the buyer pays, and stripping the carriage/handling charges
-         back out of that leaves the FOB value customs works from. Every step
-         prints even at zero, so the subtraction can be followed all the way
-         down. #}
+         The rows print in the same CIF -> Discount -> Invoice Value ->
+         charges -> FOB Value order as every other document's ladder (see
+         CifMoneyLadder in app/models.py), but for an export invoice the
+         bottom (FOB Value) is the one actually anchored - it's the pure
+         goods total, quantity x the originally typed FOB price, unmoved by
+         discount or charges - and Invoice Value is built UP from it
+         (ExportInvoice.invoice_value_usd = fob_value_usd + charges_total -
+         discount_amount). CIF/CFR Value only equals Invoice Value + Discount
+         when the charges have actually been folded into every line's price
+         (the "Calculate CIF pricing" push on the form) - which is also
+         exactly when that row is shown at all (never under FOB terms, see
+         below) - so the row order still reads correctly top to bottom.
+         Every step prints even at zero, so it can be followed all the way
+         down regardless. #}
       {# Each entry is (label, value, is_total, signed) - `signed` only for
          ROUND-OFF, which has to read as an amount added or taken back out. #}
       {% set money = [] %}
-      {% set _ = money.append(('CIF Value', invoice.cif_value_usd, false, false)) %}
+      {# Under FOB terms there's no CIF/CFR figure to build at all - the whole
+         ocean leg is on the buyer - so the row is left off entirely (not
+         just relabelled); it only ever prints under CIF/CFR terms. #}
+      {% if not invoice.nature_of_contract | is_fob %}
+      {% set _ = money.append(('CFR Value' if invoice.nature_of_contract | is_cfr else 'CIF Value', invoice.cif_value_usd, false, false)) %}
+      {% endif %}
       {% set _ = money.append(('Discount', invoice.discount_amount, false, false)) %}
       {% set _ = money.append(('Invoice Value', invoice.invoice_value_usd, true, false)) %}
       {# The delivery terms decide which of these apply: FOB puts the whole
@@ -296,6 +309,14 @@
       {% set _ = money.append(('Certification', invoice.certification, false, false)) %}
       {% endif %}
       {% set _ = money.append(('Other Charges', invoice.other_charges, false, false)) %}
+      {# invoice.fob_value_usd directly - it's the pure goods total (quantity
+         x the originally typed FOB price), the actual bottom of the ladder.
+         invoice.invoice_value_usd is now DEFINED from it the other way round
+         (fob_value_usd + charges_total - discount_amount - see
+         ExportInvoice.invoice_value_usd in app/models.py), so this row and
+         the Invoice Value row above agree by construction; the old
+         `invoice_value_usd - charges_total` reconstruction would now be off
+         by the discount. #}
       {% set _ = money.append(('FOB Value', invoice.fob_value_usd, false, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest

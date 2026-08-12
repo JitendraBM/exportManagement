@@ -529,6 +529,7 @@ CREATE TABLE IF NOT EXISTS quotations (
     buyer_reference_no      TEXT,
     port_of_loading         TEXT,
     port_of_discharge       TEXT,
+    final_destination       TEXT,
     packing_details         TEXT,
     container_details       TEXT,
     shipping_mode           TEXT,
@@ -617,6 +618,7 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     variation_in_qty        TEXT,
     delivery_period         TEXT,
     container_details       TEXT,
+    packing_details          TEXT,          -- e.g. "PALLATE" - same field as quotations.packing_details
     terms_of_delivery       TEXT,
     payment_terms           TEXT,
     remarks                 TEXT,
@@ -625,7 +627,10 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     certification             REAL NOT NULL DEFAULT 0,
     other_charges             REAL NOT NULL DEFAULT 0,
     discount_amount          REAL NOT NULL DEFAULT 0,
-    fob_pricing              INTEGER NOT NULL DEFAULT 0,  -- prices typed are FOB; see quotations.fob_pricing
+    -- Unused (kept so an old invoice's row still loads): proforma invoices no
+    -- longer have an FOB-typed-price mode. See export_invoices.fob_pricing,
+    -- which has this now.
+    fob_pricing              INTEGER NOT NULL DEFAULT 0,
     round_off                REAL NOT NULL DEFAULT 0,     -- see quotations.round_off
     bank_name                TEXT,
     bank_account_number      TEXT,
@@ -660,7 +665,7 @@ CREATE TABLE IF NOT EXISTS proforma_invoice_items (
     quantity_value         REAL NOT NULL DEFAULT 0,
     unit                  TEXT NOT NULL DEFAULT 'SQM',
     price_usd             REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
-    fob_price_usd         REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
+    fob_price_usd         REAL,                      -- unused (kept so an old row still loads) - see export_invoice_items.fob_price_usd
     total_usd             REAL NOT NULL DEFAULT 0
 );
 
@@ -859,7 +864,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     certification               REAL NOT NULL DEFAULT 0,
     other_charges               REAL NOT NULL DEFAULT 0,
     discount_amount             REAL NOT NULL DEFAULT 0,
-    fob_pricing                 INTEGER NOT NULL DEFAULT 0,  -- prices typed are FOB; see quotations.fob_pricing
+    fob_pricing                 INTEGER NOT NULL DEFAULT 0,  -- "Prices typed above are FOB" checkbox; see apply_fob_uplift in services.py
     round_off                   REAL NOT NULL DEFAULT 0,     -- see quotations.round_off
     fob_value                   REAL NOT NULL DEFAULT 0,
     cnf_value                   REAL NOT NULL DEFAULT 0,

@@ -51,7 +51,7 @@ from app.repositories import (
     MiscPortOfLoadingRepository,
 )
 from app.database import Database, SCHEMA_VERSION
-from app.utils import drops_certification, drops_insurance, drops_sea_freight
+from app.utils import drops_insurance, drops_sea_freight, is_fob_terms
 
 
 # ============================================================
@@ -2080,6 +2080,7 @@ class QuotationService:
             buyer_reference_no=(fields.get("buyer_reference_no") or "").strip() or None,
             port_of_loading=(fields.get("port_of_loading") or "").strip() or None,
             port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
+            final_destination=(fields.get("final_destination") or "").strip() or None,
             packing_details=(fields.get("packing_details") or "").strip() or None,
             container_details=(fields.get("container_details") or "").strip() or None,
             shipping_mode=(fields.get("shipping_mode") or "").strip() or None,
@@ -2278,7 +2279,9 @@ class ProformaInvoiceService:
             "buyer_order_no": quotation.buyer_reference_no,
             "port_of_loading": quotation.port_of_loading,
             "port_of_discharge": quotation.port_of_discharge,
+            "final_destination": quotation.final_destination,
             "container_details": quotation.container_details,
+            "packing_details": quotation.packing_details,
             "terms_of_delivery": quotation.shipping_terms,
             "payment_terms": quotation.payment_terms,
             "sea_freight": quotation.sea_freight,
@@ -2294,7 +2297,7 @@ class ProformaInvoiceService:
             "bank_address": quotation.bank_address,
             "remarks": quotation.remarks,
             # The document the goods were quoted in is the one they are
-            # invoiced in, unless the user changes it on the form.
+            # invoiced in - locked, not just prefilled (see _build_header).
             "currency_code": quotation.currency_code,
         }
         items = [
@@ -2386,19 +2389,26 @@ class ProformaInvoiceService:
                 lead_id = None
 
         quotation_id = int(fields["quotation_id"]) if fields.get("quotation_id") else None
+        linked_quotation = None
         if quotation_id is not None:
             # Only trust a quotation from this same company - same reasoning as lead_id above.
-            quotation = self.quotation_repo.get_by_id(quotation_id)
-            if not quotation or quotation.company_id != current_user.company_id:
+            linked_quotation = self.quotation_repo.get_by_id(quotation_id)
+            if not linked_quotation or linked_quotation.company_id != current_user.company_id:
                 quotation_id = None
+                linked_quotation = None
 
         # Currency the document is written in: the form posts a name off the
         # Miscellaneous currency list, and both name and symbol are
         # snapshotted so editing that list later can't rewrite an issued
         # sheet. Display information only - amounts are stored as typed.
+        # Once linked to a quotation, the currency is inherited from it
+        # instead - the same document is invoiced in what it was quoted in,
+        # and the form disables the field once linked, so this also guards a
+        # tampered POST.
+        currency_source = linked_quotation.currency_code if linked_quotation else fields.get("currency_code")
         currency_code, currency_symbol = (
-            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
-            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+            self.misc_list_service.resolve_currency(current_user.company_id, currency_source)
+            if self.misc_list_service else ((currency_source or "").strip() or None, None)
         )
 
         invoice = ProformaInvoice(
@@ -2421,6 +2431,7 @@ class ProformaInvoiceService:
             variation_in_qty=(fields.get("variation_in_qty") or "").strip() or None,
             delivery_period=(fields.get("delivery_period") or "").strip() or None,
             container_details=(fields.get("container_details") or "").strip() or None,
+            packing_details=(fields.get("packing_details") or "").strip() or None,
             terms_of_delivery=terms_of_delivery,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
             remarks=(fields.get("remarks") or "").strip() or None,
@@ -2430,10 +2441,13 @@ class ProformaInvoiceService:
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
             # Proforma invoices no longer have an FOB-typed-price mode - the
-            # typed price is always the absolute FOB price and CIF Value is
-            # worked out from it plus the charges (ProformaInvoice.cif_value_usd).
-            # Hardcoded off (rather than read from `fields`) so even a direct
-            # API/service call can't revive the old uplift.
+            # typed price is always the absolute FOB price, never adjusted by
+            # an uplift (see ProformaInvoice.cif_value_usd, which builds CIF
+            # upward from it, mirroring Quotation.cif_value_usd). Hardcoded
+            # off (rather than read from `fields`) so even a direct API/
+            # service call can't revive the old uplift. See
+            # ExportInvoiceService, which took over the "Prices typed above
+            # are FOB" checkbox.
             fob_pricing=False,
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
@@ -3223,6 +3237,9 @@ class ExportInvoiceService:
     def list_all(self, company_id: int) -> List[ExportInvoice]:
         return self.export_invoice_repo.list_all(company_id)
 
+    def list_for_proforma(self, proforma_invoice_id: int, company_id: int) -> List[ExportInvoice]:
+        return self.export_invoice_repo.list_for_proforma(proforma_invoice_id, company_id)
+
     # ---- permission --------------------------------------------------
     def _assert_can_modify(self, invoice: ExportInvoice, current_user: User):
         if current_user.is_admin:
@@ -3467,13 +3484,23 @@ class ExportInvoiceService:
         nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
         no_sea_freight = drops_sea_freight(nature_of_contract)
         no_insurance = drops_insurance(nature_of_contract)
-        no_certification = drops_certification(nature_of_contract)
+        # "Calculate CIF pricing" only means something when there's a CIF
+        # figure to build - under FOB terms there's no CIF to show at all
+        # (see is_fob in the printed sheet/form), so the button is hidden
+        # there and this ignores it even if a stale client/API call posts it
+        # anyway. Same trust boundary as the charge zeroing above.
+        no_fob_pricing = is_fob_terms(nature_of_contract)
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
             lead = self.lead_repo.get_by_id(lead_id)
             if not lead or lead.company_id != current_user.company_id:
                 lead_id = None
+
+        # Computed early (rather than where it's assigned onto the invoice
+        # below) so the linked PIs' currency is known before the currency
+        # resolution just below needs it.
+        proforma_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
 
         tax_mode = fields.get("tax_mode") if fields.get("tax_mode") in dict(EXPORT_TAX_MODES) else EXPORT_TAX_MODE_IGST
         loading_type = fields.get("loading_type") if fields.get("loading_type") in dict(EXPORT_LOADING_TYPES) else EXPORT_LOADING_SELF_SEALING
@@ -3493,10 +3520,19 @@ class ExportInvoiceService:
 
         # Currency: the form posts a name off the Miscellaneous currency
         # list; both name and symbol are snapshotted so editing that list
-        # later can't change what an already-issued invoice printed.
+        # later can't change what an already-issued invoice printed. Once
+        # linked to a proforma invoice, the currency is inherited from it
+        # instead - the same document is invoiced in what it was quoted in,
+        # and the form disables the field once linked, so this also guards a
+        # tampered POST.
+        currency_source = fields.get("currency_code")
+        if proforma_ids:
+            linked_pi = self.proforma_invoice_repo.get_by_id(proforma_ids[0])
+            if linked_pi:
+                currency_source = linked_pi.currency_code
         currency_name, currency_symbol = (
-            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
-            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+            self.misc_list_service.resolve_currency(current_user.company_id, currency_source)
+            if self.misc_list_service else ((currency_source or "").strip() or None, None)
         )
 
         invoice = ExportInvoice(
@@ -3527,12 +3563,7 @@ class ExportInvoiceService:
             certification=0 if no_certification else _float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            # Export invoices no longer have an FOB-typed-price mode - the
-            # typed price is always the CIF price the sheet prints, exactly
-            # as if fob_pricing had never existed. Hardcoded off (rather than
-            # read from `fields`) so even a direct API/service call can't
-            # revive the old uplift.
-            fob_pricing=False,
+            fob_pricing=False if no_fob_pricing else is_fob_pricing(fields),
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -3564,7 +3595,7 @@ class ExportInvoiceService:
             currency_symbol=currency_symbol,
             items=items,
         )
-        invoice.proforma_invoice_ids = self._clean_proforma_ids(fields.get("proforma_invoice_ids"), current_user.company_id)
+        invoice.proforma_invoice_ids = proforma_ids
         invoice.containers = self._clean_containers(fields.get("containers"))
         invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
         invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))

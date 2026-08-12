@@ -143,7 +143,7 @@ class TestQuotationCrud:
         assert reloaded.sea_freight == 100
         assert reloaded.insurance == 0
         assert reloaded.cif_value_usd == 120.0  # 20 goods + 100 freight
-        assert reloaded.fob_value_usd == 20.0   # the freight comes back out again
+        assert reloaded.fob_value_usd == 20.0   # always just the goods total
 
     def test_non_fob_terms_keep_sea_freight_and_insurance(self, container, seed):
         q = self._create(container, seed, shipping_terms="CIF",
@@ -176,7 +176,7 @@ class TestQuotationCrud:
         assert reloaded.subtotal_usd == 120.0                        # 10x2 + 20x5, untouched
         assert reloaded.cif_value_usd == 420.0                       # 120 + 300 charges
         assert reloaded.invoice_value_usd == 380.0                   # 420 - 40 discount
-        assert reloaded.fob_value_usd == pytest.approx(120.0 - 40)   # charges stripped back out, discount stays off
+        assert reloaded.fob_value_usd == pytest.approx(120.0)        # always just the goods total, discount and charges don't touch it
 
     def test_fob_total_is_the_same_whatever_the_shipping_terms(self, container, seed):
         # The goods lines themselves never change with the terms picked -

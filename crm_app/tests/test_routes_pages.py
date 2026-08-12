@@ -839,8 +839,8 @@ class TestDocumentCurrency:
 
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "JPY [ ¥ ]" in sheet          # the Currency row
-        assert "PRICE (JPY)" in sheet        # the money column headings
-        assert "(USD)" not in sheet
+        assert "¥2.00" in sheet              # the Rate cell, prefixed with the picked symbol
+        assert "$2.00" not in sheet
 
     def test_a_document_saved_before_the_field_existed_still_prints_usd(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -849,7 +849,7 @@ class TestDocumentCurrency:
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         assert quotation.currency_code is None
         assert quotation.currency_label == "USD [ $ ]"
-        assert "PRICE (USD)" in client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
+        assert "$2.00" in client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
 
     def test_purchase_order_defaults_to_inr_and_follows_its_pick(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -891,7 +891,7 @@ class TestDocumentCurrency:
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01", "currency_code": "JPY"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
-        assert "Rate<br>In JPY" in sheet and "¥" in sheet
+        assert "¥" in sheet
 
         order = container.purchase_order_service.create(
             admin, {"seller_name": "Supplier", "po_date": "2026-01-01", "currency_code": "JPY"},
@@ -949,12 +949,14 @@ class TestDeliveryTermChargeRows:
                     "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
-        assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
-        assert "CERTIFICATION" not in sheet
-        assert "OTHER" in sheet                  # the rest of the ladder stays
-        assert "CIF VALUE" in sheet and "FOB VALUE" in sheet
-        assert 'rowspan="5"' in sheet            # 8 ladder rows - the 3 dropped
-        _table_is_rectangular(sheet, "CIF VALUE")
+        assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        assert "Certification" in sheet          # the rest of the ladder stays
+        # A quotation's price is always FOB - under FOB terms nothing is ever
+        # built up into a CIF/CFR figure, so that row is left off entirely
+        # (not just relabelled). See Quotation.fob_value_usd/is_fob.
+        assert "CIF Invoice Value" not in sheet and "CFR Invoice Value" not in sheet
+        assert "FOB Value" in sheet
+        assert 'rowspan="5"' in sheet            # 8 ladder rows - CIF/CFR, insurance and sea freight
 
     def test_proforma_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -964,11 +966,14 @@ class TestDeliveryTermChargeRows:
                     "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
-        assert "SEA FREIGHT" not in sheet and "INSURANCE" not in sheet
-        assert "CERTIFICATION" not in sheet
-        assert "CIF VALUE" in sheet and "INVOICE VALUE" in sheet and "FOB VALUE" in sheet
-        assert 'rowspan="5"' in sheet            # 8 ladder rows - the 3 dropped
-        _table_is_rectangular(sheet, "CIF VALUE")
+        assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        # A proforma invoice's price is always FOB, like a quotation's - under
+        # FOB terms nothing is ever built up into a CIF/CFR figure, so that
+        # row is left off entirely (not just relabelled). See
+        # ProformaInvoice.fob_value_usd/is_fob.
+        assert "CIF Invoice Value" not in sheet and "CFR Invoice Value" not in sheet
+        assert "Invoice Value" in sheet and "FOB Value" in sheet
+        assert 'rowspan="5"' in sheet            # 8 ladder rows - CIF/CFR, insurance and sea freight
 
     def test_export_invoice_sheet_drops_the_rows(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -980,11 +985,12 @@ class TestDeliveryTermChargeRows:
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
         assert "Sea Freight" not in sheet and "Insurance" not in sheet
-        assert "Certification" not in sheet
-        assert "CIF Value" in sheet and "Invoice Value" in sheet
+        # Under FOB there's no CIF/CFR figure to build at all, so that row is
+        # left off entirely too (not just relabelled) - see is_fob.
+        assert "CIF Value" not in sheet and "CFR Value" not in sheet
+        assert "Invoice Value" in sheet
         assert "FOB Value" in sheet and "Other Charges" in sheet
-        assert 'rowspan="5"' in sheet            # the shortened money ladder
-        _table_is_rectangular(sheet, "Sr No")
+        assert 'rowspan="5"' in sheet            # the shortened money ladder - CIF/CFR, insurance and sea freight dropped
 
     # ---- CFR: the insurance row alone comes out ------------------------------
     def test_quotation_sheet_drops_only_the_insurance_row(self, admin_ctx):
@@ -994,11 +1000,11 @@ class TestDeliveryTermChargeRows:
                     "shipping_terms": "CFR - BEIRA", "sea_freight": "100", "insurance": "50"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
-        assert "INSURANCE" not in sheet
-        assert "SEA FREIGHT" in sheet            # CFR = cost AND freight
-        assert "CERTIFICATION" in sheet
+        assert "Insurance" not in sheet
+        assert "Sea Freight" in sheet            # CFR = cost AND freight
         assert 'rowspan="7"' in sheet            # 8 ladder rows - the 1 dropped
-        _table_is_rectangular(sheet, "CIF VALUE")
+        assert "CFR Invoice Value" in sheet and "CIF Invoice Value" not in sheet  # CFR terms relabel the ladder row
+        _table_is_rectangular(sheet, "CFR Invoice Value")
 
     def test_proforma_sheet_drops_only_the_insurance_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1007,10 +1013,11 @@ class TestDeliveryTermChargeRows:
                     "terms_of_delivery": "CFR BEIRA", "sea_freight": "100", "insurance": "50"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True)
-        assert "INSURANCE" not in sheet and "SEA FREIGHT" in sheet
-        assert "CERTIFICATION" in sheet
+        assert "Insurance" not in sheet and "Sea Freight" in sheet
         assert 'rowspan="7"' in sheet
-        _table_is_rectangular(sheet, "CIF VALUE")
+        # CFR terms relabel the ladder row CFR Invoice Value instead of CIF Invoice Value - see is_cfr.
+        assert "CFR Invoice Value" in sheet and "CIF Invoice Value" not in sheet
+        _table_is_rectangular(sheet, "CFR Invoice Value")
 
     def test_export_invoice_sheet_drops_only_the_insurance_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1041,7 +1048,7 @@ class TestDeliveryTermChargeRows:
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "ROUND-OFF" not in sheet
         assert 'rowspan="8"' in sheet
-        _table_is_rectangular(sheet, "CIF VALUE")
+        _table_is_rectangular(sheet, "CIF Invoice Value")
 
     def test_a_proforma_sheet_prints_cif_rates_with_no_round_off_row(self, admin_ctx):
         """The typed 7.00 is an FOB rate; 100 of sea freight over 3 SQM is
@@ -1075,7 +1082,7 @@ class TestDeliveryTermChargeRows:
         assert "37.00" in sheet and "111.00" in sheet
         assert "ROUND-OFF" not in sheet
         assert 'rowspan="8"' in sheet
-        _table_is_rectangular(sheet, "CIF VALUE")
+        _table_is_rectangular(sheet, "CIF Invoice Value")
 
     def test_fob_priced_export_invoice_sheet_has_no_round_off_row(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1100,7 +1107,7 @@ class TestDeliveryTermChargeRows:
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
         assert "ROUND-OFF" not in sheet
         assert 'rowspan="8"' in sheet
-        _table_is_rectangular(sheet, "CIF VALUE")
+        _table_is_rectangular(sheet, "CIF Invoice Value")
 
     # ---- the structure survives the row coming out ---------------------------
     @pytest.mark.parametrize("terms", ["CIF", "CFR - BEIRA", "FOB"])
@@ -1113,14 +1120,26 @@ class TestDeliveryTermChargeRows:
         quotation = container.quotation_service.create(
             admin, {"buyer_name": "Buyer", "quotation_date": "2026-01-01",
                     "shipping_terms": terms, **charges}, item)
+        # CFR relabels the ladder row CFR Invoice Value instead of CIF Invoice
+        # Value - see is_cfr. FOB drops the row entirely (a quotation's price
+        # is always FOB, so it's never built up into a CIF/CFR figure) - see
+        # is_fob. The quotation sheet uses the same Title Case wording as the
+        # proforma sheet (CIF Invoice Value / CFR Invoice Value / FOB Value) -
+        # see quotations/_sheet.html and proforma_invoices/_sheet.html.
+        if terms.upper().startswith("CFR"):
+            quote_marker, proforma_marker = "CFR Invoice Value", "CFR Invoice Value"
+        elif terms.upper().startswith("FOB"):
+            quote_marker, proforma_marker = "FOB Value", "FOB Value"
+        else:
+            quote_marker, proforma_marker = "CIF Invoice Value", "CIF Invoice Value"
         _table_is_rectangular(
-            client.get(f"/quotations/{quotation.id}").get_data(as_text=True), "CIF VALUE")
+            client.get(f"/quotations/{quotation.id}").get_data(as_text=True), quote_marker)
 
         proforma = container.proforma_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-01-01",
                     "terms_of_delivery": terms, **charges}, item)
         _table_is_rectangular(
-            client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True), "CIF VALUE")
+            client.get(f"/proforma-invoices/{proforma.id}").get_data(as_text=True), proforma_marker)
 
         invoice = container.export_invoice_service.create(
             admin, {"consignee_name": "Buyer", "invoice_date": "2026-02-20",
@@ -1137,7 +1156,7 @@ class TestDeliveryTermChargeRows:
                     "shipping_terms": "CIF", "sea_freight": "100", "insurance": "50"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         sheet = client.get(f"/quotations/{quotation.id}").get_data(as_text=True)
-        assert "SEA FREIGHT" in sheet and "INSURANCE" in sheet
+        assert "Sea Freight" in sheet and "Insurance" in sheet
         assert 'rowspan="8"' in sheet            # the full ladder
 
 
@@ -1994,16 +2013,24 @@ class TestCommercialInvoiceRoutes:
         assert "100.00" in body and "50.00" in body
         assert "702.48" in body                    # FOB = CIF - discount - charges
         assert "FOB Value" in body
-        # No intermediate Invoice Value line on this sheet.
-        assert ">Invoice Value<" not in body
+        # Invoice Value sits between Discount and the charges, same as the
+        # export invoice's own sheet: CIF (852.48) - discount (100) = 752.48.
+        assert ">Invoice Value<" in body
+        assert "752.48" in body
 
-    def test_the_amount_in_words_is_the_cif_invoice_value(self, admin_ctx):
+    def test_the_amount_in_words_is_the_invoice_value(self, admin_ctx):
+        # 852.48 CIF less a 100.00 discount -> 752.48 Invoice Value; the words
+        # must follow that, not the CIF figure, so this only passes if the
+        # two have actually been made to differ.
         client, container, admin, company_id = admin_ctx
-        invoice = self._create_export_invoice(client, container, admin, company_id)
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"discount_amount": "100", "nature_of_contract": "CIF"})
         body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
         assert "Invoice Value In Word" in body
-        assert "EIGHT HUNDRED FIFTY-TWO" in body   # 852.48, the CIF value
+        assert "SEVEN HUNDRED FIFTY-TWO" in body   # 752.48, the Invoice Value
         assert "CENTS FORTY-EIGHT" in body
+        assert "EIGHT HUNDRED FIFTY-TWO" not in body
 
     def test_weights_come_from_the_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -2133,18 +2160,8 @@ class TestCustomerInvoiceRoutes:
     _create_export_invoice = TestExportPackingListRoutes._create_export_invoice
 
     def _priced(self, client, container, admin, company_id):
-        """144 SQM @ 5.92 = 852.48 CIF. Charges + discount = 100 + 50 + 20 =
-        170, spread over 144 SQM = 1.18055../unit, so the FOB rate is
-        5.92 - 1.1806 = 4.7394 -> 4.74 rounded, and the line total follows:
-        4.74 * 144 = 682.56. Adding the 170 back gives 852.56 - eight cents
-        away from the exact 852.48, which is the rate rounding.
-
-        That eight cents is `fob_priced_round_off`: it prints as its own
-        ROUND-OFF row so the sheet closes on 852.48, the SAME CIF value the
-        export invoice and every other document quotes, while its own column
-        still multiplies and adds out. This sheet used to close on 852.56
-        instead - footing internally but disagreeing with the ladder
-        elsewhere - which is the trade the round-off row removes."""
+        """144 SQM @ 5.92 = 852.48 CIF, less a 100.00 sea freight, 50.00
+        insurance and 20.00 discount -> FOB 682.48."""
         return self._create_export_invoice(
             client, container, admin, company_id,
             extra={"nature_of_contract": "CIF", "sea_freight": "100",
@@ -2157,27 +2174,56 @@ class TestCustomerInvoiceRoutes:
         assert resp.status_code == 200
         assert b"1000000042" in resp.data
 
-    def test_rate_is_the_fob_rate_and_the_total_follows_from_it(self, admin_ctx):
+    def test_rate_falls_back_to_price_usd_when_never_uplifted(self, admin_ctx):
+        # fob_price_usd is None here (fob_pricing was never ticked), so Rate
+        # falls back to price_usd - still the typed FOB price in that case,
+        # nothing having adjusted it.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
-        assert "4.74" in body                      # FOB rate, not the 5.92 CIF rate
-        assert "682.56" in body                    # 4.74 x 144, the line total
-        assert "5.92" not in body
+        assert "5.92" in body
+        assert "852.48" in body                      # 5.92 x 144, the line total
+
+    def test_rate_is_the_fob_price_when_cif_pricing_was_used(self, admin_ctx):
+        # 144 SQM typed at 5.92, sea freight 144 spread over 144 SQM = a
+        # clean 1.00/unit uplift -> stored price_usd becomes 6.92 (the CIF
+        # price), but Rate here must print the ORIGINAL typed 5.92
+        # (fob_price_usd), not the uplifted 6.92 - unlike the BRC copy, which
+        # prints price_usd (6.92) for the very same invoice.
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"nature_of_contract": "CIF", "sea_freight": "144", "fob_pricing": "1"})
+        body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
+        assert "5.92" in body                        # the typed FOB rate
+        assert "852.48" in body                       # 5.92 x 144, the FOB-rate line total
+        assert "6.92" not in body                     # not the uplifted CIF rate
+        assert "FOB Value" in body
+        # The goods column (852.48) now foots to the FOB Value row, not CIF.
+        brc_body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
+        assert "6.92" in brc_body                     # the BRC copy still prints the CIF rate
 
     def test_the_ladder_runs_upwards_from_fob_to_cif(self, admin_ctx):
+        # Matches the reference printout (EXP/001/26-27): FOB Value opens the
+        # ladder (the goods column's own total - no CIF-pricing push here, so
+        # rate falls back to price_usd and both fob_value_usd/invoice_value_usd
+        # fall back to the base ladder), charges/discount follow, closing on
+        # Total CIF Invoice Value.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
-        assert "FOB Value" in body
         assert "Total CIF Invoice Value" in body
-        # FOB 682.56 + sea freight 100 + insurance 50 + discount 20 = 852.56,
-        # then the -0.08 round-off brings it back onto the exact CIF value.
-        assert "852.48" in body
-        assert "Round-off" in body
-        assert "-0.08" in body
+        assert "FOB Value" in body
+        assert "852.48" in body                     # goods column total
+        assert "682.48" in body                     # FOB = 852.48 - 20 - 100 - 50
+        assert "832.48" in body                     # Total CIF Invoice Value = 852.48 - 20 discount
+        assert "Round-off" not in body
+        assert "Tax" not in body                    # no tax line on this sheet
         for charge in ("Sea Freight", "Insurance", "Discount", "Other Charges"):
             assert charge in body
+        fob_idx = body.index(">FOB Value<")
+        total_idx = body.index(">Total CIF Invoice Value<")
+        assert fob_idx < total_idx                  # FOB Value opens the ladder, not closes it
 
     def test_the_goods_column_adds_up_to_the_printed_fob_value(self, admin_ctx):
         """The point of rounding the rate first: a customer multiplying the
@@ -2192,13 +2238,17 @@ class TestCustomerInvoiceRoutes:
         assert round(got.fob_priced_total + got.charges_total + got.discount_amount, 2) \
             == got.fob_priced_cif_total
 
-    def test_the_amount_in_words_is_the_cif_total(self, admin_ctx):
+    def test_the_amount_in_words_is_the_post_discount_invoice_value(self, admin_ctx):
+        # invoice_value_usd (832.48 = 852.48 CIF - 20 discount), not
+        # cif_value_usd (852.48, pre-discount) - matches the reference
+        # printout, where "Invoice Value In Word" spells out the same
+        # post-discount figure Total CIF Invoice Value prints.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "Invoice Value In Word" in body
-        assert "EIGHT HUNDRED FIFTY-TWO" in body
-        assert "CENTS FORTY-EIGHT" in body         # 852.48, the shared CIF total
+        assert "EIGHT HUNDRED THIRTY-TWO" in body
+        assert "CENTS FORTY-EIGHT" in body
 
     def test_it_is_read_only(self, app, admin_ctx):
         client, container, admin, company_id = admin_ctx

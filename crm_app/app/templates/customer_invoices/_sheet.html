@@ -1,12 +1,23 @@
 {# The COMMERCIAL INVOICE (customer's copy) A4 sheet. Expects `invoice`,
-   `company`, `lines` (the FOB-priced goods lines) and optionally
-   `packing_list` for the weight totals.
+   `company`, and optionally `packing_list` for the weight totals. Matches a
+   real reference printout (EXP/001/26-27) field for field.
 
-   Same header band and styling as the BRC commercial invoice - both come from
-   templates/commercial/ - but priced the other way round: Rate quotes the FOB
-   rate and each Total Amount follows from it, so the goods column adds up to
-   the FOB value. The totals block then runs UPWARDS from FOB, adding the
-   charges and the discount back on to reach the CIF total.
+   Same header band and styling as the BRC commercial invoice - both come
+   from templates/commercial/ - but priced differently: Rate is each line's
+   typed FOB price - item.fob_price_usd when "Calculate CIF pricing" folded
+   the charges into price_usd, falling back to price_usd itself when it never
+   did (fob_price_usd is None then, and price_usd IS still the typed FOB
+   price in that case) - the same fallback ExportInvoice.fob_value_usd uses
+   in app/models.py.
+
+   The totals block runs UPWARDS from FOB, unlike the BRC copy: FOB Value is
+   the goods column's own total (so it foots directly, no round-off needed),
+   then the charges are added and the discount taken off to close on Total
+   CIF/CFR Invoice Value = invoice.invoice_value_usd (NOT cif_value_usd -
+   that's the pre-discount goods total; the reference's bottom figure is
+   post-discount, i.e. exactly ExportInvoice.invoice_value_usd's own FOB +
+   charges - discount formula). No tax line on this sheet - the reference
+   doesn't carry one.
 
    Quantity columns map as: Packing = pallets, Qty = boxes,
    Alt. Qty = quantity_value (the unit the line is priced in). #}
@@ -25,7 +36,7 @@
 
   {% include "commercial/_header.html" %}
 
-  <!-- ============ GOODS (FOB-priced) + TOTALS ============ -->
+  <!-- ============ GOODS + TOTALS ============ -->
   <table class="ci-items">
     <colgroup>
       <col style="width:5%"><col style="width:34%"><col style="width:9%">
@@ -46,8 +57,8 @@
       </tr>
     </thead>
     <tbody>
-      {% for line in lines %}
-      {% set item = line.item %}
+      {% for item in invoice.items %}
+      {% set rate = item.fob_price_usd if item.fob_price_usd is not none else (item.price_usd or 0) %}
       <tr class="ci-goods">
         <td class="ci-c">{{ loop.index }}</td>
         <td>
@@ -58,10 +69,9 @@
         <td class="ci-cnum">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
         <td class="ci-cnum">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ci-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="ci-unit-sm">{{ item.unit }}</span></td>
-        {# The FOB rate, and the total that follows from it. #}
-        <td class="ci-cnum">{{ money(line.rate) }}</td>
+        <td class="ci-cnum">{{ money(rate) }}</td>
         <td class="ci-c">{{ item.unit }}</td>
-        <td class="ci-num">{{ money(line.total) }}</td>
+        <td class="ci-num">{{ money((rate * (item.quantity_value or 0)) | round(2)) }}</td>
       </tr>
       {% endfor %}
       {# Blank filler, stretched by _page_filler.html so the sheet fills its A4
@@ -73,18 +83,17 @@
       {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
       {% set order_gross_weight = (packing_list.total_gross_weight if packing_list and packing_list.items else None) or invoice.total_gross_weight_kg %}
 
-      {# The ladder runs UPWARDS on this sheet: it opens on the FOB value the
-         goods column adds up to, adds back the charges that were spread out
-         of the rate and the discount, and closes on the CIF total. The two
-         delivery-terms questions are the same as everywhere else - FOB terms
-         put the whole ocean leg on the buyer so both rows drop, CFR keeps the
-         freight but leaves the buyer to insure - and Certification appears
-         only when it is non-zero, as on the BRC copy.
-
-         Each entry is (label, value, signed) - `signed` only for ROUND-OFF,
-         which has to read as an amount added or taken back out. #}
+      {# The ladder runs UPWARDS from FOB, the opposite direction to the BRC
+         copy: FOB Value is the goods column's own total (Rate x Qty, summed -
+         see the header comment), so it opens the ladder rather than closing
+         it. The charges come on top of it and the discount off the end,
+         closing on Total CIF/CFR Invoice Value. The two delivery-terms
+         questions are the same as everywhere else - FOB terms put the whole
+         ocean leg on the buyer so both rows drop, CFR keeps the freight but
+         leaves the buyer to insure - and Certification appears only when it
+         is non-zero, as on the BRC copy. #}
       {% set money_rows = [] %}
-      {% set _ = money_rows.append(('FOB Value', invoice.fob_priced_total, false)) %}
+      {% set _ = money_rows.append(('FOB Value', invoice.fob_value_usd, false)) %}
       {% set _ = money_rows.append(('Other Charges', invoice.other_charges, false)) %}
       {% if invoice.certification %}
       {% set _ = money_rows.append(('Certification', invoice.certification, false)) %}
@@ -96,15 +105,7 @@
       {% set _ = money_rows.append(('Sea Freight', invoice.sea_freight, false)) %}
       {% endif %}
       {% set _ = money_rows.append(('Discount', invoice.discount_amount, false)) %}
-      {# The FOB rates above are rounded to the cent and each line total follows
-         from the rounded rate, so adding the charges back on lands a hair off
-         the CIF value every other document quotes. That hair prints here, which
-         lets this sheet close on the SAME total as the export invoice while its
-         own column still adds up. Shown only when there is one to carry. #}
-      {% if invoice.fob_priced_round_off %}
-      {% set _ = money_rows.append(('Round-off', invoice.fob_priced_round_off, true)) %}
-      {% endif %}
-      {% set _ = money_rows.append(('Total CIF Invoice Value', invoice.cif_value_usd, false)) %}
+      {% set _ = money_rows.append(('Total CFR Invoice Value' if invoice.nature_of_contract | is_cfr else 'Total CIF Invoice Value', invoice.invoice_value_usd, false)) %}
 
       {# Rows 0-1 carry the quantity totals and their column labels; the rest
          split evenly between Net and Gross Weight, an odd remainder going to
@@ -120,7 +121,7 @@
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money_rows|length }}" style="font-weight:normal;">
           <span class="ci-lbl">Invoice Value In Word</span><br>
-          <span class="ci-lbl">{{ invoice.cif_value_usd | amount_in_words(invoice.currency_name) }}</span>
+          <span class="ci-lbl">{{ invoice.invoice_value_usd | amount_in_words(invoice.currency_name) }}</span>
         </td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ci-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
