@@ -64,8 +64,26 @@
     <div class="form-row">
       {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed quotation; amounts are typed in this currency.') }}
       <div class="field"><label for="packing_details">Packing details</label><input type="text" id="packing_details" name="packing_details" placeholder="e.g. PALLATE" value="{{ data.packing_details | default('', true) }}"></div>
-      <div class="field"><label for="container_details">Container</label><input type="text" id="container_details" name="container_details" placeholder="e.g. 24 X 20 FT STANDARD DRY" value="{{ data.container_details | default('', true) }}"></div>
     </div>
+
+    <div id="container-rows" style="margin-top:14px;">
+      {% set c_rows = form_containers if form_containers is not none else (quotation.containers if quotation else []) %}
+      {% for c in c_rows %}
+      <div class="form-row container-row">
+        <div class="field"><label>Container type</label>
+          <select name="container_type[]" class="js-container-type">
+            <option value="">— none —</option>
+            {% for ct in container_types %}<option value="{{ ct }}" {{ 'selected' if c.container_type == ct }}>{{ ct }}</option>{% endfor %}
+            {% if c.container_type and c.container_type not in container_types %}<option value="{{ c.container_type }}" selected>{{ c.container_type }}</option>{% endif %}
+          </select>
+        </div>
+        <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count" value="{{ c.container_count or '' }}"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-container-btn">+ Add container type</button>
+
     <div class="form-row">
       <div class="field"><label for="shipping_mode">Shipping</label><input type="text" id="shipping_mode" name="shipping_mode" placeholder="e.g. BY SEA" value="{{ data.shipping_mode | default('', true) }}"></div>
       <div class="field">
@@ -292,6 +310,23 @@
   currencySelect.addEventListener('change', updateCurrencyDisplays);
   updateCurrencyDisplays();
 
+  // ---- container type/count rows - same "+ Add container type" idiom as
+  // Booking Detail's and the Export Invoice's own Container details card. --
+  const containerTypeOptions = `<option value="">— none —</option>{% for ct in container_types %}<option value="{{ ct }}">{{ ct }}</option>{% endfor %}`;
+  const containerRowsWrap = document.getElementById('container-rows');
+  document.getElementById('add-container-btn').addEventListener('click', () => {
+    const div = document.createElement('div');
+    div.className = 'form-row container-row';
+    div.innerHTML = `
+      <div class="field"><label>Container type</label><select name="container_type[]" class="js-container-type">${containerTypeOptions}</select></div>
+      <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count"></div>
+      <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>`;
+    containerRowsWrap.appendChild(div);
+  });
+  containerRowsWrap.addEventListener('click', (e) => {
+    if (e.target.classList.contains('js-remove-container')) e.target.closest('.container-row').remove();
+  });
+
   const itemsBody = document.getElementById('items-body');
   const addRowBtn = document.getElementById('add-row-btn');
 
@@ -341,7 +376,7 @@
   // the discount either way, which for FOB (charges = certification + other,
   // since sea freight/insurance are held at zero) works out to FOB value +
   // certification + other charges - discount. Mirrors
-  // QuotationService._build_items/apply_fob_uplift and
+  // QuotationService._build_items and
   // Quotation.fob_value_usd/cif_value_usd, which is what actually saves.
   function recalcTotals() {
     const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
@@ -502,11 +537,13 @@
   });
 
   // ---- the delivery terms decide which charges apply --------------------------
-  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance and
-  // no certification); CFR keeps the freight and the certification but leaves
-  // the buyer to insure the cargo, so it drops the insurance and nothing else. Each input is toggled on its own question -
-  // matching drops_sea_freight/drops_insurance/drops_certification in app/utils.py, which zero the
-  // same charges server-side and leave the same rows off the printed sheet.
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
+  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
+  // the insurance and nothing else. The certification is never dropped - like
+  // other charges it stays payable under every term. Each input is toggled on
+  // its own question - matching drops_sea_freight/drops_insurance in
+  // app/utils.py, which zero the same charges server-side and leave the same
+  // rows off the printed sheet.
   const termsSelect = document.getElementById('shipping_terms');
   function applyDeliveryTermCharges() {
     const terms = (termsSelect.value || '').trim();

@@ -164,8 +164,10 @@ def is_cfr_terms(value) -> bool:
 
 # Which charges a delivery term takes off the price. Both the services (which
 # store the dropped charges as zero) and the printed sheets (which leave the
-# row out) ask these two questions rather than testing for an incoterm by name,
+# row out) ask these questions rather than testing for an incoterm by name,
 # so a term can never be handled one way on the form and another on the sheet.
+# Only the freight and the insurance are ever dropped; the certification and
+# other_charges are payable under every term.
 def drops_sea_freight(value) -> bool:
     """FOB alone hands the freight to the buyer; CFR keeps paying it."""
     return is_fob_terms(value)
@@ -177,9 +179,13 @@ def drops_insurance(value) -> bool:
 
 
 def drops_certification(value) -> bool:
-    """FOB stops at the ship's rail, so the destination certification is the
-    buyer's cost; CFR still carries it."""
-    return is_fob_terms(value)
+    """Never dropped - unlike the freight and the insurance, the certification
+    is a seller-side cost that stays payable whoever carries the ocean leg, so
+    it adds onto the goods total under FOB exactly as it does under CFR/CIF
+    (the same way other_charges has never been gated by a term either). Kept as
+    a function so the services and the printed sheets keep asking about it in
+    the same place as the other two charges."""
+    return False
 
 
 def register_template_helpers(app):
@@ -210,8 +216,9 @@ def register_template_helpers(app):
 
     @app.template_filter("drops_certification")
     def drops_certification_filter(value):
-        """`{% if not terms | drops_certification %}` - hides the CERTIFICATION
-        row (FOB only)."""
+        """`{% if not terms | drops_certification %}` - always false, so the
+        CERTIFICATION row prints under every delivery term. Kept alongside the
+        other two so a sheet asks the same question about all three charges."""
         return drops_certification(value)
 
     @app.template_filter("amount_in_words")

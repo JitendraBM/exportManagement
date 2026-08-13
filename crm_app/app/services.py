@@ -51,7 +51,7 @@ from app.repositories import (
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository,
 )
 from app.database import Database, SCHEMA_VERSION
-from app.utils import drops_certification, drops_insurance, drops_sea_freight, is_fob_terms
+from app.utils import drops_certification, drops_insurance, drops_sea_freight
 
 
 # ============================================================
@@ -2103,63 +2103,6 @@ class DocumentVersionService:
 
 
 # ============================================================
-# FOB-TYPED PRICING (shared by quotation / proforma / export invoice)
-# ============================================================
-def is_fob_pricing(fields: dict) -> bool:
-    """Reads the "Calculate CIF pricing" checkbox off a posted form. An
-    unticked checkbox posts nothing at all, so anything falsy means off."""
-    return str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off")
-
-
-def apply_fob_uplift(document) -> None:
-    """Turns FOB-typed prices into the CIF prices the document stores.
-
-    Every price this app prints is a CIF price (see CifMoneyLadder) - the ocean
-    leg and handling are already inside the per-unit rate. But a document is
-    often worked out the other way round: the goods have an FOB price, and the
-    freight/insurance/certification/other charges are known only as one lump
-    sum for the whole shipment. With `fob_pricing` ticked, that lump is divided
-    by the total ALT QTY of every line and the resulting per-unit figure is
-    added uniformly onto each line's price - so a heavier line carries
-    proportionally more of the charge, and the buyer sees a single all-in rate
-    per unit.
-
-    The discount is deliberately NOT part of the lump: it comes off above the
-    invoice value line, not between FOB and CIF.
-
-    The uplift is kept at full precision (only the line totals are rounded to
-    the cent) so that CIF - charges lands back exactly on the FOB total that
-    was typed - the FOB VALUE row is the figure the user reasoned in, so it is
-    the one that has to stay exact. Any cent the rounded totals can't carry is
-    absorbed silently into the Total column itself rather than tracked as a
-    separate round-off figure. `price_usd` stays the CIF price throughout,
-    which is why nothing downstream - the printed sheets, the money ladder,
-    the prefill from one document to the next - needs a special case;
-    `fob_price_usd` only remembers what was typed so reopening the form shows
-    the numbers back.
-
-    `fob_pricing` is hardcoded off in the quotation and proforma invoice
-    builders (see Quotation.cif_value_usd / ProformaInvoice.cif_value_usd,
-    which build CIF up from the FOB goods total as a document-level figure
-    instead), so this is a no-op there beyond clearing a stale fob_price_usd.
-    The export invoice builder is the one place the checkbox (is_fob_pricing
-    above) still reaches this - written once here rather than duplicated so
-    the three document types can't drift apart.
-    """
-    items = document.items or []
-    if not document.fob_pricing:
-        for item in items:
-            item.fob_price_usd = None
-        return
-    total_qty = sum(item.quantity_value for item in items)
-    uplift = (document.charges_total / total_qty) if total_qty else 0
-    for item in items:
-        item.fob_price_usd = item.price_usd
-        item.price_usd = item.price_usd + uplift
-        item.total_usd = round(item.quantity_value * item.price_usd, 2)
-
-
-# ============================================================
 # QUOTATION SERVICE
 # ============================================================
 class QuotationService:
@@ -2323,7 +2266,6 @@ class QuotationService:
             port_of_discharge=(fields.get("port_of_discharge") or "").strip() or None,
             final_destination=(fields.get("final_destination") or "").strip() or None,
             packing_details=(fields.get("packing_details") or "").strip() or None,
-            container_details=(fields.get("container_details") or "").strip() or None,
             shipping_mode=(fields.get("shipping_mode") or "").strip() or None,
             shipping_terms=shipping_terms,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
@@ -2364,23 +2306,40 @@ class QuotationService:
         if lead and not lead.is_converted and lead.status != "in_client":
             self.lead_repo.update_status(lead_id, "in_client")
 
+    @staticmethod
+    def _clean_containers(raw) -> List[dict]:
+        """Same shape/cleaning as BookingDetailService._clean_containers - a
+        row is kept once it has a type or a count, count never goes negative."""
+        rows = []
+        for r in raw or []:
+            ctype = (r.get("container_type") or "").strip()
+            try:
+                count = int(r.get("container_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not ctype and count <= 0:
+                continue
+            rows.append({"container_type": ctype, "container_count": max(count, 0)})
+        return rows
+
     # ---- writes --------------------------------------------------
-    def create(self, current_user: User, fields: dict, raw_items: list) -> Quotation:
+    def create(self, current_user: User, fields: dict, raw_items: list, raw_containers: Optional[list] = None) -> Quotation:
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
-        apply_fob_uplift(quotation)
+        quotation.containers = self._clean_containers(raw_containers)
         quotation.quotation_number = self._generate_number(current_user.company_id, quotation.quotation_date)
         created = self.quotation_repo.create(quotation)
         self.version_service.record("quotation", created, current_user.id)
         self._advance_lead_to_in_client(created.lead_id)
         return created
 
-    def update(self, current_user: User, quotation_id: int, fields: dict, raw_items: list) -> Quotation:
+    def update(self, current_user: User, quotation_id: int, fields: dict, raw_items: list,
+               raw_containers: Optional[list] = None) -> Quotation:
         existing = self.get(quotation_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         quotation = self._build_header(current_user, fields, items)
-        apply_fob_uplift(quotation)
+        quotation.containers = self._clean_containers(raw_containers)
         self.quotation_repo.update(quotation_id, quotation)
         updated = self.get(quotation_id, current_user.company_id)
         self.version_service.record("quotation", updated, current_user.id)
@@ -2398,6 +2357,7 @@ class QuotationService:
             source, id=None, quotation_number="", quotation_date=date.today().isoformat(),
             created_by=current_user.id, created_at=None, updated_at=None,
             items=[dataclasses.replace(item, id=None, quotation_id=None) for item in source.items],
+            containers=[dict(c) for c in source.containers],
         )
         copy.quotation_number = self._generate_number(current_user.company_id, copy.quotation_date)
         created = self.quotation_repo.create(copy)
@@ -2521,7 +2481,6 @@ class ProformaInvoiceService:
             "port_of_loading": quotation.port_of_loading,
             "port_of_discharge": quotation.port_of_discharge,
             "final_destination": quotation.final_destination,
-            "container_details": quotation.container_details,
             "packing_details": quotation.packing_details,
             "terms_of_delivery": quotation.shipping_terms,
             "payment_terms": quotation.payment_terms,
@@ -2550,7 +2509,8 @@ class ProformaInvoiceService:
             }
             for item in quotation.items
         ]
-        return {"fields": fields, "items": items}
+        containers = [dict(c) for c in quotation.containers]
+        return {"fields": fields, "items": items, "containers": containers}
 
     # ---- validation --------------------------------------------------
     def _build_items(self, company_id: int, raw_items: list) -> List[ProformaInvoiceItem]:
@@ -2671,7 +2631,6 @@ class ProformaInvoiceService:
             partial_shipment=(fields.get("partial_shipment") or "").strip() or None,
             variation_in_qty=(fields.get("variation_in_qty") or "").strip() or None,
             delivery_period=(fields.get("delivery_period") or "").strip() or None,
-            container_details=(fields.get("container_details") or "").strip() or None,
             packing_details=(fields.get("packing_details") or "").strip() or None,
             terms_of_delivery=terms_of_delivery,
             payment_terms=(fields.get("payment_terms") or "").strip() or None,
@@ -2702,11 +2661,26 @@ class ProformaInvoiceService:
         )
         return invoice
 
+    @staticmethod
+    def _clean_containers(raw) -> List[dict]:
+        """Same shape/cleaning as QuotationService._clean_containers."""
+        rows = []
+        for r in raw or []:
+            ctype = (r.get("container_type") or "").strip()
+            try:
+                count = int(r.get("container_count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if not ctype and count <= 0:
+                continue
+            rows.append({"container_type": ctype, "container_count": max(count, 0)})
+        return rows
+
     # ---- writes --------------------------------------------------
-    def create(self, current_user: User, fields: dict, raw_items: list) -> ProformaInvoice:
+    def create(self, current_user: User, fields: dict, raw_items: list, raw_containers: Optional[list] = None) -> ProformaInvoice:
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
-        apply_fob_uplift(invoice)
+        invoice.containers = self._clean_containers(raw_containers)
         invoice.invoice_number = self._generate_number(current_user.company_id, invoice.invoice_date)
         created = self.invoice_repo.create(invoice)
         self.version_service.record("proforma_invoice", created, current_user.id)
@@ -2714,12 +2688,13 @@ class ProformaInvoiceService:
             advance_client_status(self.party_repos, self.lead_repo, created.lead_id, "proforma_invoice")
         return created
 
-    def update(self, current_user: User, invoice_id: int, fields: dict, raw_items: list) -> ProformaInvoice:
+    def update(self, current_user: User, invoice_id: int, fields: dict, raw_items: list,
+               raw_containers: Optional[list] = None) -> ProformaInvoice:
         existing = self.get(invoice_id, current_user.company_id)
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
-        apply_fob_uplift(invoice)
+        invoice.containers = self._clean_containers(raw_containers)
         self.invoice_repo.update(invoice_id, invoice)
         updated = self.get(invoice_id, current_user.company_id)
         self.version_service.record("proforma_invoice", updated, current_user.id)
@@ -3578,7 +3553,13 @@ class ExportInvoiceService:
     this document what it is:
 
     - It references MANY proforma invoices (many-to-many). Goods are
-      prefilled from those PIs (build_prefill_from_proformas) then edited.
+      prefilled (build_prefill_from_proformas) then edited - but NOT from
+      those PIs' own quoted lines: each linked PI is walked through its
+      purchase orders to their purchase invoices, and the goods lines come
+      from what those purchase invoices actually record buying, restricted
+      to invoices that also produced a Purchase Details row. Price is still
+      the USD rate quoted on the PI (matched by product_id), so the buyer
+      reads the agreed price rather than the INR purchase cost.
     - Tax is computed per-product: each line snapshots its product's IGST %,
       the amounts are summed, and charged (or not) per tax_mode - "Supply
       meant for" is either "With Payment of IGST" or "Without Payment of
@@ -3589,8 +3570,8 @@ class ExportInvoiceService:
     - EPCG number/date, the "export under" text and the supplier
       GSTIN/invoice-no purchase-detail rows are imported (when present) by
       walking each linked PI -> its purchase orders -> their purchase
-      invoices; the exemption rows come from POs whose purchase_type is
-      'exemption'.
+      invoices; a row is added for every purchase order regardless of its
+      purchase_type (full-tax or exemption).
     - An optional Shipping Bill PDF is stored the same way a Purchase
       Invoice stores the supplier's PDF (_save_pdf/_delete_pdf_file).
     - Saving one also generates its EXPORT PACKING LIST (one per invoice,
@@ -3676,39 +3657,17 @@ class ExportInvoiceService:
         return result
 
     def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
-        """Merge the selected PIs' goods lines, sum their sea freight /
-        insurance / certification / other charges / discount, take Nature of
-        contract from the first PI's Terms of delivery, and import EPCG /
-        export-under / supplier-exemption rows by walking each PI -> its
-        purchase orders -> their purchase invoices. Returns a dict the
-        form/route consumes."""
+        """Sum the selected PIs' sea freight / insurance / certification /
+        other charges / discount, take Nature of contract from the first PI's
+        Terms of delivery, and walk each PI -> its purchase orders -> their
+        purchase invoices to import EPCG / export-under / supplier
+        purchase-detail rows (all purchase types, not just exemption) AND the
+        goods lines themselves - goods now come from what was actually
+        bought (those purchase invoices' own lines), priced at the USD rate
+        quoted to the buyer on the PI, not from the PI's own quoted lines
+        directly. Returns a dict the form/route consumes."""
         proformas = self._load_proformas(proforma_ids, company_id)
         first = proformas[0] if proformas else None
-
-        # Goods: every line from every selected PI, in selection order.
-        #
-        # The two documents hold their prices differently, so the price is
-        # converted rather than copied: a proforma invoice's price_usd is the
-        # absolute FOB price and its CIF value is that goods total PLUS the
-        # charges (ProformaInvoice.cif_value_usd), while an export invoice's
-        # price_usd is the CIF price and its ladder runs the other way, down
-        # from the goods total. So each PI's own charges are spread over its
-        # own lines' total qty. That is exactly what ProformaInvoice.printed_items
-        # already works out for the PI's own printed Rate column, so the
-        # export invoice is prefilled straight from those - the two documents
-        # then quote a buyer the identical rate down to the cent, instead of
-        # the same figure computed twice. A PI with no charges (FOB terms,
-        # say) carries its prices over untouched.
-        items = []
-        for pi in proformas:
-            for it in pi.printed_items:
-                items.append({
-                    "product_id": it.product_id, "product_name": it.product_name,
-                    "hsn_code": it.hsn_code, "surface": it.surface, "pallets": it.pallets,
-                    "quantity_boxes": it.quantity_boxes, "quantity_value": it.quantity_value,
-                    "unit": it.unit, "price_usd": it.price_usd,
-                    "igst_percent": self._product_igst_percent(it.product_id, company_id),
-                })
 
         # Buyer Order No & Date: every PI under one export invoice shares the
         # same buyer order, so it's a single field taken from the first
@@ -3726,42 +3685,128 @@ class ExportInvoiceService:
         other_charges = sum(pi.other_charges or 0 for pi in proformas)
         discount_amount = sum(pi.discount_amount or 0 for pi in proformas)
 
-        # Walk the chain for EPCG / export-under / exemption purchase details.
+        # Walk the chain for EPCG / export-under / supplier purchase details.
         epcg_number = epcg_date = None
         purchase_details = []
         seen_pd = set()
+        collected_pinvs = []
+        seen_pinv_ids = set()
+        po_by_id = {}
         for pi in proformas:
             for po in self.purchase_order_repo.list_for_proforma(pi.id):
                 if po.company_id != company_id:
                     continue
+                po_by_id[po.id] = po
                 pinvs = [p for p in self.purchase_invoice_repo.list_for_purchase_order(po.id)
                          if p.company_id == company_id]
                 for pinv in pinvs:
                     if not epcg_number and pinv.epcg_number:
                         epcg_number, epcg_date = pinv.epcg_number, pinv.epcg_date
-                # Exemption purchases contribute a supplier name + GSTIN +
-                # invoice-no row. The name is the seller as that purchase
-                # invoice recorded it (the purchase order's own seller when it
-                # has none), snapshotted rather than looked up later - the same
-                # treatment every other imported party name gets, so renaming a
-                # supplier can't rewrite an already-issued export invoice.
-                if getattr(po, "purchase_type", "") == "exemption":
-                    if pinvs:
-                        for pinv in pinvs:
-                            key = ((pinv.seller_gstin or po.seller_gstin or ""), (pinv.invoice_number or ""))
-                            if key not in seen_pd:
-                                seen_pd.add(key)
-                                purchase_details.append({
-                                    "supplier_gstin": pinv.seller_gstin or po.seller_gstin,
-                                    "supplier_invoice_no": pinv.invoice_number,
-                                    "supplier_name": pinv.seller_name or po.seller_name,
-                                })
-                    elif po.seller_gstin:
-                        key = (po.seller_gstin, "")
+                    if pinv.id not in seen_pinv_ids:
+                        seen_pinv_ids.add(pinv.id)
+                        collected_pinvs.append(pinv)
+                # Every purchase (full-tax or exemption) contributes a supplier
+                # name + GSTIN + invoice-no row. The name is the seller as that
+                # purchase invoice recorded it (the purchase order's own seller
+                # when it has none), snapshotted rather than looked up later -
+                # the same treatment every other imported party name gets, so
+                # renaming a supplier can't rewrite an already-issued export
+                # invoice.
+                if pinvs:
+                    for pinv in pinvs:
+                        key = ((pinv.seller_gstin or po.seller_gstin or ""), (pinv.invoice_number or ""))
                         if key not in seen_pd:
                             seen_pd.add(key)
-                            purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None,
-                                                     "supplier_name": po.seller_name})
+                            purchase_details.append({
+                                "supplier_gstin": pinv.seller_gstin or po.seller_gstin,
+                                "supplier_invoice_no": pinv.invoice_number,
+                                "supplier_name": pinv.seller_name or po.seller_name,
+                            })
+                elif po.seller_gstin:
+                    key = (po.seller_gstin, "")
+                    if key not in seen_pd:
+                        seen_pd.add(key)
+                        purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None,
+                                                 "supplier_name": po.seller_name})
+
+        # Goods: sourced from the purchase invoices collected above - i.e.
+        # exactly the invoices listed in Purchase Details - rather than from
+        # the proforma's own quoted lines, so the export invoice reflects
+        # what was actually bought. Product identity/HSN/unit come from the
+        # purchase invoice lines (which carry neither price nor pallet info);
+        # price, surface finish and a pallets-per-box ratio stay whatever was
+        # quoted to the buyer, matched by product_id against the selected
+        # PIs' own lines.
+        #
+        # One purchase invoice can itself cover several purchase orders as
+        # separate line items for the SAME product (PurchaseInvoiceItem.
+        # purchase_order_id) - e.g. one supplier shipment invoiced against two
+        # POs at once. Left unmerged that put the same product on the Export
+        # Invoice twice (see EXP/25-26/025). So every purchase-invoice line
+        # for a product is summed into ONE goods line (boxes, qty and pallets
+        # all add up), and which purchase order(s) contributed how many boxes
+        # is kept alongside as `product_sources`, for the same traceability
+        # Purchase Details already gives at the supplier level - persisted on
+        # the invoice (export_invoice_product_sources) rather than recomputed
+        # each time, since re-walking the chain later could disagree with
+        # what was actually saved.
+        price_by_product = {}
+        surface_by_product = {}
+        pallet_ratio_by_product = {}  # pallets per box, from the PI's own line
+        # `pi.items`, not `pi.printed_items`: both documents now hold the same
+        # kind of price - the typed FOB rate, with the charges added on top as
+        # a document-level figure (ExportInvoice.cif_value_usd mirrors
+        # ProformaInvoice.cif_value_usd). Taking the PI's CIF-priced view here
+        # would fold its charges into the export invoice's per-unit rate and
+        # then add the export invoice's own charges on top of that again.
+        for pi in proformas:
+            for it in pi.items:
+                if it.product_id is None:
+                    continue
+                if it.product_id not in price_by_product:
+                    price_by_product[it.product_id] = it.price_usd
+                if it.product_id not in surface_by_product:
+                    surface_by_product[it.product_id] = it.surface
+                if it.product_id not in pallet_ratio_by_product and it.quantity_boxes:
+                    pallet_ratio_by_product[it.product_id] = (it.pallets or 0) / it.quantity_boxes
+
+        merged = {}  # product_id (or name, when it has none) -> aggregated line
+        for pinv in collected_pinvs:
+            full_pinv = self.purchase_invoice_repo.get_by_id(pinv.id)
+            if not full_pinv:
+                continue
+            for it in full_pinv.items:
+                key = it.product_id if it.product_id is not None else it.product_name
+                line = merged.get(key)
+                if line is None:
+                    line = {"product_id": it.product_id, "product_name": it.product_name,
+                            "hsn_code": it.hsn_code, "unit": it.unit,
+                            "quantity_boxes": 0.0, "quantity_value": 0.0, "sources": {}}
+                    merged[key] = line
+                line["quantity_boxes"] += it.quantity_boxes or 0
+                line["quantity_value"] += it.quantity_value or 0
+                po = po_by_id.get(it.purchase_order_id)
+                source_label = po.po_number if po else f"{full_pinv.invoice_number} (no PO)"
+                line["sources"][source_label] = line["sources"].get(source_label, 0) + (it.quantity_boxes or 0)
+
+        items = []
+        product_sources = []
+        for line in merged.values():
+            pid = line["product_id"]
+            ratio = pallet_ratio_by_product.get(pid)
+            items.append({
+                "product_id": pid, "product_name": line["product_name"],
+                "hsn_code": line["hsn_code"],
+                "surface": surface_by_product.get(pid),
+                "pallets": round(ratio * line["quantity_boxes"], 2) if ratio else None,
+                "quantity_boxes": line["quantity_boxes"] or None, "quantity_value": line["quantity_value"],
+                "unit": line["unit"], "price_usd": price_by_product.get(pid, 0.0),
+                "igst_percent": self._product_igst_percent(pid, company_id),
+            })
+            for po_number, boxes in line["sources"].items():
+                product_sources.append({
+                    "product_name": line["product_name"], "po_number": po_number, "quantity_boxes": boxes,
+                })
 
         # The government-scheme line of the Export Under block: the company's
         # government schemes, the same text the Annexure's section 13 defaults
@@ -3807,7 +3852,8 @@ class ExportInvoiceService:
             "epcg_date": epcg_date,
             "self_sealing_declaration": company.self_sealing_declaration if company else None,
         }
-        return {"fields": fields, "items": items, "purchase_details": purchase_details}
+        return {"fields": fields, "items": items, "purchase_details": purchase_details,
+                "product_sources": product_sources}
 
     def _product_igst_percent(self, product_id, company_id: int) -> float:
         if not product_id:
@@ -3909,18 +3955,12 @@ class ExportInvoiceService:
             except ValueError:
                 raise ValidationError(f"'{key}' must be a number.")
 
-        # See the quotation builder: FOB drops the freight, the insurance and
-        # the certification; CFR drops the insurance only.
+        # See the quotation builder: FOB drops the freight and the insurance;
+        # CFR drops the insurance only. The certification is never dropped.
         nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
         no_sea_freight = drops_sea_freight(nature_of_contract)
         no_insurance = drops_insurance(nature_of_contract)
         no_certification = drops_certification(nature_of_contract)
-        # "Calculate CIF pricing" only means something when there's a CIF
-        # figure to build - under FOB terms there's no CIF to show at all
-        # (see is_fob in the printed sheet/form), so the button is hidden
-        # there and this ignores it even if a stale client/API call posts it
-        # anyway. Same trust boundary as the charge zeroing above.
-        no_fob_pricing = is_fob_terms(nature_of_contract)
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -4000,7 +4040,13 @@ class ExportInvoiceService:
             certification=0 if no_certification else _float("certification", 0),
             other_charges=_float("other_charges", 0),
             discount_amount=_float("discount_amount", 0),
-            fob_pricing=False if no_fob_pricing else is_fob_pricing(fields),
+            # Export invoices no longer have an FOB-typed-price mode either -
+            # the typed price is always the absolute FOB price and
+            # ExportInvoice.cif_value_usd builds CIF upward from it, exactly
+            # as the quotation and proforma invoice builders above do.
+            # Hardcoded off (rather than read from `fields`) so even a direct
+            # API/service call can't revive the old uplift.
+            fob_pricing=False,
             bank_name=(fields.get("bank_name") or "").strip() or None,
             bank_account_number=(fields.get("bank_account_number") or "").strip() or None,
             bank_ifsc_code=(fields.get("bank_ifsc_code") or "").strip() or None,
@@ -4037,6 +4083,7 @@ class ExportInvoiceService:
         invoice.containers = self._clean_containers(fields.get("containers"))
         invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
         invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
+        invoice.product_sources = self._clean_product_sources(fields.get("product_sources"))
         return invoice
 
     def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
@@ -4115,6 +4162,25 @@ class ExportInvoiceService:
                 rows.append(values)
         return rows
 
+    @staticmethod
+    def _clean_product_sources(raw) -> List[dict]:
+        """Read-only breakdown - which purchase order(s) each goods line's
+        boxes came from - round-tripped as hidden fields rather than
+        recomputed on every save, since re-walking the PI chain later could
+        disagree with what a since-edited purchase order/invoice says now."""
+        rows = []
+        for r in raw or []:
+            product_name = (r.get("product_name") or "").strip()
+            po_number = (r.get("po_number") or "").strip()
+            try:
+                quantity_boxes = float(r.get("quantity_boxes") or 0)
+            except (TypeError, ValueError):
+                quantity_boxes = 0
+            if product_name and po_number:
+                rows.append({"product_name": product_name, "po_number": po_number,
+                            "quantity_boxes": quantity_boxes})
+        return rows
+
     # ---- shipping bill PDF storage --------------------------------------------------
     def _save_pdf(self, file_storage) -> Optional[str]:
         if not file_storage or not file_storage.filename:
@@ -4173,7 +4239,6 @@ class ExportInvoiceService:
     def create(self, current_user: User, fields: dict, raw_items: list, pdf_file=None) -> ExportInvoice:
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items)
-        apply_fob_uplift(invoice)
         # Examination date defaults to the creation date, not a later edit.
         if not invoice.examination_date:
             invoice.examination_date = invoice.invoice_date
@@ -4193,7 +4258,6 @@ class ExportInvoiceService:
         self._assert_can_modify(existing, current_user)
         items = self._build_items(current_user.company_id, raw_items)
         invoice = self._build_header(current_user, fields, items, invoice_id=invoice_id)
-        apply_fob_uplift(invoice)
 
         # None of CARRIED_CONTAINER_FIELDS is editable from this form - carry
         # the stored values forward by row position so editing anything else

@@ -36,9 +36,11 @@ class TestDeliveryTerms:
     def test_other_terms_are_neither(self, terms):
         assert not is_fob_terms(terms) and not is_cfr_terms(terms)
 
-    def test_fob_drops_all_three_charges(self):
+    def test_fob_drops_the_freight_and_the_insurance(self):
+        # The certification is NOT one of them - it's a seller-side cost that
+        # stays payable under every term, like other_charges.
         assert drops_sea_freight("FOB MUNDRA") and drops_insurance("FOB MUNDRA")
-        assert drops_certification("FOB MUNDRA")
+        assert not drops_certification("FOB MUNDRA")
 
     def test_cfr_drops_the_insurance_only(self):
         # The whole point of CFR: the seller still pays the freight, and the

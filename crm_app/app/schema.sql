@@ -574,7 +574,6 @@ CREATE TABLE IF NOT EXISTS quotations (
     port_of_discharge       TEXT,
     final_destination       TEXT,
     packing_details         TEXT,
-    container_details       TEXT,
     shipping_mode           TEXT,
     shipping_terms          TEXT,
     payment_terms           TEXT,
@@ -629,6 +628,17 @@ CREATE TABLE IF NOT EXISTS quotation_items (
     total_usd           REAL NOT NULL DEFAULT 0
 );
 
+-- Container type/count list, e.g. "2 x 20FT FCL" - same shape as
+-- booking_detail_containers/export_invoice_containers, replacing the single
+-- free-text "Container" field the quotation form used to have.
+CREATE TABLE IF NOT EXISTS quotation_containers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    quotation_id        INTEGER NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+    sr_no               INTEGER NOT NULL,
+    container_type      TEXT NOT NULL,
+    container_count     INTEGER NOT NULL DEFAULT 0
+);
+
 -- ============================================================
 -- PROFORMA INVOICES  (header + line items, number generated as
 -- PI{YYYYMMDD}{seq-of-that-day} per company. Can be started from an
@@ -660,7 +670,6 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     partial_shipment        TEXT,
     variation_in_qty        TEXT,
     delivery_period         TEXT,
-    container_details       TEXT,
     packing_details          TEXT,          -- e.g. "PALLATE" - same field as quotations.packing_details
     terms_of_delivery       TEXT,
     payment_terms           TEXT,
@@ -710,6 +719,17 @@ CREATE TABLE IF NOT EXISTS proforma_invoice_items (
     price_usd             REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
     fob_price_usd         REAL,                      -- unused (kept so an old row still loads) - see export_invoice_items.fob_price_usd
     total_usd             REAL NOT NULL DEFAULT 0
+);
+
+-- Container type/count list, e.g. "2 x 20FT FCL" - same shape as
+-- quotation_containers, replacing the single free-text "Container details"
+-- field the proforma invoice form used to have.
+CREATE TABLE IF NOT EXISTS proforma_invoice_containers (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    proforma_invoice_id    INTEGER NOT NULL REFERENCES proforma_invoices(id) ON DELETE CASCADE,
+    sr_no                  INTEGER NOT NULL,
+    container_type         TEXT NOT NULL,
+    container_count        INTEGER NOT NULL DEFAULT 0
 );
 
 -- ============================================================
@@ -925,7 +945,7 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     certification               REAL NOT NULL DEFAULT 0,
     other_charges               REAL NOT NULL DEFAULT 0,
     discount_amount             REAL NOT NULL DEFAULT 0,
-    fob_pricing                 INTEGER NOT NULL DEFAULT 0,  -- "Prices typed above are FOB" checkbox; see apply_fob_uplift in services.py
+    fob_pricing                 INTEGER NOT NULL DEFAULT 0,  -- unused; kept so old rows still load. Always written 0 - the typed price is always FOB
     round_off                   REAL NOT NULL DEFAULT 0,     -- see quotations.round_off
     fob_value                   REAL NOT NULL DEFAULT 0,
     cnf_value                   REAL NOT NULL DEFAULT 0,
@@ -1073,6 +1093,19 @@ CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
     supplier_gstin           TEXT,
     supplier_invoice_no      TEXT,
     supplier_name            TEXT
+);
+
+-- One row per (goods line's product, purchase order) it was summed from -
+-- a goods line is one aggregated row per product on the invoice, but the
+-- purchase invoice(s) behind it can split that product's boxes across
+-- several purchase orders (see ExportInvoiceService.build_prefill_from_proformas).
+CREATE TABLE IF NOT EXISTS export_invoice_product_sources (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                    INTEGER NOT NULL,
+    product_name             TEXT NOT NULL,
+    po_number                TEXT NOT NULL,
+    quantity_boxes           REAL NOT NULL DEFAULT 0
 );
 
 -- ============================================================
@@ -1273,6 +1306,7 @@ CREATE INDEX IF NOT EXISTS idx_export_invoice_links_proforma ON export_invoice_p
 CREATE INDEX IF NOT EXISTS idx_export_invoice_containers_invoice ON export_invoice_containers(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_container_details_invoice ON export_invoice_container_details(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoice_purchase_details_invoice ON export_invoice_purchase_details(export_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_export_invoice_product_sources_invoice ON export_invoice_product_sources(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_packing_lists_company ON export_packing_lists(company_id);
 CREATE INDEX IF NOT EXISTS idx_export_packing_lists_invoice ON export_packing_lists(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_packing_list_items_list ON export_packing_list_items(export_packing_list_id);

@@ -54,6 +54,7 @@ def _extract_fields(form) -> dict:
     fields["containers"] = _extract_containers(form)
     fields["container_details_list"] = _extract_container_details(form)
     fields["purchase_details"] = _extract_purchase_details(form)
+    fields["product_sources"] = _extract_product_sources(form)
     fields["packing_allocations"] = _extract_packing_allocations(form)
     return fields
 
@@ -140,6 +141,24 @@ def _extract_purchase_details(form) -> list:
             "supplier_gstin": gstins[i] if i < len(gstins) else "",
             "supplier_invoice_no": inv_nos[i] if i < len(inv_nos) else "",
             "supplier_name": names[i] if i < len(names) else "",
+        })
+    return rows
+
+
+def _extract_product_sources(form) -> list:
+    """The read-only "which purchase order(s) this goods line's boxes came
+    from" breakdown - see ExportInvoiceService._clean_product_sources -
+    round-tripped as hidden fields so it survives a save/reopen."""
+    names = form.getlist("ps_product_name[]")
+    po_numbers = form.getlist("ps_po_number[]")
+    boxes = form.getlist("ps_quantity_boxes[]")
+    n = max(len(names), len(po_numbers), len(boxes))
+    rows = []
+    for i in range(n):
+        rows.append({
+            "product_name": names[i] if i < len(names) else "",
+            "po_number": po_numbers[i] if i < len(po_numbers) else "",
+            "quantity_boxes": boxes[i] if i < len(boxes) else "",
         })
     return rows
 
@@ -269,7 +288,8 @@ def _form_context():
 
 
 def _render_form(invoice, form_data, form_items, containers=None,
-                 container_details=None, purchase_details=None, allocations=None, status_code=200):
+                 container_details=None, purchase_details=None, product_sources=None,
+                 allocations=None, status_code=200):
     leads, proforma_invoices, buyers, company, permits, bookings = _form_context()
     rows = form_items if form_items is not None else (invoice.items if invoice else [])
     pallet_types_map, product_meta_map = _product_maps(rows)
@@ -279,6 +299,7 @@ def _render_form(invoice, form_data, form_items, containers=None,
         form_data=form_data, form_items=form_items,
         form_containers=containers,
         form_container_details=container_details, form_purchase_details=purchase_details,
+        form_product_sources=product_sources,
         form_allocations=_allocation_rows(invoice, allocations),
         pallet_types_map=pallet_types_map, product_meta_map=product_meta_map,
         today=date.today().isoformat(),
@@ -312,6 +333,7 @@ def new_export_invoice():
                 None, request.form, _extract_items(request.form),
                 containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
+                product_sources=fields["product_sources"],
                 allocations=fields["packing_allocations"],
                 status_code=400,
             )
@@ -319,7 +341,7 @@ def new_export_invoice():
     # GET: optionally prefill from one or more proforma invoices.
     prefill = None
     form_items = None
-    containers = container_details = purchase_details = None
+    containers = container_details = purchase_details = product_sources = None
     raw_ids = request.args.get("proforma_invoice_ids") or request.args.get("proforma_invoice_id")
     proforma_ids = [p for p in (raw_ids.split(",") if raw_ids else []) if p.strip()]
     if proforma_ids:
@@ -328,8 +350,10 @@ def new_export_invoice():
         prefill["invoice_date"] = date.today().isoformat()
         form_items = built["items"]
         purchase_details = built["purchase_details"]
+        product_sources = built["product_sources"]
     return _render_form(None, prefill, form_items, containers=containers,
-                        container_details=container_details, purchase_details=purchase_details)
+                        container_details=container_details, purchase_details=purchase_details,
+                        product_sources=product_sources)
 
 
 @export_invoices_bp.route("/api/prefill")
@@ -373,7 +397,8 @@ def export_invoice_prefill():
     for key in ("buyer_order_date", "epcg_date"):
         fields[key] = iso(fields.get(key))
     fields = {k: ("" if v is None else v) for k, v in fields.items()}
-    return jsonify({"fields": fields, "items": items, "purchase_details": built["purchase_details"]})
+    return jsonify({"fields": fields, "items": items, "purchase_details": built["purchase_details"],
+                    "product_sources": built["product_sources"]})
 
 
 @export_invoices_bp.route("/<int:export_invoice_id>")
@@ -414,6 +439,7 @@ def edit_export_invoice(export_invoice_id):
                 invoice, request.form, _extract_items(request.form),
                 containers=fields["containers"],
                 container_details=fields["container_details_list"], purchase_details=fields["purchase_details"],
+                product_sources=fields["product_sources"],
                 allocations=fields["packing_allocations"],
                 status_code=400,
             )
@@ -422,6 +448,7 @@ def edit_export_invoice(export_invoice_id):
         invoice, None, None,
         containers=invoice.containers,
         container_details=invoice.container_details, purchase_details=invoice.purchase_details,
+        product_sources=invoice.product_sources,
     )
 
 

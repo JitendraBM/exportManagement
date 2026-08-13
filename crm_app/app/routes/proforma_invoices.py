@@ -25,7 +25,7 @@ _HEADER_FIELDS = [
     "country_of_origin", "country_of_destination",
     "port_of_loading", "port_of_discharge", "final_destination",
     "transhipment", "partial_shipment", "variation_in_qty", "delivery_period",
-    "container_details", "packing_details", "terms_of_delivery", "payment_terms", "remarks",
+    "packing_details", "terms_of_delivery", "payment_terms", "remarks",
     "sea_freight", "insurance", "certification", "other_charges", "discount_amount",
     "bank_name", "bank_account_number", "bank_ifsc_code", "bank_swift_code", "bank_branch", "bank_address",
     "display_mode",
@@ -61,6 +61,20 @@ def _extract_items(form) -> list:
     return items
 
 
+def _extract_containers(form) -> list:
+    """Container type/count rows off the "+ Add container type" list -
+    same shape as quotations._extract_containers."""
+    types = form.getlist("container_type[]")
+    counts = form.getlist("container_count[]")
+    rows = []
+    for i in range(len(types)):
+        rows.append({
+            "container_type": types[i] if i < len(types) else "",
+            "container_count": counts[i] if i < len(counts) else "",
+        })
+    return rows
+
+
 def _form_context():
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
@@ -68,7 +82,8 @@ def _form_context():
     quotations = container.quotation_service.list_all(g.user.company_id)
     company = container.company_service.get(g.user.company_id)
     bank_options = company.bank_details if company else []
-    return leads, buyers, quotations, bank_options
+    container_types = [ct.name for ct in container.misc_list_service.container_type_options(g.user.company_id)]
+    return leads, buyers, quotations, bank_options, container_types
 
 
 def _alt_qty_map(items) -> dict:
@@ -145,23 +160,27 @@ def new_proforma_invoice():
         try:
             invoice = container.proforma_invoice_service.create(
                 current_user=g.user, fields=_extract_header(request.form), raw_items=_extract_items(request.form),
+                raw_containers=_extract_containers(request.form),
             )
             flash(f"Proforma invoice {invoice.invoice_number} created.", "success")
             return redirect(url_for("proforma_invoices.view_proforma_invoice", proforma_invoice_id=invoice.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, buyers, quotations, bank_options = _form_context()
+            leads, buyers, quotations, bank_options, container_types = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "proforma_invoices/form.html", invoice=None, leads=leads, buyers=buyers, quotations=quotations,
-                bank_options=bank_options, form_data=request.form, form_items=items,
+                bank_options=bank_options, container_types=container_types,
+                form_data=request.form, form_items=items,
                 alt_qty_map=_alt_qty_map(items), pallet_types_map=_pallet_types_map(items),
+                form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, buyers, quotations, bank_options = _form_context()
+    leads, buyers, quotations, bank_options, container_types = _form_context()
     prefill = None
     form_items = None
+    form_containers = None
     quotation_id = request.args.get("quotation_id")
     lead_id = request.args.get("lead_id")
     if quotation_id:
@@ -171,6 +190,7 @@ def new_proforma_invoice():
             prefill = built["fields"]
             prefill["invoice_date"] = date.today().isoformat()
             form_items = built["items"]
+            form_containers = built["containers"]
         except (NotFoundError, ValueError):
             pass
     elif lead_id:
@@ -184,9 +204,11 @@ def new_proforma_invoice():
             pass
     return render_template(
         "proforma_invoices/form.html", invoice=None, leads=leads, buyers=buyers, quotations=quotations,
-        bank_options=bank_options, form_data=prefill, form_items=form_items,
+        bank_options=bank_options, container_types=container_types,
+        form_data=prefill, form_items=form_items,
         alt_qty_map=_alt_qty_map(form_items) if form_items else {},
         pallet_types_map=_pallet_types_map(form_items) if form_items else {},
+        form_containers=form_containers,
         today=date.today().isoformat(),
     )
 
@@ -252,25 +274,30 @@ def edit_proforma_invoice(proforma_invoice_id):
             container.proforma_invoice_service.update(
                 current_user=g.user, invoice_id=proforma_invoice_id,
                 fields=_extract_header(request.form), raw_items=_extract_items(request.form),
+                raw_containers=_extract_containers(request.form),
             )
             flash(f"Proforma invoice {invoice.invoice_number} updated.", "success")
             return redirect(url_for("proforma_invoices.view_proforma_invoice", proforma_invoice_id=proforma_invoice_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, buyers, quotations, bank_options = _form_context()
+            leads, buyers, quotations, bank_options, container_types = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "proforma_invoices/form.html", invoice=invoice, leads=leads, buyers=buyers, quotations=quotations,
-                bank_options=bank_options, form_data=request.form, form_items=items,
+                bank_options=bank_options, container_types=container_types,
+                form_data=request.form, form_items=items,
                 alt_qty_map=_alt_qty_map(items), pallet_types_map=_pallet_types_map(items),
+                form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, buyers, quotations, bank_options = _form_context()
+    leads, buyers, quotations, bank_options, container_types = _form_context()
     return render_template(
         "proforma_invoices/form.html", invoice=invoice, leads=leads, buyers=buyers, quotations=quotations,
-        bank_options=bank_options, form_data=None, form_items=None,
+        bank_options=bank_options, container_types=container_types,
+        form_data=None, form_items=None,
         alt_qty_map=_alt_qty_map(invoice.items), pallet_types_map=_pallet_types_map(invoice.items),
+        form_containers=None,
         today=date.today().isoformat(),
     )
 

@@ -1754,6 +1754,12 @@ class QuotationRepository:
             "SELECT * FROM quotation_items WHERE quotation_id = ? ORDER BY sr_no", (quotation_id,)
         )
         quotation.items = [QuotationItem.from_row(r) for r in item_rows]
+        quotation.containers = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_count FROM quotation_containers "
+                "WHERE quotation_id = ? ORDER BY sr_no", (quotation_id,)
+            )
+        ]
         return quotation
 
     def list_all(self, company_id: int) -> List[Quotation]:
@@ -1791,16 +1797,16 @@ class QuotationRepository:
             """INSERT INTO quotations
                (company_id, quotation_number, quotation_date, lead_id, buyer_name, buyer_address,
                 buyer_reference_no, port_of_loading, port_of_discharge, final_destination, packing_details,
-                container_details, shipping_mode, shipping_terms, payment_terms,
+                shipping_mode, shipping_terms, payment_terms,
                 price_validity_days, remarks,
                 sea_freight, insurance, certification, other_charges,
                 discount_amount, fob_pricing, round_off, cif_adjust_usd, bank_name, bank_account_number, bank_ifsc_code,
                 bank_swift_code, bank_branch, bank_address, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (quotation.company_id, quotation.quotation_number, quotation.quotation_date, quotation.lead_id,
              quotation.buyer_name, quotation.buyer_address, quotation.buyer_reference_no,
              quotation.port_of_loading, quotation.port_of_discharge, quotation.final_destination, quotation.packing_details,
-             quotation.container_details, quotation.shipping_mode, quotation.shipping_terms,
+             quotation.shipping_mode, quotation.shipping_terms,
              quotation.payment_terms,
              quotation.price_validity_days, quotation.remarks,
              quotation.sea_freight, quotation.insurance, quotation.certification, quotation.other_charges,
@@ -1811,13 +1817,14 @@ class QuotationRepository:
              quotation.created_by),
         )
         self._replace_items(new_id, quotation.items)
+        self._replace_containers(new_id, quotation.containers)
         return self.get_by_id(new_id)
 
     def update(self, quotation_id: int, quotation: Quotation) -> None:
         self.db.execute(
             """UPDATE quotations SET quotation_date = ?, lead_id = ?, buyer_name = ?,
                                       buyer_address = ?, buyer_reference_no = ?, port_of_loading = ?,
-                                      port_of_discharge = ?, final_destination = ?, packing_details = ?, container_details = ?,
+                                      port_of_discharge = ?, final_destination = ?, packing_details = ?,
                                       shipping_mode = ?, shipping_terms = ?, payment_terms = ?,
                                       price_validity_days = ?,
                                       remarks = ?, sea_freight = ?, insurance = ?, certification = ?,
@@ -1830,7 +1837,7 @@ class QuotationRepository:
                WHERE id = ?""",
             (quotation.quotation_date, quotation.lead_id, quotation.buyer_name,
              quotation.buyer_address, quotation.buyer_reference_no, quotation.port_of_loading,
-             quotation.port_of_discharge, quotation.final_destination, quotation.packing_details, quotation.container_details,
+             quotation.port_of_discharge, quotation.final_destination, quotation.packing_details,
              quotation.shipping_mode, quotation.shipping_terms, quotation.payment_terms,
              quotation.price_validity_days,
              quotation.remarks, quotation.sea_freight, quotation.insurance, quotation.certification,
@@ -1841,6 +1848,7 @@ class QuotationRepository:
              quotation.currency_code, quotation.currency_symbol, quotation_id),
         )
         self._replace_items(quotation_id, quotation.items)
+        self._replace_containers(quotation_id, quotation.containers)
 
     def _replace_items(self, quotation_id: int, items: List[QuotationItem]) -> None:
         with self.db.get_connection() as conn:
@@ -1855,6 +1863,16 @@ class QuotationRepository:
                     (quotation_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
                      item.hsn_code, item.quantity_boxes, item.quantity_unit, item.pallets, item.quantity_value,
                      item.unit, item.price_usd, item.fob_price_usd, item.total_usd),
+                )
+
+    def _replace_containers(self, quotation_id: int, containers: list) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM quotation_containers WHERE quotation_id = ?", (quotation_id,))
+            for i, c in enumerate(containers, start=1):
+                conn.execute(
+                    "INSERT INTO quotation_containers (quotation_id, sr_no, container_type, container_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (quotation_id, i, c["container_type"], c["container_count"]),
                 )
 
     def delete(self, quotation_id: int) -> None:
@@ -1898,6 +1916,12 @@ class ProformaInvoiceRepository:
             "SELECT * FROM proforma_invoice_items WHERE proforma_invoice_id = ? ORDER BY sr_no", (invoice_id,)
         )
         invoice.items = [ProformaInvoiceItem.from_row(r) for r in item_rows]
+        invoice.containers = [
+            dict(r) for r in self.db.query(
+                "SELECT container_type, container_count FROM proforma_invoice_containers "
+                "WHERE proforma_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
         return invoice
 
     def list_all(self, company_id: int) -> List[ProformaInvoice]:
@@ -1974,19 +1998,19 @@ class ProformaInvoiceRepository:
                 buyer_order_no, other_reference, consignee_name, consignee_address, notify_name,
                 notify_address, country_of_origin, country_of_destination,
                 port_of_loading, port_of_discharge, final_destination, transhipment, partial_shipment,
-                variation_in_qty, delivery_period, container_details, packing_details, terms_of_delivery,
+                variation_in_qty, delivery_period, packing_details, terms_of_delivery,
                 payment_terms, remarks, sea_freight, insurance, certification, other_charges, discount_amount,
                 fob_pricing, round_off,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
                 bank_address, display_mode, status, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
              invoice.country_of_origin, invoice.country_of_destination,
              invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
-             invoice.delivery_period, invoice.container_details, invoice.packing_details, invoice.terms_of_delivery,
+             invoice.delivery_period, invoice.packing_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount,
              int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
@@ -1996,6 +2020,7 @@ class ProformaInvoiceRepository:
              invoice.created_by),
         )
         self._replace_items(new_id, invoice.items)
+        self._replace_containers(new_id, invoice.containers)
         return self.get_by_id(new_id)
 
     def update(self, invoice_id: int, invoice: ProformaInvoice) -> None:
@@ -2009,7 +2034,7 @@ class ProformaInvoiceRepository:
                                              notify_address = ?, country_of_origin = ?, country_of_destination = ?,
                                              port_of_loading = ?, port_of_discharge = ?,
                                              final_destination = ?, transhipment = ?, partial_shipment = ?,
-                                             variation_in_qty = ?, delivery_period = ?, container_details = ?,
+                                             variation_in_qty = ?, delivery_period = ?,
                                              packing_details = ?, terms_of_delivery = ?, payment_terms = ?, remarks = ?,
                                              sea_freight = ?, insurance = ?, certification = ?,
                                              other_charges = ?, discount_amount = ?,
@@ -2025,7 +2050,7 @@ class ProformaInvoiceRepository:
              invoice.country_of_origin, invoice.country_of_destination,
              invoice.port_of_loading, invoice.port_of_discharge, invoice.final_destination,
              invoice.transhipment, invoice.partial_shipment, invoice.variation_in_qty,
-             invoice.delivery_period, invoice.container_details, invoice.packing_details, invoice.terms_of_delivery,
+             invoice.delivery_period, invoice.packing_details, invoice.terms_of_delivery,
              invoice.payment_terms, invoice.remarks, invoice.sea_freight, invoice.insurance,
              invoice.certification, invoice.other_charges, invoice.discount_amount,
              int(bool(invoice.fob_pricing)), invoice.round_off, invoice.bank_name,
@@ -2034,6 +2059,7 @@ class ProformaInvoiceRepository:
              invoice.currency_code, invoice.currency_symbol, invoice_id),
         )
         self._replace_items(invoice_id, invoice.items)
+        self._replace_containers(invoice_id, invoice.containers)
 
     def update_status(self, invoice_id: int, status: str) -> None:
         self.db.execute(
@@ -2068,6 +2094,16 @@ class ProformaInvoiceRepository:
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm,
                      item.hsn_code, item.surface, item.pallets, item.quantity_boxes, item.quantity_unit,
                      item.quantity_value, item.unit, item.price_usd, item.fob_price_usd, item.total_usd),
+                )
+
+    def _replace_containers(self, invoice_id: int, containers: list) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM proforma_invoice_containers WHERE proforma_invoice_id = ?", (invoice_id,))
+            for i, c in enumerate(containers, start=1):
+                conn.execute(
+                    "INSERT INTO proforma_invoice_containers (proforma_invoice_id, sr_no, container_type, container_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (invoice_id, i, c["container_type"], c["container_count"]),
                 )
 
     def delete(self, invoice_id: int) -> None:
@@ -2147,6 +2183,12 @@ class ExportInvoiceRepository:
         invoice.purchase_details = [
             dict(r) for r in self.db.query(
                 "SELECT supplier_gstin, supplier_invoice_no, supplier_name FROM export_invoice_purchase_details "
+                "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
+            )
+        ]
+        invoice.product_sources = [
+            dict(r) for r in self.db.query(
+                "SELECT product_name, po_number, quantity_boxes FROM export_invoice_product_sources "
                 "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -2367,6 +2409,16 @@ class ExportInvoiceRepository:
                     "VALUES (?, ?, ?, ?, ?)",
                     (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None,
                      pd.get("supplier_name") or None),
+                )
+
+            conn.execute("DELETE FROM export_invoice_product_sources WHERE export_invoice_id = ?", (invoice_id,))
+            for i, ps in enumerate(invoice.product_sources, start=1):
+                conn.execute(
+                    "INSERT INTO export_invoice_product_sources "
+                    "(export_invoice_id, sr_no, product_name, po_number, quantity_boxes) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (invoice_id, i, ps.get("product_name") or None, ps.get("po_number") or None,
+                     ps.get("quantity_boxes") or 0),
                 )
 
     def delete(self, invoice_id: int) -> None:

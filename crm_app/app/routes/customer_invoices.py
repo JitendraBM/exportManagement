@@ -4,11 +4,9 @@ app/routes/customer_invoices.py
 The COMMERCIAL INVOICE (customer's copy). Matches a real reference printout
 (EXP/001/26-27) field for field - see the sheet template.
 
-Priced at the FOB rate, unlike the BRC copy: the Rate column is each line's
-typed FOB price - item.fob_price_usd when "Calculate CIF pricing" was used,
-falling back to price_usd when it never was (that's still the typed FOB
-price then). The totals block runs upwards from that goods total (FOB Value)
-rather than down from CIF, closing on Total CIF/CFR Invoice Value.
+The Rate column is each line's typed FOB price, straight off item.price_usd.
+The totals block runs upwards from that goods total (FOB Value), adding the
+charges and taking off the discount to close on Total CIF/CFR Invoice Value.
 
 Read-only, like the BRC copy: it carries the parent Export Invoice's own
 number and date, its header and money come from that invoice, and the weight
