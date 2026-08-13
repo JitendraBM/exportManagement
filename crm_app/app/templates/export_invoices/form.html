@@ -48,11 +48,11 @@
       <p class="hint">One export invoice covers a single buyer — picking a buyer above (or ticking a PI) narrows the list above to that same buyer's other PIs; clear the buyer to see everyone again.</p>
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load goods &amp; details from selected PIs</button>
-    <p class="hint">Loading copies the selected PIs' goods lines in and imports EPCG / export-under / supplier-exemption details by tracing each PI through its purchase orders to their purchase invoices. Only the fields that come from the PIs are replaced &mdash; anything else you've already typed (invoice no., permit details, containers) is kept, so re-loading after a wrong pick is safe.</p>
+    <p class="hint">Loading traces each selected PI through its purchase orders to their purchase invoices, and pulls in the goods lines actually bought on those invoices (priced at the PI's own USD rate) plus EPCG / export-under / supplier purchase details. Only the fields that come from the PIs are replaced &mdash; anything else you've already typed (invoice no., permit details, containers) is kept, so re-loading after a wrong pick is safe.</p>
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN, invoice no. &amp; name (imported for exemption purchases)</span></h3></div>
+    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN, invoice no. &amp; name (imported for all purchases)</span></h3></div>
     <div id="purchase-detail-rows">
       {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
       {% for pd in pd_rows %}
@@ -88,21 +88,6 @@
                value="{{ data.export_invoice_number | default('', true) }}">
       </div>
       <div class="field"><label for="invoice_date">Date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
-      <div class="field">
-        {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
-        {% set chosen_terms = data.nature_of_contract | default('', true) %}
-        <label for="nature_of_contract">Nature of contract</label>
-        <select id="nature_of_contract" name="nature_of_contract">
-          <option value="">— none —</option>
-          {# A document can hold terms since removed from the list - keep them selectable. #}
-          {% if chosen_terms and chosen_terms not in nature_of_contract_options | map(attribute='name') | list %}
-          <option value="{{ chosen_terms }}" selected>{{ chosen_terms }}</option>
-          {% endif %}
-          {% for entry in nature_of_contract_options %}
-          <option value="{{ entry.name }}" {{ 'selected' if entry.name == chosen_terms }}>{{ entry.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
     </div>
     <div class="form-row">
       <div class="field">
@@ -242,7 +227,7 @@
     <div class="card-header"><h3>Container details</h3></div>
     <div class="form-row">
       <div class="field">
-        <label for="booking_no">Booking no. <span class="text-soft text-sm">(from Booking Details under Master Data — fills in vessel/voyage, transporter and every container row below)</span></label>
+        <label for="booking_no">Booking no. <span class="text-soft text-sm">(from Booking Details under Master Data, narrowed to the buyer picked above — fills in vessel/voyage, transporter and every container row below)</span></label>
         <select id="booking_no" name="booking_no">
           <option value="">— Select a booking —</option>
           {% if data.booking_no and data.booking_no not in bookings | map(attribute='booking_no') | list %}
@@ -250,6 +235,7 @@
           {% endif %}
           {% for b in bookings if b.booking_no %}
           <option value="{{ b.booking_no }}" {{ 'selected' if b.booking_no == data.booking_no }}
+                  data-buyer-id="{{ b.buyer_id }}"
                   data-vessel-name="{{ b.vessel_name or '' }}"
                   data-voyage-no="{{ b.voyage_no or '' }}"
                   data-transporter-name="{{ b.transporter_name or '' }}"
@@ -331,6 +317,30 @@
 
   <div class="card">
     <div class="card-header"><h3>Products</h3></div>
+    <div class="form-row" style="margin-bottom:14px;">
+      <div class="field">
+        {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
+        {% set chosen_terms = data.nature_of_contract | default('', true) %}
+        <label for="nature_of_contract">Nature of contract</label>
+        <select id="nature_of_contract" name="nature_of_contract">
+          <option value="">— none —</option>
+          {# A document can hold terms since removed from the list - keep them selectable. #}
+          {% if chosen_terms and chosen_terms not in nature_of_contract_options | map(attribute='name') | list %}
+          <option value="{{ chosen_terms }}" selected>{{ chosen_terms }}</option>
+          {% endif %}
+          {% for entry in nature_of_contract_options %}
+          <option value="{{ entry.name }}" {{ 'selected' if entry.name == chosen_terms }}>{{ entry.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
+      {# Each charge is hidden (and forced to 0) by the delivery terms that
+         don't charge it - see applyDeliveryTermCharges below. #}
+      <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
+      <div class="field js-charge-certification" style="max-width:150px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
+      <div class="field js-charge-insurance" style="max-width:150px;"><label for="insurance">Insurance (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
+      <div class="field js-charge-sea-freight" style="max-width:150px;"><label for="sea_freight">Sea freight (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
+    </div>
     <div class="table-wrap">
       <table class="ledger" id="items-table">
         <thead>
@@ -343,9 +353,7 @@
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
-            <th id="price-header"><span id="price-label-prefix">Price</span> (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
-            {# Only shown once "Calculate CIF pricing" has been pushed - see applyCifDisplay. #}
-            <th class="num js-cif-col" hidden>CIF price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
+            <th id="price-header">FOB price (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th>IGST %</th>
             <th class="num">Total (<span class="js-currency-label">{{ chosen_currency }}</span>)</th>
             <th></th>
@@ -379,14 +387,7 @@
                 {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
               </select>
             </td>
-            {# Under FOB pricing the stored price_usd is the CIF price worked
-               out at save time - what the user typed is fob_price_usd, so
-               that is what has to come back into the input. A re-displayed
-               form row (a dict, after a validation error) carries the typed
-               figure in price_usd either way. #}
-            {% set typed_price = row.fob_price_usd if (data.fob_pricing and row.fob_price_usd) else row.price_usd %}
-            <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required value="{{ typed_price or '' }}"></td>
-            <td class="num js-cif-price js-cif-col" hidden>0.00</td>
+            <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required value="{{ row.price_usd or '' }}"></td>
             <td class="js-igst-cell text-sm">{{ row.igst_percent | default('—', true) }}</td>
             <td class="num js-total">0.00</td>
             <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>
@@ -397,39 +398,38 @@
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Each product carries its own IGST %; the tax is computed per line and summed (shown below), then printed as IGST or CGST/SGST depending on the choice above.</p>
+    {# Read-only - which purchase order(s) each goods line's boxes came from
+       (a product bought against several POs is summed into ONE goods line
+       above, see ExportInvoiceService.build_prefill_from_proformas). Not
+       hand-editable: it round-trips as hidden fields so it survives a
+       save/reopen, refreshed wholesale whenever "Load from selected PIs" is
+       used again. #}
+    {% set ps_rows = form_product_sources if form_product_sources is not none else (invoice.product_sources if invoice else []) %}
+    <div id="product-source-rows" {{ 'hidden' if not ps_rows }}>
+      <p class="hint" style="margin-bottom:4px;">Sourced from (purchase orders):</p>
+      <table class="ledger" style="max-width:520px;">
+        <thead><tr><th>Product</th><th>Purchase order</th><th class="num">Boxes</th></tr></thead>
+        <tbody id="product-source-body">
+          {% for ps in ps_rows %}
+          <tr>
+            <td>
+              <input type="hidden" name="ps_product_name[]" value="{{ ps.product_name or '' }}">
+              {{ ps.product_name or '' }}
+            </td>
+            <td>
+              <input type="hidden" name="ps_po_number[]" value="{{ ps.po_number or '' }}">
+              {{ ps.po_number or '' }}
+            </td>
+            <td class="num">
+              <input type="hidden" name="ps_quantity_boxes[]" value="{{ ps.quantity_boxes or 0 }}">
+              {{ ps.quantity_boxes | default(0, true) }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     <div class="form-row" style="margin-top:14px;">
-      {# Each charge is hidden (and forced to 0) by the delivery terms that
-         don't charge it - see applyDeliveryTermCharges below. #}
-      <div class="field js-charge-sea-freight" style="max-width:150px;"><label for="sea_freight">Sea freight (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="sea_freight" name="sea_freight" value="{{ data.sea_freight | default(0, true) }}"></div>
-      <div class="field js-charge-insurance" style="max-width:150px;"><label for="insurance">Insurance (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="insurance" name="insurance" value="{{ data.insurance | default(0, true) }}"></div>
-      <div class="field js-charge-certification" style="max-width:150px;"><label for="certification">Certification (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="certification" name="certification" value="{{ data.certification | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="other_charges">Other (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="other_charges" name="other_charges" value="{{ data.other_charges | default(0, true) }}"></div>
-      <div class="field" style="max-width:150px;"><label for="discount_amount">Discount (<span class="js-currency-label">{{ chosen_currency }}</span>)</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
-    </div>
-    {# The prices typed in the Price column above are always the absolute FOB
-       price - only the user edits them. This button is a one-shot push: it
-       spreads the charges (NOT the discount) over the total Qty and adds the
-       result onto every line's typed FOB price to work out the CIF price and
-       the totals below, all in one go. It does not keep recalculating as
-       qty/price/charges change afterwards - push it again to refresh. Only
-       means anything under CIF/CFR terms - under FOB there's no CIF figure to
-       build at all (see js-cif-value-block below and is_fob), so the whole
-       field is hidden and the calculation is cleared there - see
-       applyDeliveryTermCharges, which mirrors ExportInvoiceService._build_header's
-       server-side enforcement of the same rule (fields are stored exactly as
-       apply_fob_uplift always worked out; only the trigger moved from a
-       checkbox to this button). #}
-    <div class="field js-cif-calc-field" style="margin-top:10px;">
-      <input type="hidden" id="fob_pricing" name="fob_pricing" value="{{ '1' if data.fob_pricing else '0' }}">
-      <button type="button" class="btn btn-sm" id="calc-cif-btn">⇄ Calculate CIF pricing</button>
-      <div class="hint" id="cif-calc-summary" hidden>
-        Sea freight + insurance + certification + other = <strong><span id="fob-charges-display">0.00</span></strong>,
-        spread over <span id="fob-qty-display">0.00</span> total Qty
-        = <strong><span id="fob-uplift-display">0.00</span></strong> added to every line's FOB price to reach its CIF price.
-        CIF invoice value: <span class="js-currency-symbol">{{ chosen_symbol }}</span><strong><span id="cif-calc-value">0.00</span></strong>.
-      </div>
-    </div>
-    <div class="form-row">
       {# Display only - worked out from each line's Boxes x its catalog
          product's per-box net/gross weight, the same figures the export
          packing list's container split uses. Not typed in. #}
@@ -441,6 +441,11 @@
       {# The CIF/CFR figure is hidden entirely under FOB terms - see
          applyDeliveryTermCharges, the only thing that toggles
          js-cif-value-block (mirrors the quotation/proforma forms). #}
+      {# The prices typed in the Price column above are always the absolute FOB
+         price; the ladder below is derived from them and recomputes on every
+         edit - CIF/CFR value = FOB value + the charges, invoice value = that
+         minus the discount. Mirrors ExportInvoice.cif_value_usd, which is
+         what actually saves (same shape as the quotation/proforma forms). #}
       <div class="text-sm flex gap-8" style="align-items:center; flex-wrap:wrap;">
         <span class="js-cif-value-block"><strong><span id="cif-value-label">CIF</span> value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="subtotal-display">0.00</span> &nbsp;·&nbsp; </span><strong>Invoice value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="invoice-value-display">0.00</span> &nbsp;·&nbsp; <strong>FOB value:</strong> <span class="js-currency-symbol">{{ chosen_symbol }}</span> <span id="fob-value-display">0.00</span> &nbsp;·&nbsp; <strong>Tax (₹):</strong> <span id="tax-display">0.00</span>
       </div>
@@ -588,7 +593,6 @@
         </select>
       </td>
       <td><input type="number" step="any" name="item_price_usd[]" class="js-price" required></td>
-      <td class="num js-cif-price js-cif-col" hidden>0.00</td>
       <td class="js-igst-cell text-sm">—</td>
       <td class="num js-total">0.00</td>
       <td><button type="button" class="btn-link-danger js-remove-row">Remove</button></td>`;
@@ -600,40 +604,40 @@
   }
 
   const subtotalDisplay = document.getElementById('subtotal-display');
-  const fobPricingField = document.getElementById('fob_pricing');
-
-  // Whether the last "Calculate CIF pricing" push is still in effect. Unlike
-  // the checkbox this replaced, this is a one-shot calculation: appliedUplift
-  // is frozen at push time, not recomputed live as qty/price/charges change -
-  // see calcCifBtn below. Starts true when reopening an invoice that was
-  // already CIF-calculated, so its saved figures redisplay correctly.
-  let cifApplied = fobPricingField.value === '1';
-  let appliedUplift = 0;
 
   function recalcTotals() {
     const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
     const rate = parseFloat(document.getElementById('exchange_rate').value) || 0;
     const num = (id) => parseFloat(document.getElementById(id).value) || 0;
 
-    // The uplift is kept at full precision and only the line total is rounded
-    // to the cent - any gap that leaves lands silently in the Total column.
-    const uplift = cifApplied ? appliedUplift : 0;
-    let goodsTotal = 0, fobTotal = 0, tax = 0, netWeight = 0, grossWeight = 0;
+    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
+    const discount = num('discount_amount');
+
+    // The per-unit share of the charges the printed sheets fold into every
+    // line's rate under CIF/CFR terms - mirrors
+    // ExportInvoice.charge_uplift_per_unit, which is zero under FOB. Only the
+    // Tax figure below needs it: the columns on this form stay FOB-typed,
+    // because the FOB price is what the user types and what gets posted.
+    const isFobTerms = /^FOB\b/i.test((contractSelect.value || '').trim());
+    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
+    const uplift = (isFobTerms || !totalQty) ? 0 : Math.round((charges / totalQty) * 100) / 100;
+
+    let goodsTotal = 0, tax = 0, netWeight = 0, grossWeight = 0;
     rows.forEach((tr) => {
       const qty = parseFloat(tr.querySelector('.js-qty').value) || 0;
-      const typed = parseFloat(tr.querySelector('.js-price').value) || 0;
-      const price = typed + uplift;
+      const price = parseFloat(tr.querySelector('.js-price').value) || 0;
       const total = Math.round(qty * price * 100) / 100;
-      tr.querySelector('.js-cif-price').textContent = price.toFixed(2);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
+      // Quantity x the typed FOB price, summed line by line - the goods total,
+      // which IS the FOB value (ExportInvoice.fob_value_usd).
       goodsTotal += total;
-      // Quantity x the typed price, summed line by line - the FOB value
-      // whenever price_usd is already the absolute FOB figure (see the
-      // "absolute" branch below); ignored otherwise.
-      fobTotal += qty * typed;
       const igst = parseFloat(tr.dataset.igst) || 0;
       tr.querySelector('.js-igst-cell').textContent = tr.dataset.igst ? igst : '—';
-      tax += total * rate * igst / 100;   // tax follows the CIF price, as always
+      // Taxed on the PRINTED line total, not the typed one - mirrors
+      // ExportInvoice.tax_total_inr, which sums over printed_items so the
+      // printed IGST is that rate applied to the printed goods column.
+      const printedTotal = Math.round(qty * (Math.round((price + uplift) * 100) / 100) * 100) / 100;
+      tax += printedTotal * rate * igst / 100;
 
       // Total net/gross weight: display-only, worked out from each line's
       // Boxes x its catalog product's per-box weight (the same figures the
@@ -645,58 +649,20 @@
     document.getElementById('total_net_weight_kg').value = netWeight ? (Math.round(netWeight * 100) / 100) : '';
     document.getElementById('total_gross_weight_kg').value = grossWeight ? (Math.round(grossWeight * 100) / 100) : '';
 
-    const subtotal = goodsTotal;
-    subtotalDisplay.textContent = subtotal.toFixed(2);
-    // Mirrors ExportInvoice.fob_value_usd/invoice_value_usd in app/models.py
-    // exactly (see _fob_price_is_absolute there for the full reasoning).
-    // price_usd is the absolute FOB figure - so the ladder builds UP from it
-    // (FOB + every charge - discount) - whenever "Calculate CIF pricing" has
-    // been pushed (the charges are already folded into every line's price
-    // then) or the delivery term is FOB (there's no CIF concept to begin
-    // with). Otherwise the price was typed directly as the CIF price and
-    // never adjusted - the app's default assumption - so both figures fall
-    // back to the base ladder's own top-down subtraction instead.
-    const isFobTerms = /^FOB\b/i.test((contractSelect.value || '').trim());
-    const absolute = cifApplied || isFobTerms;
-    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
-    const discount = num('discount_amount');
-    const fobValue = absolute ? fobTotal : (subtotal - discount - charges);
-    const invoiceValue = absolute ? (fobValue + charges - discount) : (subtotal - discount);
+    // Mirrors ExportInvoice.fob_value_usd/cif_value_usd in app/models.py: the
+    // typed price is always the absolute FOB price, so the goods total IS the
+    // FOB value and the ladder builds UP from it - CIF/CFR = FOB + every
+    // charge, invoice value = that - the discount. No branching on the
+    // delivery term: the charges it doesn't carry are already held at zero
+    // (see applyDeliveryTermCharges, and drops_* in app/utils.py).
+    const fobValue = goodsTotal;
+    const cifValue = fobValue + charges;
+    const invoiceValue = cifValue - discount;
+    subtotalDisplay.textContent = cifValue.toFixed(2);
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
     document.getElementById('fob-value-display').textContent = fobValue.toFixed(2);
     document.getElementById('tax-display').textContent = tax.toFixed(2);
-    if (cifApplied) document.getElementById('cif-calc-value').textContent = subtotal.toFixed(2);
   }
-
-  // ---- push-button CIF pricing --------------------------------------------------
-  // The Price column is always the absolute FOB price the user typed. Pushing
-  // "Calculate CIF pricing" reads the charges once, works out the per-unit
-  // uplift, freezes it in appliedUplift, and reveals the worked-out CIF price
-  // per line plus the totals below. It's a snapshot, not a live formula -
-  // editing qty/price/charges afterwards leaves the shown CIF figures as they
-  // were until the button is pushed again. What gets posted is still each
-  // line's typed FOB price - the server redoes this same uplift at save time
-  // (apply_fob_uplift in app/services.py), so the two can't drift apart.
-  function applyCifDisplay() {
-    document.getElementById('price-label-prefix').textContent = cifApplied ? 'FOB price' : 'Price';
-    document.querySelectorAll('.js-cif-col').forEach((cell) => { cell.hidden = !cifApplied; });
-    document.getElementById('cif-calc-summary').hidden = !cifApplied;
-    recalcTotals();
-  }
-  function pushCifCalculation() {
-    const rows = Array.from(itemsBody.querySelectorAll('.item-row'));
-    const num = (id) => parseFloat(document.getElementById(id).value) || 0;
-    const charges = num('sea_freight') + num('insurance') + num('certification') + num('other_charges');
-    const totalQty = rows.reduce((sum, tr) => sum + (parseFloat(tr.querySelector('.js-qty').value) || 0), 0);
-    appliedUplift = totalQty ? charges / totalQty : 0;
-    cifApplied = true;
-    fobPricingField.value = '1';
-    document.getElementById('fob-charges-display').textContent = charges.toFixed(2);
-    document.getElementById('fob-qty-display').textContent = totalQty.toFixed(2);
-    document.getElementById('fob-uplift-display').textContent = appliedUplift.toFixed(4);
-    applyCifDisplay();
-  }
-  document.getElementById('calc-cif-btn').addEventListener('click', pushCifCalculation);
 
   function recalcRowQty(tr) {
     const altQty = parseFloat(tr.dataset.altQty);
@@ -762,7 +728,7 @@
     populatePalletOptions(tr, [], false);
     recalcRowPallets(tr);
     renumber();
-    applyCifDisplay();  // the new row's CIF price cell follows the current mode
+    recalcTotals();
   });
 
   itemsBody.addEventListener('click', (e) => {
@@ -782,13 +748,14 @@
   });
 
   // ---- the delivery terms decide which charges apply --------------------------
-  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance and
-  // no certification); CFR keeps the freight and the certification but leaves
-  // the buyer to insure the cargo, so it drops the insurance and nothing else. Each input is toggled on its own question -
-  // matching drops_sea_freight/drops_insurance/drops_certification in app/utils.py, which zero the
-  // same charges server-side and leave the same rows off the printed sheet.
+  // FOB puts the whole ocean leg on the buyer (no sea freight, no insurance);
+  // CFR keeps the freight but leaves the buyer to insure the cargo, so it drops
+  // the insurance and nothing else. The certification is never dropped - like
+  // other charges it stays payable under every term. Each input is toggled on
+  // its own question - matching drops_sea_freight/drops_insurance in
+  // app/utils.py, which zero the same charges server-side and leave the same
+  // rows off the printed sheet.
   const contractSelect = document.getElementById('nature_of_contract');
-  const cifCalcField = document.querySelector('.js-cif-calc-field');
   function applyDeliveryTermCharges() {
     const terms = (contractSelect.value || '').trim();
     const fob = /^FOB\b/i.test(terms);
@@ -801,19 +768,6 @@
     };
     toggle('.js-charge-sea-freight', fob);
     toggle('.js-charge-insurance', fob || cfr);
-    // "Calculate CIF pricing" only means something when there's a CIF figure
-    // to build - under FOB terms there's none, so the button is hidden and
-    // any pushed calculation is automatically cleared, falling back to the
-    // default tax calculation (IGST% x the plain typed price, i.e. FOB value
-    // and Invoice value work out equal) - mirrors the server-side enforcement
-    // in ExportInvoiceService._build_header (no_fob_pricing).
-    cifCalcField.hidden = fob;
-    if (fob && cifApplied) {
-      cifApplied = false;
-      appliedUplift = 0;
-      fobPricingField.value = '0';
-      applyCifDisplay();
-    }
     document.getElementById('cif-value-label').textContent = cfr ? 'CFR' : 'CIF';
     // Not the `hidden` attribute - see the quotation/proforma forms' identical
     // note; style.display sidesteps any specificity fight with a display
@@ -822,12 +776,6 @@
     recalcTotals();  // FOB value and Invoice value recompute automatically, every time this runs
   }
   contractSelect.addEventListener('change', applyDeliveryTermCharges);
-  // Reopening an invoice that already had a pushed CIF calculation
-  // reconstructs it from the saved charges/qty (recomputing the same uplift
-  // apply_fob_uplift worked out at save time) so it redisplays correctly;
-  // applyDeliveryTermCharges then clears it right back off if the terms
-  // saved out are FOB, same as any other load.
-  if (cifApplied) pushCifCalculation(); else applyCifDisplay();
   applyDeliveryTermCharges();
 
   // ---- reference-PI picker: pick a buyer, then just their PIs ---------------
@@ -844,6 +792,31 @@
 
   function buyerOptionForKey(key) {
     return Array.from(buyerSelect.options).find((o) => o.value && o.dataset.companyKey === key);
+  }
+
+  // Booking no. options carry the buyer's own id (BookingDetail.buyer_id),
+  // so - unlike the PI picker's lead/name-based key above - this narrows by
+  // a straight id match against whichever buyer is picked. No buyer picked
+  // yet means every booking stays visible. The `hidden` attribute on an
+  // <option> is unreliable across browsers (Firefox keeps showing it in the
+  // open dropdown), so non-matching options are actually detached from the
+  // DOM and reinserted rather than just hidden.
+  const bookingSelect = document.getElementById('booking_no');
+  const allBookingOptions = bookingSelect ? Array.from(bookingSelect.options).filter((o) => o.dataset.buyerId) : [];
+  function refreshBookingFilter() {
+    const buyerId = buyerSelect.value || null;
+    const previouslySelected = bookingSelect.value;
+    let stillPresent = false;
+    allBookingOptions.forEach((opt) => {
+      const matches = !buyerId || opt.dataset.buyerId === buyerId;
+      if (matches) {
+        bookingSelect.appendChild(opt);
+        if (opt.value === previouslySelected) stillPresent = true;
+      } else if (opt.parentNode === bookingSelect) {
+        bookingSelect.removeChild(opt);
+      }
+    });
+    if (previouslySelected && !stillPresent) bookingSelect.value = '';
   }
 
   function refreshProformaPickerFilter() {
@@ -889,6 +862,10 @@
       if (opt) buyerSelect.value = opt.value;
     }
     refreshProformaPickerFilter();
+  }
+  if (bookingSelect) {
+    buyerSelect.addEventListener('change', refreshBookingFilter);
+    refreshBookingFilter();
   }
 
   // A disabled field never posts - re-enable it right before submit so the
@@ -974,12 +951,10 @@
     refreshCurrencyLabels();
     applyDeliveryTermCharges();
 
-    // Goods lines and the imported supplier rows come wholly from the PIs -
-    // any previously pushed CIF calculation was worked out for a different
-    // set of rows, so it's cleared rather than silently misapplied to these.
-    cifApplied = false;
-    appliedUplift = 0;
-    fobPricingField.value = '0';
+    // Goods lines and the imported supplier rows come wholly from the PIs.
+    // The prices carried over are the PIs' own typed FOB rates - this
+    // invoice's charges are then added on top as a document-level figure
+    // (see build_prefill_from_proformas in app/services.py).
     itemsBody.innerHTML = '';
     (data.items || []).forEach((item) => {
       const tr = buildLoadedRow(item);
@@ -987,7 +962,7 @@
       initRowPalletSelection(tr);
     });
     renumber();
-    applyCifDisplay();
+    recalcTotals();
 
     const pdWrap = document.getElementById('purchase-detail-rows');
     pdWrap.innerHTML = '';
@@ -1007,6 +982,25 @@
       div.querySelector('.js-pd-name-display').textContent = pd.supplier_name || '—';
       pdWrap.appendChild(div);
     });
+
+    const psWrap = document.getElementById('product-source-rows');
+    const psBody = document.getElementById('product-source-body');
+    psBody.innerHTML = '';
+    (data.product_sources || []).forEach((ps) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="hidden" name="ps_product_name[]"></td>
+        <td><input type="hidden" name="ps_po_number[]"></td>
+        <td class="num"><input type="hidden" name="ps_quantity_boxes[]"></td>`;
+      tr.children[0].querySelector('input').value = ps.product_name || '';
+      tr.children[0].append(document.createTextNode(ps.product_name || ''));
+      tr.children[1].querySelector('input').value = ps.po_number || '';
+      tr.children[1].append(document.createTextNode(ps.po_number || ''));
+      tr.children[2].querySelector('input').value = ps.quantity_boxes || 0;
+      tr.children[2].append(document.createTextNode(ps.quantity_boxes || 0));
+      psBody.appendChild(tr);
+    });
+    psWrap.hidden = !(data.product_sources || []).length;
 
     // The goods lines were replaced wholesale, so the container split below
     // has to start over from them (its own listener only refreshes figures).
@@ -1232,7 +1226,7 @@
 
   itemsBody.querySelectorAll('.item-row').forEach(initRowPalletSelection);
   renumber();
-  applyCifDisplay();  // ends in recalcTotals()
+  recalcTotals();
   updateTypeColumnVisibility();
 })();
 </script>

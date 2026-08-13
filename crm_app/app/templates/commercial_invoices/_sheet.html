@@ -51,7 +51,10 @@
       </tr>
     </thead>
     <tbody>
-      {% for item in invoice.items %}
+      {# printed_items - the CIF/CFR-priced lines, exactly as the export
+         invoice's own sheet prints them (see ExportInvoice.printed_items).
+         Under FOB terms the stored items print through unchanged. #}
+      {% for item in invoice.printed_items %}
       <tr class="ci-goods">
         <td class="ci-c">{{ loop.index }}</td>
         <td>

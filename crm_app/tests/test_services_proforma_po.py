@@ -156,7 +156,8 @@ class TestProformaCrud:
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 0
         assert reloaded.insurance == 0
-        assert reloaded.invoice_value_usd == 205.0  # 200 FOB total + 5 other charges, no discount posted
+        assert reloaded.certification == 15         # never dropped by any term
+        assert reloaded.invoice_value_usd == 220.0  # 200 FOB total + 15 certification + 5 other charges
         assert reloaded.fob_value_usd == 200.0      # always just the goods total
 
     def test_cfr_terms_drop_only_the_insurance(self, container, seed):

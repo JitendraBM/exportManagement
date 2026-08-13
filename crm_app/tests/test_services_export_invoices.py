@@ -6,7 +6,7 @@ on what is unique to this document type:
 
   - references MANY proforma invoices at once (many-to-many),
   - prefill that walks each PI -> its purchase orders -> their purchase
-    invoices to import EPCG / export-under / supplier-exemption rows,
+    invoices to import EPCG / export-under / supplier purchase-detail rows,
   - per-product tax computed and summed into IGST vs CGST/SGST,
   - a manual exchange rate that only an admin can change once set,
   - the container-count -> section-11B rows, and the optional shipping
@@ -66,6 +66,25 @@ def make_export(container, seed, proforma_ids=None, items=None, export_invoice_n
     return container.export_invoice_service.create(seed.admin, fields, raw_items)
 
 
+def make_chain_pinv(container, seed, pi, product, quantity_boxes="10", quantity_value="100", price_inr="500"):
+    """Raises a purchase order + purchase invoice against `pi`, buying
+    `product` - the PI -> PO -> PInv chain goods lines are now sourced from
+    (see ExportInvoiceService.build_prefill_from_proformas)."""
+    po = container.purchase_order_service.create(
+        seed.admin,
+        {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+         "proforma_invoice_id": str(pi.id)},
+        [{"product_name": product.product_name, "product_id": str(product.id), "quantity_boxes": quantity_boxes,
+          "quantity_value": quantity_value, "price_inr": price_inr, "price_per": "BOX"}])
+    pinv = container.purchase_invoice_service.create(
+        seed.admin,
+        {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
+         "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id)},
+        [{"product_name": product.product_name, "product_id": str(product.id), "quantity_value": quantity_value,
+          "price_inr": price_inr, "price_per": "BOX", "quantity_boxes": quantity_boxes}], [])
+    return po, pinv
+
+
 # ==========================================================================
 # Basic create / read / update / delete
 # ==========================================================================
@@ -77,107 +96,78 @@ class TestExportCrud:
         assert got.consignee_name == "ROBUST INTERNATIONAL"
         assert len(got.items) == 1
 
-    def test_fob_pricing_spreads_the_charges_at_full_precision(self, container, seed):
-        # Same shared uplift the quotation/proforma invoice used to use
-        # (services.apply_fob_uplift): 100 of charges over 3 units is
-        # 33.333..., kept at full precision rather than rounded to the cent,
-        # so the line total lands exactly on 121.0 with no round-off to carry.
+    def test_the_ladder_builds_up_from_the_typed_fob_price(self, container, seed):
+        # The typed price is always the absolute FOB price and nothing ever
+        # adjusts it, so the goods total IS the FOB value and the ladder is
+        # built UP from there: CIF = FOB + the charges, invoice value = that
+        # minus the discount. Mirrors Quotation/ProformaInvoice exactly.
         inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
-                          fob_pricing="1",
                           items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
                                   "price_usd": "7", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         item = got.items[0]
-        assert item.fob_price_usd == 7.0
-        assert item.price_usd == pytest.approx(7 + 100 / 3)
-        assert item.total_usd == 121.0
+        assert item.price_usd == 7.0                      # untouched by the charges
+        assert item.total_usd == 21.0
         assert got.round_off == 0
-        assert got.cif_value_usd == pytest.approx(121.0)
         assert got.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
+        assert got.cif_value_usd == pytest.approx(121.0)  # 21 + 100 sea freight
 
     def test_invoice_value_includes_other_charges_under_fob_terms(self, container, seed):
-        # The actual bug being fixed: under FOB terms, FOB value must move
-        # only when a line's typed price or quantity changes - never with
-        # the discount, and (unlike the base CifMoneyLadder ladder) never
-        # with the four charges either, when fob_pricing was never ticked.
+        # Under FOB terms the FOB value must move only when a line's typed
+        # price or quantity changes - never with the discount or the charges.
         # Invoice value is then built back UP from it: FOB + every charge -
-        # discount (ExportInvoice.invoice_value_usd). sea_freight/insurance/
-        # certification are all auto-zeroed by _build_header under FOB terms
-        # (drops_sea_freight/drops_insurance/drops_certification - same rule
-        # quotations and proforma invoices use), but other_charges is not
-        # gated by any delivery term - it still has to reach the buyer's
-        # payable figure rather than silently vanishing.
+        # discount. sea_freight/insurance are auto-zeroed by _build_header
+        # under FOB terms (drops_sea_freight/drops_insurance - same rule
+        # quotations and proforma invoices use), but the certification and
+        # other_charges are not gated by any delivery term - they still have
+        # to reach the buyer's payable figure rather than silently vanishing.
         inv = make_export(container, seed, nature_of_contract="FOB", sea_freight="100",
                           insurance="50", certification="20", other_charges="10", discount_amount="10",
                           items=[{"product_name": "Tiles", "quantity_value": "10", "unit": "SQM",
                                   "price_usd": "6", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
-        assert got.items[0].fob_price_usd is None          # fob_pricing was never ticked
-        assert got.sea_freight == 0 and got.insurance == 0 and got.certification == 0  # dropped by FOB terms
-        assert got.cif_value_usd == 60.0
-        assert got.fob_value_usd == 60.0                    # goods total only - discount/charges don't touch it
-        assert got.invoice_value_usd == 60.0                # 60 + (0+0+0+10) - 10
+        assert got.sea_freight == 0 and got.insurance == 0   # dropped by FOB terms
+        assert got.certification == 20                       # never dropped by any term
+        assert got.fob_value_usd == 60.0                     # goods total only
+        assert got.cif_value_usd == 90.0                     # 60 + (0+0+20+10)
+        assert got.invoice_value_usd == 80.0                 # 90 - 10
 
-    def test_fob_value_falls_back_to_the_base_ladder_under_cif_terms_without_a_push(self, container, seed):
-        # Genuine CIF/CFR terms with the price typed directly as the CIF
-        # price and "Calculate CIF pricing" never pushed - price_usd is
-        # assumed CIF-inclusive already (see CifMoneyLadder's docstring), so
-        # FOB and Invoice value both fall back to the base ladder's own
-        # top-down subtraction instead of the FOB-terms formula above. This
-        # is the scenario the first, over-broad version of this fix
-        # accidentally broke (see test_routes_pages.py::
-        # TestCommercialInvoiceRoutes::
-        # test_money_is_the_invoices_own_currency_with_indian_grouping).
+    def test_the_ladder_is_the_same_shape_under_cif_terms(self, container, seed):
+        # Identical arithmetic under CIF terms - the delivery term only
+        # decides which charge fields are non-zero, never how the ladder is
+        # worked out.
         inv = make_export(container, seed, nature_of_contract="CIF", insurance="50", discount_amount="100",
                           items=[{"product_name": "Tiles", "quantity_value": "144", "unit": "SQM",
                                   "price_usd": "5.92", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
-        assert got.cif_value_usd == pytest.approx(852.48)
-        assert got.invoice_value_usd == pytest.approx(752.48)   # 852.48 - 100
-        assert got.fob_value_usd == pytest.approx(702.48)       # 852.48 - 100 - 50
+        assert got.fob_value_usd == pytest.approx(852.48)       # the goods total
+        assert got.cif_value_usd == pytest.approx(902.48)       # 852.48 + 50
+        assert got.invoice_value_usd == pytest.approx(802.48)   # 902.48 - 100
 
-    def test_fob_pricing_plus_discount_still_reports_the_typed_fob_total(self, container, seed):
-        # Extends test_fob_pricing_spreads_the_charges_at_full_precision with
-        # a non-zero discount - the case the old formula got wrong.
+    def test_the_discount_never_touches_the_fob_value(self, container, seed):
         inv = make_export(container, seed, nature_of_contract="CIF", sea_freight="100",
-                          fob_pricing="1", discount_amount="15",
+                          discount_amount="15",
                           items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
                                   "price_usd": "7", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
-        assert got.fob_value_usd == pytest.approx(21.0)     # exactly 3 x the typed 7, discount doesn't touch it
+        assert got.fob_value_usd == pytest.approx(21.0)     # exactly 3 x the typed 7
 
-    def test_fob_pricing_is_ignored_under_fob_terms(self, container, seed):
-        # "Prices typed above are FOB" only means something when there's a
-        # CIF figure to build up to - under FOB terms there's none (the form
-        # hides the checkbox entirely there), so a stale client/API call
-        # posting it anyway is ignored rather than uplifting the price.
-        inv = make_export(container, seed, nature_of_contract="FOB", sea_freight="100",
-                          fob_pricing="1",
-                          items=[{"product_name": "Tiles", "quantity_value": "3", "unit": "SQM",
-                                  "price_usd": "7", "igst_percent": "18"}])
-        got = container.export_invoice_service.get(inv.id, seed.company_id)
-        item = got.items[0]
-        assert got.fob_pricing is False
-        assert item.fob_price_usd is None
-        assert item.price_usd == 7.0
-        assert item.total_usd == 21.0
-
-    def test_without_fob_pricing_the_export_prices_are_untouched(self, container, seed):
+    def test_the_export_prices_are_stored_exactly_as_typed(self, container, seed):
         got = container.export_invoice_service.get(
             make_export(container, seed, nature_of_contract="CIF", sea_freight="100").id, seed.company_id)
-        assert (got.fob_pricing, got.round_off) == (False, 0)
+        assert got.round_off == 0
         assert got.items[0].price_usd == 5.92
-        assert got.items[0].fob_price_usd is None
 
-    def test_fob_nature_of_contract_drops_sea_freight_insurance_and_certification(self, container, seed):
-        # FOB puts the ocean leg on the buyer - none of the three charges is
-        # stored, and the printed sheet drops their rows with them.
+    def test_fob_nature_of_contract_drops_sea_freight_and_insurance(self, container, seed):
+        # FOB puts the ocean leg on the buyer - neither charge is stored, and
+        # the printed sheet drops their rows with them. The certification is
+        # a seller-side cost and stays payable, like other charges.
         inv = make_export(container, seed, nature_of_contract="FOB",
                           sea_freight="100", insurance="20", certification="30")
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.sea_freight == 0
         assert got.insurance == 0
-        assert got.certification == 0
+        assert got.certification == 30
 
     def test_cfr_nature_of_contract_drops_only_the_insurance(self, container, seed):
         # CFR keeps the freight with the seller and moves only the cargo
@@ -257,8 +247,18 @@ class TestExportProformaLinks:
             make_export(container, seed, proforma_ids=[p1.id, p2.id])
 
     def test_prefill_merges_goods_from_all_selected_pis(self, container, seed):
-        p1 = make_proforma(container, seed)
-        p2 = make_proforma(container, seed)
+        # Goods now come from each PI's own purchase-invoice chain, not from
+        # the PI's quoted lines directly - so both PIs need one to contribute
+        # an item. Two DIFFERENT products, since the same product bought
+        # under both PIs would correctly collapse into one summed line (see
+        # test_same_product_across_multiple_purchase_orders_is_summed_into_one_line).
+        make_company(container, seed)
+        product1 = make_product(container, seed, name="Tiles A")
+        product2 = make_product(container, seed, name="Tiles B")
+        p1 = make_proforma(container, seed, product=product1)
+        p2 = make_proforma(container, seed, product=product2)
+        make_chain_pinv(container, seed, p1, product1)
+        make_chain_pinv(container, seed, p2, product2)
         built = container.export_invoice_service.build_prefill_from_proformas([p1.id, p2.id], seed.company_id)
         assert len(built["items"]) == 2
         assert built["fields"]["consignee_name"] == "ROBUST INTERNATIONAL"
@@ -284,19 +284,23 @@ class TestExportProformaLinks:
         assert fields["other_charges"] == 10
         assert fields["discount_amount"] == 10
 
-    def test_prefill_converts_the_pis_fob_prices_into_cif_prices(self, container, seed):
-        """The two documents hold their prices differently: a PI's price_usd
-        is the FOB price (its CIF value is that goods total PLUS the charges),
-        an export invoice's is the CIF price (its ladder runs back down from
-        the goods total). So each PI's charges are spread over its own lines'
-        qty on the way across - it is the PI's own printed Rate column that is
-        carried over (rounded to the cent), so both sheets quote the buyer the
-        same rate and the two documents' CIF/FOB values agree."""
-        pi = make_proforma(container, seed, terms_of_delivery="CIF", sea_freight="100",
-                            insurance="20")   # 120 of charges over 100 SQM = 1.20/unit
+    def test_prefill_carries_the_pis_typed_fob_price_across_unchanged(self, container, seed):
+        """Both documents hold their prices the same way now: price_usd is the
+        typed FOB price, and the charges are added on top as a document-level
+        figure. So the PI's own typed rate crosses over untouched - taking its
+        CIF-priced view (printed_items) instead would fold the PI's charges
+        into the export invoice's per-unit rate and then add the export
+        invoice's own charges on top of that again. The goods line itself
+        (identity/qty) comes from the PI's purchase-invoice chain, but price is
+        still matched by product_id back to the PI's own rate."""
+        make_company(container, seed)
+        product = make_product(container, seed)
+        pi = make_proforma(container, seed, product=product, terms_of_delivery="CIF", sea_freight="100",
+                            insurance="20")   # 120 of charges, NOT spread into the rate
+        make_chain_pinv(container, seed, pi, product)
         built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
-        assert built["items"][0]["price_usd"] == pytest.approx(5.92 + 1.20)
-        assert built["items"][0]["price_usd"] == pi.printed_items[0].price_usd
+        assert built["items"][0]["price_usd"] == pytest.approx(5.92)
+        assert built["items"][0]["price_usd"] == pi.items[0].price_usd
         # The export invoice raised off that prefill lands on the PI's own ladder.
         inv = make_export(container, seed, proforma_ids=[pi.id],
                           nature_of_contract="CIF", sea_freight="100", insurance="20",
@@ -306,9 +310,13 @@ class TestExportProformaLinks:
         assert got.cif_value_usd == pytest.approx(pi.cif_value_usd)
         assert got.fob_value_usd == pytest.approx(pi.fob_value_usd)
 
-    def test_prefill_leaves_prices_alone_when_the_pi_has_no_charges(self, container, seed):
-        # FOB terms hold every charge at zero, so there is nothing to spread.
-        pi = make_proforma(container, seed, terms_of_delivery="FOB MUNDRA", sea_freight="100")
+    def test_prefill_carries_the_price_across_when_the_pi_has_no_charges(self, container, seed):
+        # FOB terms hold the freight and the insurance at zero; either way the
+        # typed rate is what crosses over.
+        make_company(container, seed)
+        product = make_product(container, seed)
+        pi = make_proforma(container, seed, product=product, terms_of_delivery="FOB MUNDRA", sea_freight="100")
+        make_chain_pinv(container, seed, pi, product)
         built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
         assert built["items"][0]["price_usd"] == 5.92
 
@@ -334,7 +342,7 @@ class TestExportProformaLinks:
 
 
 # ==========================================================================
-# Import EPCG / supplier-exemption details through the PI -> PO -> PInv chain
+# Import EPCG / supplier purchase details through the PI -> PO -> PInv chain
 # ==========================================================================
 class TestExportChainImport:
     def _chain(self, container, seed, purchase_type="exemption"):
@@ -392,10 +400,56 @@ class TestExportChainImport:
         assert pd[0]["supplier_gstin"] == "24ABVFA1170D1ZO"
         assert pd[0]["supplier_invoice_no"] == "GSTT/4987"
 
-    def test_full_tax_purchase_contributes_no_purchase_detail_row(self, container, seed):
+    def test_full_tax_purchase_also_contributes_a_purchase_detail_row(self, container, seed):
         pi, po, pinv = self._chain(container, seed, purchase_type="full_tax")
         built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
-        assert built["purchase_details"] == []
+        pd = built["purchase_details"]
+        assert len(pd) == 1
+        assert pd[0]["supplier_gstin"] == "24ABVFA1170D1ZO"
+        assert pd[0]["supplier_invoice_no"] == "GSTT/4987"
+
+    def test_same_product_bought_against_two_purchase_orders_is_summed_into_one_line(self, container, seed):
+        """Reproduces EXP/25-26/025: one purchase invoice can cover several
+        purchase orders of the same supplier at once (a shipment invoiced
+        against two orders together), each as its own item line for the SAME
+        product. Left unmerged that put the product on the Export Invoice
+        twice - it must instead collapse into one goods line with the boxes
+        (and pallets) summed, with the per-PO split kept in product_sources
+        for traceability."""
+        make_company(container, seed)
+        product = make_product(container, seed)
+        pi = make_proforma(container, seed, product=product)
+        po1 = container.purchase_order_service.create(
+            seed.admin,
+            {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+             "proforma_invoice_id": str(pi.id)},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+        po2 = container.purchase_order_service.create(
+            seed.admin,
+            {"seller_name": "Alive Granito", "po_date": "2026-01-11", "seller_gstin": "24ABVFA1170D1ZO",
+             "proforma_invoice_id": str(pi.id)},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_boxes": "5",
+              "quantity_value": "50", "price_inr": "500", "price_per": "BOX"}])
+        container.purchase_invoice_service.create(
+            seed.admin,
+            {"seller_name": "Alive Granito", "invoice_number": "STL/0025/26-27", "invoice_date": "2026-01-15",
+             "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_ids": [str(po1.id), str(po2.id)]},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_value": "100",
+              "price_inr": "500", "price_per": "BOX", "quantity_boxes": "10", "purchase_order_id": str(po1.id)},
+             {"product_name": "Tiles", "product_id": str(product.id), "quantity_value": "50",
+              "price_inr": "500", "price_per": "BOX", "quantity_boxes": "5", "purchase_order_id": str(po2.id)}],
+            [])
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert len(built["items"]) == 1
+        assert built["items"][0]["quantity_boxes"] == 15
+        assert built["items"][0]["quantity_value"] == 150
+
+        sources = built["product_sources"]
+        assert len(sources) == 2
+        by_po = {s["po_number"]: s["quantity_boxes"] for s in sources}
+        assert by_po[po1.po_number] == 10
+        assert by_po[po2.po_number] == 5
 
 
 # ==========================================================================

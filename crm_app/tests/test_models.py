@@ -357,58 +357,84 @@ class TestExportInvoice:
         return ExportInvoice(**base)
 
     def _item(self, quantity_value, price_usd, fob_price_usd=None, total_usd=None):
+        # total_usd defaults to qty x price rounded to the cent, the way
+        # ExportInvoiceService._build_items actually stores it.
         return ExportInvoiceItem(id=None, export_invoice_id=1, sr_no=1, product_name="P",
                                  quantity_value=quantity_value, price_usd=price_usd,
                                  fob_price_usd=fob_price_usd,
-                                 total_usd=total_usd if total_usd is not None else quantity_value * price_usd)
+                                 total_usd=total_usd if total_usd is not None
+                                 else round(quantity_value * price_usd, 2))
 
     def test_fob_value_ignores_discount_and_charges_under_fob_terms(self):
-        # The bug: unlike Quotation/ProformaInvoice, ExportInvoice inherited
-        # CifMoneyLadder.fob_value_usd unmodified, so it moved with the
-        # discount (and the charges) even under FOB terms, where price_usd
-        # is unambiguously the typed FOB price already. Fixed to always be
-        # just the typed goods total then - see ExportInvoice.fob_value_usd.
-        # invoice_value_usd is built back UP from it: FOB + every charge -
-        # discount (ExportInvoice.invoice_value_usd).
-        inv = self._export_invoice(nature_of_contract="FOB", sea_freight=10, insurance=5,
+        # An export invoice's typed price is always the absolute FOB price, so
+        # fob_value_usd is just the goods total - never moved by the discount
+        # or the charges. The rest of the ladder is built UP from it:
+        # CIF = FOB + every charge, invoice value = that - the discount.
+        # Under FOB terms the freight and the insurance are held at zero by
+        # the builder, so only the certification and other charges add on.
+        inv = self._export_invoice(nature_of_contract="FOB", sea_freight=0, insurance=0,
                                    certification=2, other_charges=3, discount_amount=4)
-        inv.items = [self._item(10, 6)]           # fob_price_usd is None - never uplifted
-        assert inv.cif_value_usd == 60
-        assert inv.fob_value_usd == 60              # goods total only, unlike the base ladder
-        assert inv.invoice_value_usd == 76          # 60 + (10+5+2+3) - 4
+        inv.items = [self._item(10, 6)]
+        assert inv.fob_value_usd == 60              # goods total only
+        assert inv.cif_value_usd == 65              # 60 + (2+3)
+        assert inv.invoice_value_usd == 61          # 65 - 4
 
-    def test_fob_value_uses_the_originally_typed_price_when_uplifted(self):
-        # apply_fob_uplift (services.py) mutates price_usd into the CIF price
-        # and stashes the typed price in fob_price_usd - fob_value_usd must
-        # read the stash, not the mutated price_usd, or it would report the
-        # CIF total instead.
-        inv = self._export_invoice(fob_pricing=True, discount_amount=4)
-        inv.items = [self._item(10, price_usd=6.5, fob_price_usd=6, total_usd=65)]
-        assert inv.fob_value_usd == 60              # 10 x the typed 6, not 10 x the CIF 6.5
-
-    def test_fob_value_falls_back_to_the_base_ladder_under_cif_terms_without_a_push(self):
-        # Genuine CIF/CFR terms where the price was typed directly as the CIF
-        # price and "Calculate CIF pricing" was never pushed (fob_pricing off,
-        # nature_of_contract not FOB) - the app's default assumption is that
-        # price_usd is already CIF-inclusive (see CifMoneyLadder's docstring),
-        # so FOB has to be worked out the base ladder's way: strip the
-        # discount and the four charges back out of the CIF total. This is
-        # the scenario the over-broad first version of this fix accidentally
-        # broke (see test_routes_pages.py::TestCommercialInvoiceRoutes::
-        # test_money_is_the_invoices_own_currency_with_indian_grouping).
+    def test_the_ladder_is_the_same_shape_under_cif_terms(self):
+        # Identical arithmetic under CIF terms - the delivery term only decides
+        # which charge fields are non-zero (the builder zeroes the rest), never
+        # how the ladder itself is worked out. Mirrors Quotation/
+        # ProformaInvoice.cif_value_usd exactly.
         inv = self._export_invoice(nature_of_contract="CIF", insurance=50, discount_amount=100)
         inv.items = [self._item(144, 5.92)]
-        assert inv.cif_value_usd == pytest.approx(852.48)
-        assert inv.invoice_value_usd == pytest.approx(752.48)   # 852.48 - 100
-        assert inv.fob_value_usd == pytest.approx(702.48)       # 852.48 - 100 - 50
+        assert inv.fob_value_usd == pytest.approx(852.48)       # the goods total
+        assert inv.cif_value_usd == pytest.approx(902.48)       # 852.48 + 50
+        assert inv.invoice_value_usd == pytest.approx(802.48)   # 902.48 - 100
 
-    def test_fob_priced_lines_reduction_is_independent_of_the_fob_value_fix(self):
-        # fob_priced_lines must keep spreading charges_total + discount_amount
-        # regardless of how fob_value_usd itself is now computed.
-        inv = self._export_invoice(sea_freight=10, discount_amount=4)
+    # ---- the CIF/CFR-priced view the sheets print -------------------------
+    def test_printed_items_are_the_stored_items_under_fob_terms(self):
+        # No CIF figure to build under FOB, so there is no uplift and the
+        # stored lines are handed back untouched - not even re-rounded.
+        inv = self._export_invoice(nature_of_contract="FOB MUNDRA",
+                                   certification=2, other_charges=3)
         inv.items = [self._item(10, 6)]
-        lines = inv.fob_priced_lines()
-        assert lines[0]["rate"] == pytest.approx(6 - (10 + 4) / 10)
+        assert inv.charge_uplift_per_unit == 0.0
+        assert inv.printed_items[0] is inv.items[0]
+
+    def test_printed_items_carry_the_charges_in_the_rate_under_cif_terms(self):
+        # 150 of charges over 144 SQM = 1.0417/unit, rounded to the 1.04 a
+        # printed rate has room for -> the buyer is quoted 6.96 all-in.
+        inv = self._export_invoice(nature_of_contract="CIF BEIRA",
+                                   sea_freight=100, insurance=50)
+        inv.items = [self._item(144, 5.92)]
+        assert inv.charge_uplift_per_unit == 1.04
+        printed = inv.printed_items
+        assert printed[0].price_usd == pytest.approx(6.96)
+        assert printed[0].total_usd == pytest.approx(1002.48)    # 6.96 x 144
+        assert inv.items[0].price_usd == 5.92                    # the stored line is untouched
+        assert inv.fob_value_usd == pytest.approx(852.48)        # ...and so is the ladder's floor
+
+    def test_the_printed_column_foots_to_the_cif_value_exactly(self):
+        # An uneven share (1805.65 over 244.8 units = 7.3760...) can't divide
+        # into the cent, so the last line's Total absorbs what the rounded rate
+        # leaves over rather than a round-off row being printed.
+        inv = self._export_invoice(sea_freight=1234.57, insurance=321.09,
+                                   certification=150, other_charges=99.99)
+        inv.items = [self._item(144, 5.92), self._item(100.8, 6.37)]
+        assert inv.charge_uplift_per_unit == 7.38
+        printed = inv.printed_items
+        assert [i.price_usd for i in printed] == pytest.approx([13.30, 13.75])
+        assert printed[0].total_usd == pytest.approx(1915.20)    # 13.30 x 144, exact
+        assert printed[1].total_usd == pytest.approx(1385.03)    # 13.75 x 100.8 = 1386.00, less the 0.97 leftover
+        assert inv.printed_goods_total == pytest.approx(inv.cif_value_usd)
+
+    def test_the_tax_base_is_the_printed_total(self):
+        # IGST follows the printed goods column, so the printed tax is always
+        # that rate applied to what the sheet actually shows.
+        inv = self._export_invoice(nature_of_contract="CIF BEIRA", sea_freight=100,
+                                   insurance=50, exchange_rate=86.70, tax_mode="igst")
+        inv.items = [self._item(144, 5.92)]
+        inv.items[0].igst_percent = 18
+        assert inv.tax_total_inr == pytest.approx(1002.48 * 86.70 * 0.18)
 
 
 # --------------------------------------------------------------------------

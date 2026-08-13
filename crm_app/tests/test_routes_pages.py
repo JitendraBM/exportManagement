@@ -440,12 +440,27 @@ class TestExportPackingListRoutes:
     def test_pi_prefill_api_returns_only_the_pi_derived_fields(self, admin_ctx):
         """The form's "Load from selected PIs" button applies this JSON in
         place instead of reloading, so whatever the user typed in fields the
-        PIs have no say over survives a (re-)load."""
+        PIs have no say over survives a (re-)load. Goods lines are sourced
+        from the PI's own purchase-invoice chain (what was actually bought),
+        not from the PI's quoted line directly."""
         client, container, admin, company_id = admin_ctx
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44")
         proforma = container.proforma_invoice_service.create(
             admin, {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-01-01",
                     "buyer_order_no": "EXP/001", "sea_freight": "100"},
-            [{"product_name": "GVT 600X1200", "quantity_value": "144", "price_usd": "5.92"}])
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_value": "144", "price_usd": "5.92"}])
+        po = container.purchase_order_service.create(
+            admin, {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+                    "proforma_invoice_id": str(proforma.id)},
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+        container.purchase_invoice_service.create(
+            admin, {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
+                    "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id)},
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_value": "100",
+              "price_inr": "500", "price_per": "BOX", "quantity_boxes": "10"}], [])
         resp = client.get(f"/export-invoices/api/prefill?proforma_invoice_ids={proforma.id}")
         assert resp.status_code == 200
         payload = resp.get_json()
@@ -557,7 +572,12 @@ class TestExportPackingListRoutes:
     def test_the_lut_number_stays_out_of_the_export_under_cell(self, admin_ctx):
         """Customs reads this cell, and the LUT number has no place in it -
         it belongs to the SUPPLY MEANT FOR EXPORT heading at the top of the
-        sheet. Pinned on both sheets, which print the identical cell."""
+        sheet, and even then only on an invoice actually raised under LUT.
+        This invoice pays IGST (the default) while the company still has a
+        LUT on file, same as most companies do regardless of which mode any
+        one invoice picks - so the LUT number must appear on neither sheet
+        anywhere, not even in the heading. Pinned on both sheets, which print
+        the identical Export Under cell."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
         # epcg_number/epcg_date are no longer posted directly - they're
@@ -572,10 +592,22 @@ class TestExportPackingListRoutes:
             lines = self._export_under_cell(page)
             assert not any("LUT" in line for line in lines), path
             assert len(lines) == 2      # scheme / heading, nothing else
-        # ...and the packing list still carries the company's LUT up in its
-        # SUPPLY MEANT FOR EXPORT heading, which is where it belongs.
-        assert "LUT123" in client.get(
-            f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
+        # Bug: the packing list's heading used to show the company's LUT
+        # number whenever it had one on file at all, even on an invoice
+        # raised WITH payment of IGST (tax_mode 'igst', the default here).
+        page = client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
+        assert "WITH PAYMENT OF IGST" in page
+        assert "LUT123" not in page
+
+    def test_the_lut_number_prints_in_the_packing_list_heading_under_lut(self, admin_ctx):
+        """...and DOES belong there once the invoice is actually raised under
+        LUT (tax_mode 'lut') - the counterpart to the IGST case above."""
+        client, container, admin, company_id = admin_ctx
+        save_company(container, admin)  # seeds the company's LUT ("LUT123")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={"tax_mode": "lut"})
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+        page = client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
+        assert "LUT123" in page
 
     def test_saving_an_export_invoice_generates_its_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -1007,13 +1039,16 @@ class TestDeliveryTermChargeRows:
                     "sea_freight": "100", "insurance": "50", "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Sea Freight" not in sheet and "Insurance" not in sheet and "Certification" not in sheet
+        assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        # The certification is never dropped - it's a seller-side cost that
+        # stays payable under every term, like Other Charges.
+        assert "Certification" in sheet
         # Under FOB there's no CIF/CFR figure to build at all, so that row is
         # left off entirely too (not just relabelled) - see is_fob.
         assert "CIF Value" not in sheet and "CFR Value" not in sheet
         assert "Invoice Value" in sheet
         assert "FOB Value" in sheet and "Other Charges" in sheet
-        assert 'rowspan="4"' in sheet            # the shortened money ladder - CIF/CFR, insurance, sea freight and certification dropped
+        assert 'rowspan="5"' in sheet            # the shortened money ladder - CIF/CFR, insurance and sea freight dropped
 
     # ---- CFR: the insurance row alone comes out ------------------------------
     def test_quotation_sheet_drops_only_the_insurance_row(self, admin_ctx):
@@ -2023,9 +2058,10 @@ class TestCommercialInvoiceRoutes:
         assert "20-02-2026" in body
 
     def test_money_is_the_invoices_own_currency_with_indian_grouping(self, admin_ctx):
-        # 144 SQM @ 5.92 = 852.48 CIF, less a 100.00 discount and a 50.00
-        # insurance -> FOB 702.48. Grouping only shows past 3 digits, so this
-        # also checks the ladder itself reconciles.
+        # 144 SQM @ 5.92 = 852.48 FOB (the goods column), plus a 50.00
+        # insurance -> 902.48 CIF, less a 100.00 discount -> 802.48 Invoice
+        # Value. Grouping only shows past 3 digits, so this also checks the
+        # ladder itself reconciles.
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(
             client, container, admin, company_id,
@@ -2033,14 +2069,14 @@ class TestCommercialInvoiceRoutes:
                    "nature_of_contract": "CIF"})
         body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
         assert "CIF Invoice Value" in body
-        assert "852.48" in body
+        assert "902.48" in body                    # CIF = goods total + charges
         assert "100.00" in body and "50.00" in body
-        assert "702.48" in body                    # FOB = CIF - discount - charges
+        assert "852.48" in body                    # FOB = the goods total itself
         assert "FOB Value" in body
         # Invoice Value sits between Discount and the charges, same as the
-        # export invoice's own sheet: CIF (852.48) - discount (100) = 752.48.
+        # export invoice's own sheet: CIF (902.48) - discount (100) = 802.48.
         assert ">Invoice Value<" in body
-        assert "752.48" in body
+        assert "802.48" in body
 
     def test_the_amount_in_words_is_the_invoice_value(self, admin_ctx):
         # 852.48 CIF less a 100.00 discount -> 752.48 Invoice Value; the words
@@ -2184,8 +2220,8 @@ class TestCustomerInvoiceRoutes:
     _create_export_invoice = TestExportPackingListRoutes._create_export_invoice
 
     def _priced(self, client, container, admin, company_id):
-        """144 SQM @ 5.92 = 852.48 CIF, less a 100.00 sea freight, 50.00
-        insurance and 20.00 discount -> FOB 682.48."""
+        """144 SQM @ 5.92 = 852.48 FOB, plus a 100.00 sea freight and 50.00
+        insurance -> 1002.48 CIF, less a 20.00 discount -> 982.48."""
         return self._create_export_invoice(
             client, container, admin, company_id,
             extra={"nature_of_contract": "CIF", "sea_freight": "100",
@@ -2198,49 +2234,54 @@ class TestCustomerInvoiceRoutes:
         assert resp.status_code == 200
         assert b"1000000042" in resp.data
 
-    def test_rate_falls_back_to_price_usd_when_never_uplifted(self, admin_ctx):
-        # fob_price_usd is None here (fob_pricing was never ticked), so Rate
-        # falls back to price_usd - still the typed FOB price in that case,
-        # nothing having adjusted it.
+    def test_rate_is_the_cif_rate_under_cif_terms(self, admin_ctx):
+        # 150 of charges over 144 SQM = a 1.04/unit share, so the buyer is
+        # quoted 6.96 all-in rather than the 5.92 that was typed.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
+        body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
+        assert "6.96" in body                        # the CIF rate
+        assert "1,002.48" in body                    # 6.96 x 144, the line total
+        assert "852.48" in body                      # ...and FOB Value still opens the ladder
+
+    def test_both_copies_quote_the_same_cif_rate(self, admin_ctx):
+        # 144 SQM typed at 5.92 with a 144.00 sea freight - a clean 1.00/unit
+        # share, so both the customer copy and the BRC copy quote the buyer the
+        # identical all-in 6.92. The two only differ in how the ladder below is
+        # laid out, never in the rate.
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"nature_of_contract": "CIF", "sea_freight": "144"})
+        body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
+        brc_body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
+        assert "6.92" in body and "6.92" in brc_body   # the CIF rate, both copies
+        assert "996.48" in body and "996.48" in brc_body  # 6.92 x 144 = 852.48 + 144 freight
+        assert "852.48" in body                       # the FOB Value row on the customer copy
+        assert "FOB Value" in body
+
+    def test_rate_is_the_typed_price_under_fob_terms(self, admin_ctx):
+        # No CIF figure to build under FOB, so nothing is folded into the rate
+        # and the sheet prints exactly what was typed.
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"nature_of_contract": "FOB MUNDRA", "sea_freight": "144"})
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "5.92" in body
         assert "852.48" in body                      # 5.92 x 144, the line total
 
-    def test_rate_is_the_fob_price_when_cif_pricing_was_used(self, admin_ctx):
-        # 144 SQM typed at 5.92, sea freight 144 spread over 144 SQM = a
-        # clean 1.00/unit uplift -> stored price_usd becomes 6.92 (the CIF
-        # price), but Rate here must print the ORIGINAL typed 5.92
-        # (fob_price_usd), not the uplifted 6.92 - unlike the BRC copy, which
-        # prints price_usd (6.92) for the very same invoice.
-        client, container, admin, company_id = admin_ctx
-        invoice = self._create_export_invoice(
-            client, container, admin, company_id,
-            extra={"nature_of_contract": "CIF", "sea_freight": "144", "fob_pricing": "1"})
-        body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
-        assert "5.92" in body                        # the typed FOB rate
-        assert "852.48" in body                       # 5.92 x 144, the FOB-rate line total
-        assert "6.92" not in body                     # not the uplifted CIF rate
-        assert "FOB Value" in body
-        # The goods column (852.48) now foots to the FOB Value row, not CIF.
-        brc_body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
-        assert "6.92" in brc_body                     # the BRC copy still prints the CIF rate
-
     def test_the_ladder_runs_upwards_from_fob_to_cif(self, admin_ctx):
         # Matches the reference printout (EXP/001/26-27): FOB Value opens the
-        # ladder (the goods column's own total - no CIF-pricing push here, so
-        # rate falls back to price_usd and both fob_value_usd/invoice_value_usd
-        # fall back to the base ladder), charges/discount follow, closing on
-        # Total CIF Invoice Value.
+        # ladder (the goods column's own total), charges/discount follow,
+        # closing on Total CIF Invoice Value.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "Total CIF Invoice Value" in body
         assert "FOB Value" in body
-        assert "852.48" in body                     # goods column total
-        assert "682.48" in body                     # FOB = 852.48 - 20 - 100 - 50
-        assert "832.48" in body                     # Total CIF Invoice Value = 852.48 - 20 discount
+        assert "852.48" in body                     # FOB Value - the goods on their own
+        assert "982.48" in body                     # 852.48 + 100 + 50 - 20 discount
         assert "Round-off" not in body
         assert "Tax" not in body                    # no tax line on this sheet
         for charge in ("Sea Freight", "Insurance", "Discount", "Other Charges"):
@@ -2249,29 +2290,30 @@ class TestCustomerInvoiceRoutes:
         total_idx = body.index(">Total CIF Invoice Value<")
         assert fob_idx < total_idx                  # FOB Value opens the ladder, not closes it
 
-    def test_the_goods_column_adds_up_to_the_printed_fob_value(self, admin_ctx):
-        """The point of rounding the rate first: a customer multiplying the
-        printed rate by the printed quantity must get the printed total, and
-        the totals must foot."""
+    def test_the_printed_goods_column_foots_to_the_cif_value(self, admin_ctx):
+        """A customer multiplying the printed rate by the printed quantity must
+        get the printed total, and the column must foot - to the CIF value,
+        since the printed rates carry the charges inside them."""
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         got = container.export_invoice_service.get(invoice.id, company_id)
-        lines = got.fob_priced_lines()
-        assert round(sum(line["rate"] * line["item"].quantity_value for line in lines), 2) \
-            == got.fob_priced_total
-        assert round(got.fob_priced_total + got.charges_total + got.discount_amount, 2) \
-            == got.fob_priced_cif_total
+        assert round(sum(item.total_usd for item in got.printed_items), 2) \
+            == round(got.cif_value_usd, 2)
+        # The stored lines still hold the typed FOB rate, and the ladder's
+        # floor is still built from them.
+        assert round(sum((item.price_usd or 0) * (item.quantity_value or 0)
+                         for item in got.items), 2) == round(got.fob_value_usd, 2)
 
     def test_the_amount_in_words_is_the_post_discount_invoice_value(self, admin_ctx):
-        # invoice_value_usd (832.48 = 852.48 CIF - 20 discount), not
-        # cif_value_usd (852.48, pre-discount) - matches the reference
+        # invoice_value_usd (982.48 = 1002.48 CIF - 20 discount), not
+        # cif_value_usd (1002.48, pre-discount) - matches the reference
         # printout, where "Invoice Value In Word" spells out the same
         # post-discount figure Total CIF Invoice Value prints.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         assert "Invoice Value In Word" in body
-        assert "EIGHT HUNDRED THIRTY-TWO" in body
+        assert "NINE HUNDRED EIGHTY-TWO" in body
         assert "CENTS FORTY-EIGHT" in body
 
     def test_it_is_read_only(self, app, admin_ctx):

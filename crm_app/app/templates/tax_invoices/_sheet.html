@@ -231,7 +231,12 @@
       </tr>
     </thead>
     <tbody>
-      {% for item in invoice.items %}
+      {# printed_items - the CIF/CFR-priced lines (see
+         ExportInvoice.printed_items), so this column foots to the Total
+         Invoice Value row below, which is the CIF value. The IGST row is
+         worked out on the same basis (ExportInvoice.tax_total_inr). Under
+         FOB terms the stored items print through unchanged. #}
+      {% for item in invoice.printed_items %}
       <tr class="ti-goods">
         <td class="ti-c">{{ loop.index }}</td>
         <td>

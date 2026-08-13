@@ -3,21 +3,18 @@
    real reference printout (EXP/001/26-27) field for field.
 
    Same header band and styling as the BRC commercial invoice - both come
-   from templates/commercial/ - but priced differently: Rate is each line's
-   typed FOB price - item.fob_price_usd when "Calculate CIF pricing" folded
-   the charges into price_usd, falling back to price_usd itself when it never
-   did (fob_price_usd is None then, and price_usd IS still the typed FOB
-   price in that case) - the same fallback ExportInvoice.fob_value_usd uses
-   in app/models.py.
+   from templates/commercial/ - and priced the same way: Rate is each line's
+   printed rate, the all-in CIF/CFR figure under those terms and the typed FOB
+   figure under FOB (see ExportInvoice.printed_items in app/models.py).
 
-   The totals block runs UPWARDS from FOB, unlike the BRC copy: FOB Value is
-   the goods column's own total (so it foots directly, no round-off needed),
-   then the charges are added and the discount taken off to close on Total
-   CIF/CFR Invoice Value = invoice.invoice_value_usd (NOT cif_value_usd -
-   that's the pre-discount goods total; the reference's bottom figure is
-   post-discount, i.e. exactly ExportInvoice.invoice_value_usd's own FOB +
-   charges - discount formula). No tax line on this sheet - the reference
-   doesn't carry one.
+   The totals block runs UPWARDS: FOB Value opens it - the goods on their own,
+   which under CIF/CFR terms is BELOW the goods column above (that column
+   carries the charges inside its rates and so foots to the CIF value, same as
+   every other sheet). The charges are then added and the discount taken off to
+   close on Total CIF/CFR Invoice Value = invoice.invoice_value_usd (NOT
+   cif_value_usd - that's the pre-discount figure; the reference's bottom
+   figure is post-discount, i.e. exactly the ladder's own CIF - discount).
+   No tax line on this sheet - the reference doesn't carry one.
 
    Quantity columns map as: Packing = pallets, Qty = boxes,
    Alt. Qty = quantity_value (the unit the line is priced in). #}
@@ -57,8 +54,12 @@
       </tr>
     </thead>
     <tbody>
-      {% for item in invoice.items %}
-      {% set rate = item.fob_price_usd if item.fob_price_usd is not none else (item.price_usd or 0) %}
+      {# printed_items already carries the printed rate and the Total worked
+         out from it, with the last line absorbing what the rounded rate
+         leaves over - so read item.total_usd rather than recomputing
+         rate x qty here, or this column would foot a few cents short of the
+         same figure every other sheet closes on. #}
+      {% for item in invoice.printed_items %}
       <tr class="ci-goods">
         <td class="ci-c">{{ loop.index }}</td>
         <td>
@@ -69,9 +70,9 @@
         <td class="ci-cnum">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
         <td class="ci-cnum">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ci-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="ci-unit-sm">{{ item.unit }}</span></td>
-        <td class="ci-cnum">{{ money(rate) }}</td>
+        <td class="ci-cnum">{{ money(item.price_usd) }}</td>
         <td class="ci-c">{{ item.unit }}</td>
-        <td class="ci-num">{{ money((rate * (item.quantity_value or 0)) | round(2)) }}</td>
+        <td class="ci-num">{{ money(item.total_usd) }}</td>
       </tr>
       {% endfor %}
       {# Blank filler, stretched by _page_filler.html so the sheet fills its A4

@@ -61,7 +61,7 @@
 
 <div class="epl-sheet js-page-sheet">
   <div class="epl-title">PACKING LIST</div>
-  <div class="epl-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }} {% if lut_no %}LUT NO : {{ lut_no }}{% endif %}</div>
+  <div class="epl-subtitle">SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }} {% if invoice.tax_mode == 'lut' and lut_no %}LUT NO : {{ lut_no }}{% endif %}</div>
 
   <!-- ============ HEADER: consigner/consignee | invoice references ============ -->
   <table>
