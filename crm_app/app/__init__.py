@@ -25,7 +25,7 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository, MiscContainerTypeRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
@@ -77,6 +77,7 @@ class ServiceContainer:
         self.misc_nature_of_contract_repo = MiscNatureOfContractRepository(db)
         self.misc_port_of_loading_repo = MiscPortOfLoadingRepository(db)
         self.misc_container_type_repo = MiscContainerTypeRepository(db)
+        self.misc_hsn_code_repo = MiscHsnCodeRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -120,7 +121,7 @@ class ServiceContainer:
         )
         self.misc_list_service = MiscListService(
             self.misc_currency_repo, self.misc_nature_of_contract_repo, self.misc_port_of_loading_repo,
-            self.misc_container_type_repo,
+            self.misc_container_type_repo, self.misc_hsn_code_repo,
         )
         self.booking_detail_service = BookingDetailService(self.booking_detail_repo, self.buyer_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)

@@ -85,14 +85,18 @@
           <div class="repeatable-row repeatable-row-stacked">
             <div class="form-row">
               <div class="field"><label>Bank name</label><input type="text" name="bank_name[]" value="{{ b.bank_name }}"></div>
-              <div class="field"><label>Branch</label><input type="text" name="bank_branch[]" value="{{ b.branch or '' }}"></div>
-            </div>
-            <div class="field"><label>Bank address</label><textarea name="bank_address[]" rows="2">{{ b.bank_address or '' }}</textarea></div>
-            <div class="form-row">
               <div class="field"><label>Account number</label><input type="text" name="bank_account_number[]" value="{{ b.account_number }}"></div>
               <div class="field"><label>IFSC code</label><input type="text" name="bank_ifsc_code[]" value="{{ b.ifsc_code or '' }}"></div>
-              <div class="field"><label>SWIFT code</label><input type="text" name="bank_swift_code[]" value="{{ b.swift_code or '' }}"></div>
             </div>
+            {# Branch / SWIFT code / bank address are no longer asked for, but
+               saving this form rewrites every bank row wholesale - so whatever
+               an older supplier already had is posted straight back rather
+               than being blanked. Present on every row (here, the empty state
+               below and addBankRow) so the posted lists stay index-aligned
+               with bank_name[]. #}
+            <input type="hidden" name="bank_branch[]" value="{{ b.branch or '' }}">
+            <input type="hidden" name="bank_swift_code[]" value="{{ b.swift_code or '' }}">
+            <input type="hidden" name="bank_address[]" value="{{ b.bank_address or '' }}">
             <div class="radio-wrap"><input type="checkbox" name="bank_primary[]" value="{{ loop.index0 }}" id="bp-{{ loop.index0 }}" {{ 'checked' if b.is_primary }}><label for="bp-{{ loop.index0 }}">Primary</label></div>
           </div>
           {% endfor %}
@@ -100,14 +104,12 @@
           <div class="repeatable-row repeatable-row-stacked">
             <div class="form-row">
               <div class="field"><label>Bank name</label><input type="text" name="bank_name[]"></div>
-              <div class="field"><label>Branch</label><input type="text" name="bank_branch[]"></div>
-            </div>
-            <div class="field"><label>Bank address</label><textarea name="bank_address[]" rows="2"></textarea></div>
-            <div class="form-row">
               <div class="field"><label>Account number</label><input type="text" name="bank_account_number[]"></div>
               <div class="field"><label>IFSC code</label><input type="text" name="bank_ifsc_code[]"></div>
-              <div class="field"><label>SWIFT code</label><input type="text" name="bank_swift_code[]"></div>
             </div>
+            <input type="hidden" name="bank_branch[]" value="">
+            <input type="hidden" name="bank_swift_code[]" value="">
+            <input type="hidden" name="bank_address[]" value="">
             <div class="radio-wrap"><input type="checkbox" name="bank_primary[]" value="0" id="bp-0"><label for="bp-0">Primary</label></div>
           </div>
         {% endif %}
@@ -152,14 +154,12 @@
     row.innerHTML = `
       <div class="form-row">
         <div class="field"><label>Bank name</label><input type="text" name="bank_name[]"></div>
-        <div class="field"><label>Branch</label><input type="text" name="bank_branch[]"></div>
-      </div>
-      <div class="field"><label>Bank address</label><textarea name="bank_address[]" rows="2"></textarea></div>
-      <div class="form-row">
         <div class="field"><label>Account number</label><input type="text" name="bank_account_number[]"></div>
         <div class="field"><label>IFSC code</label><input type="text" name="bank_ifsc_code[]"></div>
-        <div class="field"><label>SWIFT code</label><input type="text" name="bank_swift_code[]"></div>
       </div>
+      <input type="hidden" name="bank_branch[]" value="">
+      <input type="hidden" name="bank_swift_code[]" value="">
+      <input type="hidden" name="bank_address[]" value="">
       <div class="radio-wrap"><input type="checkbox" name="bank_primary[]" value="${bankCount}" id="bp-${bankCount}"><label for="bp-${bankCount}">Primary</label></div>`;
     wrap.appendChild(row);
     bankCount++;

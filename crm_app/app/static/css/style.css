@@ -353,6 +353,7 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 }
 .repeatable-row .field { margin-bottom: 0; flex: 1; }
 .radio-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.radio-wrap[hidden] { display: none; }
 .radio-wrap label { margin: 0; }
 .repeatable-row .radio-wrap { display: flex; align-items: center; gap: 5px; padding-bottom: 9px; }
 .repeatable-row .radio-wrap label { margin: 0; font-size: .74rem; font-weight: 500; }

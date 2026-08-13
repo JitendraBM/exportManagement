@@ -76,15 +76,13 @@
   {% if supplier.bank_details %}
   <div class="table-wrap">
     <table class="ledger">
-      <thead><tr><th>Bank</th><th>Branch</th><th>Account number</th><th>IFSC</th><th>SWIFT</th></tr></thead>
+      <thead><tr><th>Bank</th><th>Account number</th><th>IFSC</th></tr></thead>
       <tbody>
         {% for b in supplier.bank_details %}
         <tr>
           <td>{{ b.bank_name }} {% if b.is_primary %}<span class="pill">Primary</span>{% endif %}</td>
-          <td class="text-sm">{{ b.branch or '—' }}</td>
           <td class="text-sm">{{ b.account_number }}</td>
           <td class="text-sm">{{ b.ifsc_code or '—' }}</td>
-          <td class="text-sm">{{ b.swift_code or '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -414,7 +414,7 @@ class TestExportPackingListRoutes:
             "cd_line_seal_no[]": ["UFL331090", "UFL331095"],
             "cd_rfid_seal_no[]": ["WIND02432727", "WIND02531142"],
             "cd_vehicle_no[]": ["", ""],
-            "cd_tare_weight[]": ["2250.5", "2260"],
+            "cd_tare_weight_kg[]": ["2250.5", "2260"],
         }
         data.update(extra or {})
         if split:
@@ -560,16 +560,18 @@ class TestExportPackingListRoutes:
         sheet. Pinned on both sheets, which print the identical cell."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
-        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
-            "epcg_number": "2431000888", "epcg_date": "2019-09-17",
-        })
+        # epcg_number/epcg_date are no longer posted directly - they're
+        # derived from the chain of linked purchase invoices (see
+        # ExportInvoiceService._build_header), so a bare invoice with none
+        # linked prints without an EPCG line at all.
+        invoice = self._create_export_invoice(client, container, admin, company_id)
         packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
 
         for path in (f"/export-invoices/{invoice.id}", f"/export-packing-lists/{packing_list.id}"):
             page = client.get(path).get_data(as_text=True)
             lines = self._export_under_cell(page)
             assert not any("LUT" in line for line in lines), path
-            assert len(lines) == 3      # scheme / heading / EPCG, nothing else
+            assert len(lines) == 2      # scheme / heading, nothing else
         # ...and the packing list still carries the company's LUT up in its
         # SUPPLY MEANT FOR EXPORT heading, which is where it belongs.
         assert "LUT123" in client.get(
@@ -596,9 +598,12 @@ class TestExportPackingListRoutes:
         assert b"ALIVE GRANITO LLP, MORBI" in resp.data
 
     def test_tare_weight_prints_in_the_annexures_11b_table(self, admin_ctx):
+        # The 11B container table moved onto its own dedicated tab/print
+        # route (see app/routes/export_annexures.py) - not the export
+        # invoice's own sheet.
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
-        resp = client.get(f"/export-invoices/{invoice.id}")
+        resp = client.get(f"/export-annexures/{invoice.id}")
         assert resp.status_code == 200
         assert b"2,250.50" in resp.data
 
@@ -609,9 +614,10 @@ class TestExportPackingListRoutes:
         #   container 1: net 60*26.5=1590.00, gross 60*27.0=1620.00
         #   container 2: net 40*26.5=1060.00, gross 40*27.0=1080.00
         #   TOTAL: net 2650.00, gross 2700.00
+        # Also on the annexure tab, same as the tare weight above.
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
-        resp = client.get(f"/export-invoices/{invoice.id}")
+        resp = client.get(f"/export-annexures/{invoice.id}")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
         assert "1,620.00" in body  # container 1 gross
@@ -1001,13 +1007,13 @@ class TestDeliveryTermChargeRows:
                     "sea_freight": "100", "insurance": "50", "certification": "25"},
             [{"product_name": "P", "quantity_value": "10", "unit": "SQM", "price_usd": "2"}])
         sheet = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Sea Freight" not in sheet and "Insurance" not in sheet
+        assert "Sea Freight" not in sheet and "Insurance" not in sheet and "Certification" not in sheet
         # Under FOB there's no CIF/CFR figure to build at all, so that row is
         # left off entirely too (not just relabelled) - see is_fob.
         assert "CIF Value" not in sheet and "CFR Value" not in sheet
         assert "Invoice Value" in sheet
         assert "FOB Value" in sheet and "Other Charges" in sheet
-        assert 'rowspan="5"' in sheet            # the shortened money ladder - CIF/CFR, insurance and sea freight dropped
+        assert 'rowspan="4"' in sheet            # the shortened money ladder - CIF/CFR, insurance, sea freight and certification dropped
 
     # ---- CFR: the insurance row alone comes out ------------------------------
     def test_quotation_sheet_drops_only_the_insurance_row(self, admin_ctx):
@@ -1085,7 +1091,7 @@ class TestDeliveryTermChargeRows:
         assert "120.99" not in sheet
         assert "ROUND-OFF" not in sheet
         assert 'rowspan="8"' in sheet
-        _table_is_rectangular(sheet, "CIF VALUE")
+        _table_is_rectangular(sheet, "CIF Invoice Value")
 
     def test_a_proforma_sheet_that_divides_evenly_needs_no_absorbing(self, admin_ctx):
         # 90 over 3 SQM is exactly 30.00 a unit, so the printed Total is the
@@ -1574,7 +1580,7 @@ class TestVgmAttachmentRoutes:
             "item_quantity_boxes[]": "100", "item_quantity_value[]": "144",
             "item_unit[]": "SQM", "item_price_usd[]": "5.92",
             "cd_container_no[]": ["BLJU2253726", "SEGU3227471"],
-            "cd_tare_weight[]": ["2250.5", "2260"]}, follow_redirects=True)
+            "cd_tare_weight_kg[]": ["2250.5", "2260"]}, follow_redirects=True)
         details = container.export_invoice_service.get(invoice.id, company_id).container_details
         assert [d["weighbridge_name"] for d in details] == ["Morbi", "Rajkot"]
         assert [d["weighing_slip_no"] for d in details] == ["123", "124"]
@@ -1594,7 +1600,7 @@ class TestVgmAttachmentRoutes:
     def test_an_untyped_tare_leaves_the_vgm_total_blank(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(
-            client, container, admin, company_id, extra={"cd_tare_weight[]": ["", ""]})
+            client, container, admin, company_id, extra={"cd_tare_weight_kg[]": ["", ""]})
         body = client.get(f"/vgm-attachments/{invoice.id}").get_data(as_text=True)
         # Cargo is still known, but tare + cargo cannot be computed.
         assert "1,620.00" in body
@@ -1631,7 +1637,7 @@ class TestVgmDeclarationRoutes:
                    "cd_line_seal_no[]": [f"LG0054243{i}" for i in range(count)],
                    "cd_rfid_seal_no[]": ["" for _ in range(count)],
                    "cd_max_permitted_weight[]": ["30480" for _ in range(count)],
-                   "cd_tare_weight[]": ["2100" for _ in range(count)],
+                   "cd_tare_weight_kg[]": ["2100" for _ in range(count)],
                    "alloc_container_index[]": [str(i) for i in range(count)],
                    "alloc_invoice_item_index[]": ["0" for _ in range(count)],
                    "alloc_boxes[]": [str(100 // count)] * (count - 1) + [
@@ -1844,7 +1850,7 @@ class TestEsealRoutes:
             "item_quantity_boxes[]": "100", "item_quantity_value[]": "144",
             "item_unit[]": "SQM", "item_price_usd[]": "5.92",
             "cd_container_no[]": ["BLJU2253726", "SEGU3227471"],
-            "cd_tare_weight[]": ["2250.5", "2260"]}, follow_redirects=True)
+            "cd_tare_weight_kg[]": ["2250.5", "2260"]}, follow_redirects=True)
         details = container.export_invoice_service.get(invoice.id, company_id).container_details
         assert [d["sealing_time"] for d in details] == ["12:20", "13:45"]
         assert [d["sealing_date"] for d in details] == ["2026-04-22", "2026-04-23"]

@@ -257,4 +257,75 @@
   </form>
 </div>
 
+<div class="card">
+  <div class="card-header">
+    <h3>HSN Code</h3>
+    <span class="text-sm text-soft">The HSN codes you trade in, each with the GST slab that applies to it</span>
+  </div>
+
+  {% if hsn_codes %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>HSN Code</th>
+          <th>Related to Products</th>
+          <th>GST Slab</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in hsn_codes %}
+        {% if edit_list == 'hsn' and edit_id == entry.id %}
+        <tr>
+          <form method="POST" action="{{ url_for('misc.edit_hsn_code', entry_id=entry.id) }}" id="edit-hsn-{{ entry.id }}"></form>
+          <td><input type="text" name="name" value="{{ entry.name }}" form="edit-hsn-{{ entry.id }}" required></td>
+          <td><input type="text" name="related_products" value="{{ entry.related_products | default('', true) }}" form="edit-hsn-{{ entry.id }}"></td>
+          <td><input type="text" name="gst_slab" value="{{ entry.gst_slab }}" form="edit-hsn-{{ entry.id }}" required></td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <button type="submit" class="btn btn-primary btn-sm" form="edit-hsn-{{ entry.id }}">Save</button>
+            <a href="{{ url_for('misc.index') }}" class="btn btn-ghost btn-sm">Cancel</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td class="mono">{{ entry.name }}</td>
+          <td>{{ entry.related_products or '—' }}</td>
+          <td class="mono">{{ entry.gst_slab }}</td>
+          <td class="text-sm" style="white-space:nowrap;">
+            <a href="{{ url_for('misc.index', list='hsn', edit=entry.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('misc.delete_hsn_code', entry_id=entry.id) }}" style="display:inline;"
+                  onsubmit="return confirmDeleteWithPassword(this, 'Delete {{ entry.name }} from the HSN code list? Documents already saved keep the HSN code they were printed with.');">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">Nothing added yet — add the HSN codes you trade in, with each code's GST slab.</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('misc.add_hsn_code') }}" style="margin-top:18px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="hsn_name">HSN Code<span class="required-mark">*</span></label>
+        <input type="text" id="hsn_name" name="name" placeholder="e.g. 69072100" required>
+      </div>
+      <div class="field">
+        <label for="hsn_related_products">Related to Products</label>
+        <input type="text" id="hsn_related_products" name="related_products" placeholder="e.g. GLAZED VITRIFIED TILES">
+      </div>
+      <div class="field">
+        <label for="hsn_gst_slab">GST Slab<span class="required-mark">*</span></label>
+        <input type="text" id="hsn_gst_slab" name="gst_slab" placeholder="e.g. 18" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add HSN code</button>
+  </form>
+</div>
+
 {% endblock %}

@@ -14,71 +14,6 @@
 <form method="POST" id="pinv-form" enctype="multipart/form-data">
   {% set data = form_data if form_data else purchase_invoice %}
   <div class="card">
-    <div class="card-header"><h3>Start from</h3></div>
-    <div class="form-row">
-      <div class="field">
-        <label for="po_select">Prefill from an existing purchase order <span class="text-soft text-sm">(optional)</span></label>
-        <select id="po_select">
-          <option value="">— Select a purchase order —</option>
-          {% for po in purchase_orders %}
-            <option value="{{ po.id }}" {{ 'selected' if data and data.purchase_order_id | string == po.id | string }}>{{ po.po_number }} — {{ po.seller_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label for="lead_select">Link to a lead <span class="text-soft text-sm">(optional)</span></label>
-        <select id="lead_select">
-          <option value="">— Select a lead —</option>
-          {% for l in leads %}
-            <option value="{{ l.id }}" {{ 'selected' if data and data.lead_id | string == l.id | string }}>{{ l.company_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-    <p class="hint">Choosing a purchase order reloads this page and copies its seller details and product lines in as a starting point - the purchase invoice is then its own independent record.</p>
-    <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
-    <input type="hidden" name="purchase_order_id" id="purchase_order_id" value="{{ data.purchase_order_id | default('', true) }}">
-  </div>
-
-  {% set chosen_currency = data.currency_code | default('INR', true) %}
-  <div class="card">
-    <div class="card-header"><h3>Invoice details</h3></div>
-    <div class="form-row">
-      {{ currency_select(chosen_currency, currency_options, hint="Shown on the invoice record; amounts are typed in this currency.") }}
-      <div class="field"><label for="invoice_number">Invoice number<span class="required-mark">*</span></label><input type="text" id="invoice_number" name="invoice_number" required placeholder="Supplier's own invoice no." value="{{ data.invoice_number | default('', true) }}"></div>
-      <div class="field"><label for="invoice_date">Invoice date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
-      <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label for="transporter_name">Transporter name</label><input type="text" id="transporter_name" name="transporter_name" value="{{ data.transporter_name | default('', true) }}"></div>
-      <div class="field"><label for="epcg_number">EPCG number <span class="text-soft text-sm">(optional)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
-      <div class="field"><label for="epcg_date">EPCG date <span class="text-soft text-sm">(optional)</span></label><input type="date" id="epcg_date" name="epcg_date" value="{{ data.epcg_date | default('', true) }}"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Vehicle numbers</h3></div>
-    <div id="vehicle-rows">
-      {% set vehicles = form_vehicle_numbers if form_vehicle_numbers is not none else (purchase_invoice.vehicle_numbers if purchase_invoice else []) %}
-      {% if vehicles %}
-        {% for v in vehicles %}
-        <div class="repeatable-row">
-          <div class="field"><label>Vehicle number</label><input type="text" name="vehicle_number[]" value="{{ v }}"></div>
-          <button type="button" class="btn-link-danger js-remove-vehicle-row">Remove</button>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="repeatable-row">
-          <div class="field"><label>Vehicle number</label><input type="text" name="vehicle_number[]"></div>
-          <button type="button" class="btn-link-danger js-remove-vehicle-row">Remove</button>
-        </div>
-      {% endif %}
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="add-vehicle-row-btn">+ Add vehicle</button>
-    <p class="hint">A supplier's shipment can arrive split across several trucks - add one row per vehicle.</p>
-  </div>
-
-  <div class="card">
     <div class="card-header">
       <h3>Seller</h3>
       {% if current_user.is_admin %}
@@ -128,6 +63,67 @@
   </div>
 
   <div class="card">
+    <div class="card-header"><h3>Start from</h3></div>
+    <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
+
+    {% set selected_po_ids_str = selected_purchase_order_ids | map('string') | list %}
+    <div class="field">
+      <label>Prefill from existing purchase order(s) <span class="text-soft text-sm">(optional - pick the supplier above first)</span></label>
+      <div id="po-picker">
+        {% for po in purchase_orders %}
+        <label class="radio-wrap js-po-option" data-supplier-id="{{ po.seller_supplier_id or '' }}" hidden style="margin-bottom:6px;">
+          <input type="checkbox" name="purchase_order_ids[]" value="{{ po.id }}"
+                 {{ 'checked' if (po.id | string) in selected_po_ids_str }}>
+          <span>{{ po.po_number }} — {{ po.po_date }} · {{ po.currency_prefix }} {{ '{:,.2f}'.format(po.order_value_inr) }}</span>
+        </label>
+        {% endfor %}
+        <div class="empty-state" id="po-picker-empty-nosupplier">Pick a supplier above to see its purchase orders still needing an invoice.</div>
+        <div class="empty-state" id="po-picker-empty-none" hidden>No purchase order from this supplier still has anything outstanding to invoice.</div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="load-from-po-btn">Load goods from selected purchase order(s)</button>
+    </div>
+    <p class="hint">Only purchase orders still missing an invoice for some of their goods are listed. Loading reloads this page and copies each selected order's still-outstanding product lines in as a starting point, tagged with the order they came from - the purchase invoice is then its own independent record you can still edit freely.</p>
+  </div>
+
+  {% set chosen_currency = data.currency_code | default('INR', true) %}
+  <div class="card">
+    <div class="card-header"><h3>Invoice details</h3></div>
+    <div class="form-row">
+      {{ currency_select(chosen_currency, currency_options, hint="Shown on the invoice record; amounts are typed in this currency.") }}
+      <div class="field"><label for="invoice_number">Invoice number<span class="required-mark">*</span></label><input type="text" id="invoice_number" name="invoice_number" required placeholder="Supplier's own invoice no." value="{{ data.invoice_number | default('', true) }}"></div>
+      <div class="field"><label for="invoice_date">Invoice date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
+      <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="transporter_name">Transporter name</label><input type="text" id="transporter_name" name="transporter_name" value="{{ data.transporter_name | default('', true) }}"></div>
+      <div class="field"><label for="epcg_number">EPCG number <span class="text-soft text-sm">(optional)</span></label><input type="text" id="epcg_number" name="epcg_number" value="{{ data.epcg_number | default('', true) }}"></div>
+      <div class="field"><label for="epcg_date">EPCG date <span class="text-soft text-sm">(optional)</span></label><input type="date" id="epcg_date" name="epcg_date" value="{{ data.epcg_date | default('', true) }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Vehicle numbers</h3></div>
+    <div id="vehicle-rows">
+      {% set vehicles = form_vehicle_numbers if form_vehicle_numbers is not none else (purchase_invoice.vehicle_numbers if purchase_invoice else []) %}
+      {% if vehicles %}
+        {% for v in vehicles %}
+        <div class="repeatable-row">
+          <div class="field"><label>Vehicle number</label><input type="text" name="vehicle_number[]" value="{{ v }}"></div>
+          <button type="button" class="btn-link-danger js-remove-vehicle-row">Remove</button>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="repeatable-row">
+          <div class="field"><label>Vehicle number</label><input type="text" name="vehicle_number[]"></div>
+          <button type="button" class="btn-link-danger js-remove-vehicle-row">Remove</button>
+        </div>
+      {% endif %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="add-vehicle-row-btn">+ Add vehicle</button>
+    <p class="hint">A supplier's shipment can arrive split across several trucks - add one row per vehicle.</p>
+  </div>
+
+  <div class="card">
     <div class="card-header"><h3>Products</h3></div>
     <div class="table-wrap">
       <table class="ledger" id="items-table">
@@ -135,6 +131,7 @@
           <tr>
             <th>Sr</th>
             <th style="min-width:220px;">Product</th>
+            <th>Source PO</th>
             <th>HSN code</th>
             <th>Boxes</th>
             <th>Qty (SQM/LM)</th>
@@ -148,11 +145,15 @@
         <tbody id="items-body">
           {% set rows = form_items if form_items is not none else (purchase_invoice.items if purchase_invoice else []) %}
           {% for row in rows %}
-          <tr class="item-row">
+          <tr class="item-row" data-alt-qty="{{ alt_qty_map.get(row.product_id | int, '') if row.product_id else '' }}">
             <td class="js-sr">{{ loop.index }}</td>
             <td>
               <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
               <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
+            </td>
+            <td class="text-sm text-soft">
+              <input type="hidden" name="item_purchase_order_id[]" class="js-source-po-id" value="{{ row.purchase_order_id or '' }}">
+              {{ row.source_po_number or '—' }}
             </td>
             <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}"></td>
             <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
@@ -249,6 +250,10 @@
         <input type="hidden" name="item_product_id[]" class="js-product-id">
         <textarea name="item_product_name[]" class="js-product-name" rows="2" required></textarea>
       </td>
+      <td class="text-sm text-soft">
+        <input type="hidden" name="item_purchase_order_id[]" class="js-source-po-id">
+        —
+      </td>
       <td><input type="text" name="item_hsn_code[]" class="js-hsn"></td>
       <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes"></td>
       <td><input type="number" step="0.01" name="item_quantity_value[]" class="js-qty" required></td>
@@ -283,6 +288,17 @@
     return (perBox ? boxes : qty) * price;
   }
 
+  // Qty auto-fills from Boxes x the row's catalog product's Alternate
+  // Quantity whenever both are known (same auto-calc as the PO form the
+  // lines were prefilled from). Rows typed in by hand carry no product, so
+  // no alt qty - their Qty stays whatever was entered.
+  function recalcRowQty(tr) {
+    const altQty = parseFloat(tr.dataset.altQty);
+    if (!altQty) return;
+    const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
+    if (boxes) tr.querySelector('.js-qty').value = (boxes * altQty).toFixed(2);
+  }
+
   function num(id) { return parseFloat(document.getElementById(id).value) || 0; }
 
   function recalcTotals() {
@@ -313,20 +329,54 @@
     }
   });
 
-  itemsBody.addEventListener('input', recalcTotals);
+  itemsBody.addEventListener('input', (e) => {
+    // Boxes drives Qty, and both drive the row total (which of the two the
+    // total uses depends on the row's Per column).
+    if (e.target.classList.contains('js-boxes')) recalcRowQty(e.target.closest('tr'));
+    recalcTotals();
+  });
+  itemsBody.addEventListener('change', recalcTotals);
   ['discount_amount', 'insurance_other', 'freight', 'igst_amount', 'cgst_amount', 'sgst_amount', 'round_off']
     .forEach((id) => document.getElementById(id).addEventListener('input', recalcTotals));
 
-  // ---- purchase order dropdown prefill (reloads the page with ?purchase_order_id=) --------------------------------------------------
-  document.getElementById('po_select').addEventListener('change', (e) => {
-    const id = e.target.value;
-    if (!id) return;
-    window.location = '{{ url_for("purchase_invoices.new_purchase_invoice") }}?purchase_order_id=' + encodeURIComponent(id);
-  });
-
-  // ---- lead dropdown --------------------------------------------------
-  document.getElementById('lead_select').addEventListener('change', (e) => {
-    document.getElementById('lead_id').value = e.target.value || '';
+  // ---- purchase order picker: filtered to the chosen supplier, loaded via ?purchase_order_ids= --------------------------------------------------
+  const poOptions = Array.from(document.querySelectorAll('.js-po-option'));
+  const poPickerEmptyNoSupplier = document.getElementById('po-picker-empty-nosupplier');
+  const poPickerEmptyNone = document.getElementById('po-picker-empty-none');
+  // `autoCheckAll` ticks every matching purchase order the moment a
+  // supplier is actively picked (dropdown change, or the "add new
+  // supplier" save) - the picker auto-fills with that supplier's whole
+  // outstanding list instead of making the user tick each one by hand.
+  // It's left off on page load so a pre-existing invoice's own checked/
+  // unchecked state (from selected_purchase_order_ids) isn't clobbered.
+  function filterPoPicker(autoCheckAll) {
+    const supplierId = document.getElementById('seller_supplier_id').value;
+    if (!supplierId) {
+      poOptions.forEach((el) => { el.hidden = true; });
+      poPickerEmptyNoSupplier.hidden = false;
+      poPickerEmptyNone.hidden = true;
+      return;
+    }
+    poPickerEmptyNoSupplier.hidden = true;
+    let anyVisible = false;
+    poOptions.forEach((el) => {
+      const match = el.dataset.supplierId === supplierId;
+      el.hidden = !match;
+      if (match) {
+        anyVisible = true;
+        if (autoCheckAll) el.querySelector('input[type=checkbox]').checked = true;
+      }
+    });
+    poPickerEmptyNone.hidden = anyVisible;
+  }
+  document.getElementById('load-from-po-btn').addEventListener('click', () => {
+    const ids = poOptions
+      .filter((el) => !el.hidden)
+      .map((el) => el.querySelector('input[type=checkbox]'))
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.value);
+    if (!ids.length) { alert('Check at least one purchase order first.'); return; }
+    window.location = '{{ url_for("purchase_invoices.new_purchase_invoice") }}?purchase_order_ids=' + encodeURIComponent(ids.join(','));
   });
 
   // ---- seller dropdown prefill --------------------------------------------------
@@ -337,12 +387,14 @@
     document.getElementById('seller_address').value = address || '';
     document.getElementById('seller_pan').value = pan || '';
     document.getElementById('seller_gstin').value = gstin || '';
+    filterPoPicker(true);
   }
   sellerSelect.addEventListener('change', (e) => {
     const opt = e.target.selectedOptions[0];
     if (!opt.value) { applySeller('', '', '', '', ''); return; }
     applySeller(opt.value, opt.dataset.name, opt.dataset.address, opt.dataset.pan, opt.dataset.gstin);
   });
+  filterPoPicker(false);
 
   // ---- add new supplier (admin only) --------------------------------------------------
   const sellerAddPanel = document.getElementById('seller-add-new-panel');

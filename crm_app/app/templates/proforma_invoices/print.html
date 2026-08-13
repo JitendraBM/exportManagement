@@ -51,6 +51,19 @@
         </div>
       </details>
       <a href="{{ url_for('purchase_orders.new_purchase_order', proforma_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">＋ New purchase order</a>
+      {% if purchase_invoices %}
+      <details class="toolbar-menu">
+        <summary class="btn btn-ghost btn-sm">📥 Purchase invoices ({{ purchase_invoices | length }}) ▾</summary>
+        <div class="toolbar-menu-panel">
+          {% for pinv in purchase_invoices %}
+          <a href="{{ url_for('purchase_invoices.view_purchase_invoice', purchase_invoice_id=pinv.id) }}" class="toolbar-menu-item">
+            <span class="mono">{{ pinv.purchase_invoice_number }}</span>
+            <span class="meta">{{ pinv.seller_name }} · {{ pinv.invoice_date }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
       {% if export_invoices %}
       <details class="toolbar-menu">
         <summary class="btn btn-ghost btn-sm">🌐 Export invoices ({{ export_invoices | length }}) ▾</summary>

@@ -61,13 +61,8 @@
         <div class="repeatable-row repeatable-row-stacked">
           <div class="form-row">
             <div class="field"><label>Bank name</label><input type="text" name="bank_name[]"></div>
-            <div class="field"><label>Branch</label><input type="text" name="bank_branch[]"></div>
-          </div>
-          <div class="field"><label>Bank address</label><textarea name="bank_address[]" rows="2"></textarea></div>
-          <div class="form-row">
             <div class="field"><label>Account number</label><input type="text" name="bank_account_number[]"></div>
             <div class="field"><label>IFSC code</label><input type="text" name="bank_ifsc_code[]"></div>
-            <div class="field"><label>SWIFT code</label><input type="text" name="bank_swift_code[]"></div>
           </div>
           <div class="radio-wrap"><input type="checkbox" name="bank_primary[]" value="0" id="bp-0"><label for="bp-0">Primary</label></div>
         </div>
@@ -112,13 +107,8 @@
     row.innerHTML = `
       <div class="form-row">
         <div class="field"><label>Bank name</label><input type="text" name="bank_name[]"></div>
-        <div class="field"><label>Branch</label><input type="text" name="bank_branch[]"></div>
-      </div>
-      <div class="field"><label>Bank address</label><textarea name="bank_address[]" rows="2"></textarea></div>
-      <div class="form-row">
         <div class="field"><label>Account number</label><input type="text" name="bank_account_number[]"></div>
         <div class="field"><label>IFSC code</label><input type="text" name="bank_ifsc_code[]"></div>
-        <div class="field"><label>SWIFT code</label><input type="text" name="bank_swift_code[]"></div>
       </div>
       <div class="radio-wrap"><input type="checkbox" name="bank_primary[]" value="${bankCount}" id="bp-${bankCount}"><label for="bp-${bankCount}">Primary</label></div>`;
     wrap.appendChild(row);

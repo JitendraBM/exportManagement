@@ -29,7 +29,7 @@ from werkzeug.utils import secure_filename
 
 from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 from app.models import (
-    User, Lead, Party, Supplier, Transporter, Permit, BookingDetail, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, DEFAULT_CURRENCIES, DEFAULT_CONTAINER_TYPES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
+    User, Lead, Party, Supplier, Transporter, Permit, BookingDetail, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, DEFAULT_CURRENCIES, DEFAULT_CONTAINER_TYPES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
@@ -48,10 +48,10 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository, MiscContainerTypeRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository,
 )
 from app.database import Database, SCHEMA_VERSION
-from app.utils import drops_insurance, drops_sea_freight, is_fob_terms
+from app.utils import drops_certification, drops_insurance, drops_sea_freight, is_fob_terms
 
 
 # ============================================================
@@ -185,11 +185,13 @@ class MiscListService:
     def __init__(self, currency_repo: MiscCurrencyRepository,
                  nature_of_contract_repo: Optional[MiscNatureOfContractRepository] = None,
                  port_of_loading_repo: Optional[MiscPortOfLoadingRepository] = None,
-                 container_type_repo: Optional[MiscContainerTypeRepository] = None):
+                 container_type_repo: Optional[MiscContainerTypeRepository] = None,
+                 hsn_code_repo: Optional[MiscHsnCodeRepository] = None):
         self.currency_repo = currency_repo
         self.nature_of_contract_repo = nature_of_contract_repo
         self.port_of_loading_repo = port_of_loading_repo
         self.container_type_repo = container_type_repo
+        self.hsn_code_repo = hsn_code_repo
 
     # ---- reads --------------------------------------------------
     def list_currencies(self, company_id: int) -> List[MiscCurrency]:
@@ -394,6 +396,56 @@ class MiscListService:
     def delete_container_type(self, current_user: User, entry_id: int) -> MiscContainerType:
         entry = self.get_container_type(entry_id, current_user.company_id)
         self.container_type_repo.delete(entry_id)
+        return entry
+
+    # ---- HSN code --------------------------------------------------
+    def list_hsn_codes(self, company_id: int) -> List[MiscHsnCode]:
+        return self.hsn_code_repo.list_all(company_id)
+
+    def get_hsn_code(self, entry_id: int, company_id: int) -> MiscHsnCode:
+        entry = self.hsn_code_repo.get_by_id(entry_id)
+        if not entry or entry.company_id != company_id:
+            raise NotFoundError(f"HSN code #{entry_id} not found.")
+        return entry
+
+    def find_hsn_code(self, company_id: int, name: str) -> Optional[MiscHsnCode]:
+        """The saved row matching a submitted HSN code - used to pick up that
+        code's GST slab without asking for it a second time."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        return self.hsn_code_repo.find_by_name(company_id, name)
+
+    def _clean_hsn_code(self, current_user: User, fields: dict) -> MiscHsnCode:
+        name = (fields.get("name") or "").strip()
+        gst_slab = (fields.get("gst_slab") or "").strip()
+        # Optional - the list is usable with the note left blank.
+        related_products = (fields.get("related_products") or "").strip() or None
+        if not name:
+            raise ValidationError("HSN Code is compulsory.")
+        if not gst_slab:
+            raise ValidationError("GST Slab is compulsory.")
+        return MiscHsnCode(id=None, company_id=current_user.company_id, name=name,
+                           gst_slab=gst_slab, related_products=related_products)
+
+    def create_hsn_code(self, current_user: User, fields: dict) -> MiscHsnCode:
+        entry = self._clean_hsn_code(current_user, fields)
+        if self.hsn_code_repo.find_by_name(current_user.company_id, entry.name):
+            raise ValidationError(f"'{entry.name}' is already on the HSN code list.")
+        return self.hsn_code_repo.create(entry)
+
+    def update_hsn_code(self, current_user: User, entry_id: int, fields: dict) -> MiscHsnCode:
+        self.get_hsn_code(entry_id, current_user.company_id)
+        entry = self._clean_hsn_code(current_user, fields)
+        clash = self.hsn_code_repo.find_by_name(current_user.company_id, entry.name)
+        if clash and clash.id != entry_id:
+            raise ValidationError(f"'{entry.name}' is already on the HSN code list.")
+        self.hsn_code_repo.update(entry_id, entry)
+        return self.get_hsn_code(entry_id, current_user.company_id)
+
+    def delete_hsn_code(self, current_user: User, entry_id: int) -> MiscHsnCode:
+        entry = self.get_hsn_code(entry_id, current_user.company_id)
+        self.hsn_code_repo.delete(entry_id)
         return entry
 
 
@@ -835,10 +887,15 @@ class SupplierService:
                 raise ValidationError("Every contact detail row needs a type.")
         valid_persons = [p for p in contact_persons if p.get("name", "").strip()]
 
-        bank_fields = ["bank_name", "account_number", "ifsc_code", "swift_code", "branch", "bank_address"]
+        # Branch, SWIFT code and bank address are no longer asked for when a
+        # supplier is added, so a row is complete without them. They stay on
+        # the model and in the table - an older supplier still holds whatever
+        # was typed back then - they are simply not compulsory any more.
+        # (CompanyService below keeps demanding all six: Our Company's own
+        # bank block is what gets printed on documents.)
+        bank_fields = ["bank_name", "account_number", "ifsc_code"]
         bank_labels = {
             "bank_name": "bank name", "account_number": "account number", "ifsc_code": "IFSC code",
-            "swift_code": "SWIFT code", "branch": "branch", "bank_address": "bank address",
         }
         for b in bank_details:
             missing = [bank_labels[f] for f in bank_fields if not b.get(f, "").strip()]
@@ -2048,26 +2105,58 @@ class DocumentVersionService:
 # ============================================================
 # FOB-TYPED PRICING (shared by quotation / proforma / export invoice)
 # ============================================================
+def is_fob_pricing(fields: dict) -> bool:
+    """Reads the "Calculate CIF pricing" checkbox off a posted form. An
+    unticked checkbox posts nothing at all, so anything falsy means off."""
+    return str(fields.get("fob_pricing") or "").strip().lower() not in ("", "0", "false", "off")
+
+
 def apply_fob_uplift(document) -> None:
-    """Clears the vestigial per-item `fob_price_usd`.
+    """Turns FOB-typed prices into the CIF prices the document stores.
 
-    There used to be an FOB-typed-price mode on all three buyer-facing
-    documents: a "Prices typed are FOB" checkbox spread the charges over the
-    total ALT QTY and added that per-unit figure onto every line, so the
-    stored price_usd became a CIF price and fob_price_usd remembered what was
-    typed. That mode is gone from the quotation, the proforma invoice and the
-    export invoice alike - the typed price is now taken at face value and the
-    CIF value is a document-level figure (see Quotation.cif_value_usd /
-    ProformaInvoice.cif_value_usd, which add the charges on top of the FOB
-    goods total).
+    Every price this app prints is a CIF price (see CifMoneyLadder) - the ocean
+    leg and handling are already inside the per-unit rate. But a document is
+    often worked out the other way round: the goods have an FOB price, and the
+    freight/insurance/certification/other charges are known only as one lump
+    sum for the whole shipment. With `fob_pricing` ticked, that lump is divided
+    by the total ALT QTY of every line and the resulting per-unit figure is
+    added uniformly onto each line's price - so a heavier line carries
+    proportionally more of the charge, and the buyer sees a single all-in rate
+    per unit.
 
-    `fob_pricing` is therefore hardcoded off in all three builders, and all
-    this does is make sure no line keeps a stale fob_price_usd. Kept as one
-    shared function (rather than three inline loops) so the three document
-    types can't drift apart if the field is ever revived.
+    The discount is deliberately NOT part of the lump: it comes off above the
+    invoice value line, not between FOB and CIF.
+
+    The uplift is kept at full precision (only the line totals are rounded to
+    the cent) so that CIF - charges lands back exactly on the FOB total that
+    was typed - the FOB VALUE row is the figure the user reasoned in, so it is
+    the one that has to stay exact. Any cent the rounded totals can't carry is
+    absorbed silently into the Total column itself rather than tracked as a
+    separate round-off figure. `price_usd` stays the CIF price throughout,
+    which is why nothing downstream - the printed sheets, the money ladder,
+    the prefill from one document to the next - needs a special case;
+    `fob_price_usd` only remembers what was typed so reopening the form shows
+    the numbers back.
+
+    `fob_pricing` is hardcoded off in the quotation and proforma invoice
+    builders (see Quotation.cif_value_usd / ProformaInvoice.cif_value_usd,
+    which build CIF up from the FOB goods total as a document-level figure
+    instead), so this is a no-op there beyond clearing a stale fob_price_usd.
+    The export invoice builder is the one place the checkbox (is_fob_pricing
+    above) still reaches this - written once here rather than duplicated so
+    the three document types can't drift apart.
     """
-    for item in document.items or []:
-        item.fob_price_usd = None
+    items = document.items or []
+    if not document.fob_pricing:
+        for item in items:
+            item.fob_price_usd = None
+        return
+    total_qty = sum(item.quantity_value for item in items)
+    uplift = (document.charges_total / total_qty) if total_qty else 0
+    for item in items:
+        item.fob_price_usd = item.price_usd
+        item.price_usd = item.price_usd + uplift
+        item.total_usd = round(item.quantity_value * item.price_usd, 2)
 
 
 # ============================================================
@@ -3063,8 +3152,72 @@ class PurchaseInvoiceService:
         return [pinv for pinv in self.purchase_invoice_repo.list_for_purchase_order(purchase_order_id)
                 if pinv.company_id == company_id]
 
+    def list_for_proforma(self, purchase_orders: List[PurchaseOrder], company_id: int) -> List[PurchaseInvoice]:
+        """Every purchase invoice raised against any purchase order placed
+        under a proforma invoice - there's no direct proforma_invoice_id on
+        a purchase invoice, the link runs through its purchase order, so the
+        caller passes in the POs already loaded via
+        PurchaseOrderService.list_for_proforma."""
+        result = []
+        for po in purchase_orders:
+            result.extend(self.list_for_purchase_order(po.id, company_id))
+        return result
+
     def count_map_by_purchase_order(self, company_id: int) -> dict:
         return self.purchase_invoice_repo.count_map_by_purchase_order(company_id)
+
+    def list_all_outstanding(self, company_id: int, exclude_purchase_invoice_id: Optional[int] = None) -> List[PurchaseOrder]:
+        """Every purchase order in this company, across every supplier, that
+        still has at least one product line not fully covered by purchase
+        invoices raised against it yet - the unfiltered candidate pool the
+        "Start from" picker narrows to one supplier client-side once a
+        seller is chosen. `exclude_purchase_invoice_id` (set when editing an
+        existing invoice) ignores that invoice's own items when deciding
+        what's still outstanding, so a PO it already fully covers doesn't
+        vanish from its own edit form's picker."""
+        purchase_orders = self.purchase_order_repo.list_all(company_id)
+        return [po for po in purchase_orders if self._has_outstanding(po, exclude_purchase_invoice_id)]
+
+    def list_outstanding_for_supplier(self, seller_supplier_id: Optional[int], company_id: int,
+                                       exclude_purchase_invoice_id: Optional[int] = None) -> List[PurchaseOrder]:
+        """Every purchase order placed with this supplier that still has at
+        least one product line not fully covered by purchase invoices raised
+        against it yet - the "Start from" picker's candidate list, so a PO
+        drops out the moment its last outstanding line is invoiced. Same
+        outstanding-remainder idea as ProformaFulfilmentService.product_status,
+        one document further down the chain (PO -> its own purchase
+        invoices, rather than proforma -> its purchase orders)."""
+        if not seller_supplier_id:
+            return []
+        purchase_orders = self.purchase_order_repo.list_for_seller(seller_supplier_id)
+        return [po for po in purchase_orders if po.company_id == company_id
+                and self._has_outstanding(po, exclude_purchase_invoice_id)]
+
+    def _invoiced_totals(self, purchase_order_id: int, exclude_purchase_invoice_id: Optional[int] = None) -> dict:
+        return {
+            _product_key({"product_id": row["product_id"], "product_name": row["product_name"]}): row
+            for row in self.purchase_invoice_repo.invoiced_totals_for_purchase_order(
+                purchase_order_id, exclude_purchase_invoice_id
+            )
+        }
+
+    def _has_outstanding(self, purchase_order: PurchaseOrder, exclude_purchase_invoice_id: Optional[int] = None) -> bool:
+        # list_all/list_for_seller (unlike get_by_id) don't load line items -
+        # a saved PO always has at least one (enforced at create time), so an
+        # empty list here means "not loaded", not "genuinely empty".
+        items = purchase_order.items or self.purchase_order_repo.get_by_id(purchase_order.id).items
+        invoiced = self._invoiced_totals(purchase_order.id, exclude_purchase_invoice_id)
+        for item in items:
+            key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+            row = invoiced.get(key)
+            invoiced_boxes = row["boxes"] if row else 0
+            invoiced_qty = row["quantity"] if row else 0
+            ordered_boxes = item.quantity_boxes or 0
+            ordered_qty = item.quantity_value or 0
+            outstanding = (ordered_boxes - invoiced_boxes) if ordered_boxes > 0 else (ordered_qty - invoiced_qty)
+            if outstanding > _DESIGN_QTY_TOLERANCE:
+                return True
+        return False
 
     # ---- permission --------------------------------------------------
     def _assert_can_modify(self, purchase_invoice: PurchaseInvoice, current_user: User):
@@ -3128,6 +3281,80 @@ class PurchaseInvoiceService:
             "price_inr": item.price_inr, "price_per": item.price_per,
         }
 
+    # ---- prefill from several purchase orders at once --------------------------------------------------
+    def build_prefill_from_purchase_orders(self, purchase_orders: List[PurchaseOrder]) -> dict:
+        """Same idea as build_prefill_from_purchase_order, extended to
+        several purchase orders of the same supplier at once - a shipment
+        can cover more than one of our orders. Each PO's product lines are
+        cut down to what's still outstanding (see _has_outstanding /
+        _remaining_items) - a line already fully invoiced on an earlier
+        purchase invoice against that PO is dropped, a partly-invoiced one
+        comes through at its remaining boxes/quantity only, same
+        outstanding-remainder treatment PurchaseOrderService.build_prefill_from_proforma
+        already gives POs built off a proforma invoice. Every surviving row
+        is tagged with the PO it came from (source_po_id/source_po_number)
+        so the form can group them by origin. Header fields (seller/
+        currency/port/etc.) are taken from the first PO - callers only ever
+        offer POs already filtered to one supplier, so every candidate
+        agrees on these; tax amounts are summed across all of them."""
+        if not purchase_orders:
+            return {"fields": {}, "items": []}
+        primary = purchase_orders[0]
+        fields = {
+            "purchase_order_ids": [po.id for po in purchase_orders],
+            "lead_id": primary.lead_id,
+            "seller_supplier_id": primary.seller_supplier_id,
+            "seller_name": primary.seller_name,
+            "seller_address": primary.seller_address,
+            "seller_pan": primary.seller_pan,
+            "seller_gstin": primary.seller_gstin,
+            "seller_ref_no": primary.seller_ref_no,
+            "port_of_loading": primary.port_of_loading,
+            "port_of_discharge": primary.port_of_discharge,
+            "container_details": primary.container_details,
+            "igst_amount": round(sum(po.igst_amount for po in purchase_orders), 2),
+            "cgst_amount": round(sum(po.cgst_amount for po in purchase_orders), 2),
+            "sgst_amount": round(sum(po.sgst_amount for po in purchase_orders), 2),
+            "currency_code": primary.currency_code,
+        }
+        items = []
+        for po in purchase_orders:
+            items.extend(self._remaining_items(po))
+        return {"fields": fields, "items": items}
+
+    def _remaining_items(self, purchase_order: PurchaseOrder) -> list:
+        """One purchase order's product lines cut down to their outstanding
+        remainder and tagged with the PO they came from - the multi-PO
+        counterpart of _raw_item, scaling by boxes when the order is priced
+        per box and by quantity otherwise (mirrors PurchaseOrderService's
+        own _scaled_item ratio approach)."""
+        invoiced = self._invoiced_totals(purchase_order.id)
+        result = []
+        for item in purchase_order.items:
+            key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+            row = invoiced.get(key)
+            invoiced_boxes = row["boxes"] if row else 0
+            invoiced_qty = row["quantity"] if row else 0
+            ordered_boxes = item.quantity_boxes or 0
+            ordered_qty = item.quantity_value or 0
+            if ordered_boxes > 0:
+                ratio = max(ordered_boxes - invoiced_boxes, 0) / ordered_boxes
+            elif ordered_qty > 0:
+                ratio = max(ordered_qty - invoiced_qty, 0) / ordered_qty
+            else:
+                ratio = 0
+            if ratio <= 0:
+                continue  # already fully invoiced on an earlier purchase invoice against this PO
+            raw = self._raw_item(item)
+            if ratio < 1:
+                for k in ("quantity_boxes", "quantity_value"):
+                    if isinstance(raw.get(k), (int, float)):
+                        raw[k] = round(raw[k] * ratio, 2)
+            raw["purchase_order_id"] = purchase_order.id
+            raw["source_po_number"] = purchase_order.po_number
+            result.append(raw)
+        return result
+
     # ---- validation --------------------------------------------------
     def _build_items(self, company_id: int, raw_items: list) -> List[PurchaseInvoiceItem]:
         items = []
@@ -3162,11 +3389,19 @@ class PurchaseInvoiceService:
             else:
                 total_inr = round(quantity_value * price_inr, 2)
 
+            # Which purchase order (of possibly several selected under
+            # "Start from") this row was prefilled from - not validated
+            # against the company here since it only ever drives display
+            # grouping and the outstanding-quantity check, never access
+            # control; a stray/foreign id just fails to match anything.
+            purchase_order_id = int(raw["purchase_order_id"]) if raw.get("purchase_order_id") else None
+
             items.append(PurchaseInvoiceItem(
                 id=None, purchase_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
                 quantity_boxes=quantity_boxes, quantity_value=quantity_value, unit=unit,
                 price_inr=price_inr, price_per=price_per, total_inr=total_inr,
+                purchase_order_id=purchase_order_id,
             ))
         if not items:
             raise ValidationError("At least one product line is compulsory.")
@@ -3199,13 +3434,26 @@ class PurchaseInvoiceService:
         epcg_number = (fields.get("epcg_number") or "").strip() or None
         epcg_date = (fields.get("epcg_date") or "").strip() or None
 
-        purchase_order_id = int(fields["purchase_order_id"]) if fields.get("purchase_order_id") else None
-        if purchase_order_id is not None:
-            # Only trust a purchase order from this same company - a crafted
-            # id could otherwise attach this invoice to another company's PO.
-            purchase_order = self.purchase_order_repo.get_by_id(purchase_order_id)
-            if not purchase_order or purchase_order.company_id != current_user.company_id:
-                purchase_order_id = None
+        # A purchase invoice can be raised against several purchase orders of
+        # the same supplier at once. `purchase_order_ids` (a list, from the
+        # "Start from" multi-select) is the primary path; a lone legacy
+        # `purchase_order_id` is still accepted as a one-item list for
+        # backward compatibility with older callers/tests. Only ids that
+        # actually belong to this company are kept - a crafted id could
+        # otherwise attach this invoice to another company's PO.
+        raw_po_ids = fields.get("purchase_order_ids") or (
+            [fields["purchase_order_id"]] if fields.get("purchase_order_id") else []
+        )
+        purchase_order_ids = []
+        for raw in raw_po_ids:
+            try:
+                po_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            purchase_order = self.purchase_order_repo.get_by_id(po_id)
+            if purchase_order and purchase_order.company_id == current_user.company_id and po_id not in purchase_order_ids:
+                purchase_order_ids.append(po_id)
+        purchase_order_id = purchase_order_ids[0] if purchase_order_ids else None
 
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
@@ -3251,7 +3499,7 @@ class PurchaseInvoiceService:
             round_off=self._parse_amount(fields, "round_off", "Round off"),
             remarks=(fields.get("remarks") or "").strip() or None,
             currency_code=currency_code, currency_symbol=currency_symbol,
-            items=items,
+            items=items, purchase_order_ids=purchase_order_ids,
         )
 
     # ---- supplier PDF storage --------------------------------------------------
@@ -3491,7 +3739,12 @@ class ExportInvoiceService:
                 for pinv in pinvs:
                     if not epcg_number and pinv.epcg_number:
                         epcg_number, epcg_date = pinv.epcg_number, pinv.epcg_date
-                # Exemption purchases contribute a supplier GSTIN + invoice-no row.
+                # Exemption purchases contribute a supplier name + GSTIN +
+                # invoice-no row. The name is the seller as that purchase
+                # invoice recorded it (the purchase order's own seller when it
+                # has none), snapshotted rather than looked up later - the same
+                # treatment every other imported party name gets, so renaming a
+                # supplier can't rewrite an already-issued export invoice.
                 if getattr(po, "purchase_type", "") == "exemption":
                     if pinvs:
                         for pinv in pinvs:
@@ -3501,12 +3754,14 @@ class ExportInvoiceService:
                                 purchase_details.append({
                                     "supplier_gstin": pinv.seller_gstin or po.seller_gstin,
                                     "supplier_invoice_no": pinv.invoice_number,
+                                    "supplier_name": pinv.seller_name or po.seller_name,
                                 })
                     elif po.seller_gstin:
                         key = (po.seller_gstin, "")
                         if key not in seen_pd:
                             seen_pd.add(key)
-                            purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None})
+                            purchase_details.append({"supplier_gstin": po.seller_gstin, "supplier_invoice_no": None,
+                                                     "supplier_name": po.seller_name})
 
         # The government-scheme line of the Export Under block: the company's
         # government schemes, the same text the Annexure's section 13 defaults
@@ -3659,6 +3914,7 @@ class ExportInvoiceService:
         nature_of_contract = (fields.get("nature_of_contract") or "").strip() or None
         no_sea_freight = drops_sea_freight(nature_of_contract)
         no_insurance = drops_insurance(nature_of_contract)
+        no_certification = drops_certification(nature_of_contract)
         # "Calculate CIF pricing" only means something when there's a CIF
         # figure to build - under FOB terms there's no CIF to show at all
         # (see is_fob in the printed sheet/form), so the button is hidden
@@ -3854,7 +4110,7 @@ class ExportInvoiceService:
         rows = []
         for r in raw or []:
             values = {k: (r.get(k) or "").strip() or None
-                      for k in ("supplier_gstin", "supplier_invoice_no")}
+                      for k in ("supplier_gstin", "supplier_invoice_no", "supplier_name")}
             if any(values.values()):
                 rows.append(values)
         return rows

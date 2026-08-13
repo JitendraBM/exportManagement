@@ -24,6 +24,8 @@ def _fields(form) -> dict:
         "name": form.get("name", ""),
         "symbol": form.get("symbol", ""),
         "pin_code": form.get("pin_code", ""),
+        "gst_slab": form.get("gst_slab", ""),
+        "related_products": form.get("related_products", ""),
     }
 
 
@@ -39,6 +41,7 @@ def index():
         ports_of_loading=service.list_ports_of_loading(g.user.company_id),
         container_types=service.list_container_types(g.user.company_id),
         fallback_container_types=service.container_type_options(g.user.company_id),
+        hsn_codes=service.list_hsn_codes(g.user.company_id),
         edit_id=request.args.get("edit", type=int),
         edit_list=request.args.get("list", ""),
     )
@@ -221,6 +224,48 @@ def delete_container_type(entry_id):
     try:
         entry = current_app.container.misc_list_service.delete_container_type(g.user, entry_id)
         flash(f"Container type {entry.name} deleted.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/hsn-codes", methods=["POST"])
+@admin_required
+def add_hsn_code():
+    try:
+        entry = current_app.container.misc_list_service.create_hsn_code(g.user, _fields(request.form))
+        flash(f"HSN code {entry.name} added.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/hsn-codes/<int:entry_id>/edit", methods=["POST"])
+@admin_required
+def edit_hsn_code(entry_id):
+    try:
+        entry = current_app.container.misc_list_service.update_hsn_code(
+            g.user, entry_id, _fields(request.form),
+        )
+        flash(f"HSN code {entry.name} updated.", "success")
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("misc.index"))
+
+
+@misc_bp.route("/hsn-codes/<int:entry_id>/delete", methods=["POST"])
+@admin_required
+def delete_hsn_code(entry_id):
+    if not verify_delete_password(g.user, request.form):
+        flash("Incorrect password. HSN code not deleted.", "error")
+        return redirect(url_for("misc.index"))
+    try:
+        entry = current_app.container.misc_list_service.delete_hsn_code(g.user, entry_id)
+        flash(f"HSN code {entry.name} deleted.", "success")
     except (ValidationError, PermissionDeniedError) as e:
         flash(str(e), "error")
     except NotFoundError:

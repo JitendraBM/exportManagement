@@ -519,6 +519,39 @@ class MiscContainerType:
 
 
 @dataclass
+class MiscHsnCode:
+    """One row of the HSN CODE drop list maintained under Administration ->
+    Miscellaneous: an HSN code and the GST slab that applies to it, kept
+    together so the code and its rate can never disagree (the same reasoning
+    as MiscPortOfLoading's name/pin_code pairing)."""
+    id: Optional[int]
+    company_id: int
+    name: str        # "HSN CODE", e.g. 69072100
+    gst_slab: str    # "GST SLAB", e.g. 18
+    # "Related to Products" - what the code covers, in words (e.g. GLAZED
+    # VITRIFIED TILES). A note for whoever reads the list; optional, and
+    # deliberately not a link to catalog products - the product form is where
+    # a product's own HSN code is recorded.
+    related_products: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        """How the row reads where both halves are shown: `69072100 - 18`."""
+        return f"{self.name} - {self.gst_slab}"
+
+    @staticmethod
+    def from_row(row) -> "MiscHsnCode":
+        return MiscHsnCode(
+            id=row["id"], company_id=row["company_id"], name=row["name"],
+            gst_slab=row["gst_slab"],
+            related_products=row["related_products"] if "related_products" in row.keys() else None,
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+@dataclass
 class MiscPortOfLoading:
     """One row of the PORT OF LOADING drop list maintained under
     Administration -> Miscellaneous: the port a shipment leaves from and that
@@ -1273,6 +1306,12 @@ class PurchaseInvoiceItem:
     price_inr: float = 0
     price_per: str = "BOX"
     total_inr: float = 0
+    # Which of the invoice's (possibly several) purchase orders this line
+    # came from - None for a hand-added row with no PO origin. Drives the
+    # "grouped by purchase order" product table; source_po_number is a
+    # joined display-only convenience, never written.
+    purchase_order_id: Optional[int] = None
+    source_po_number: Optional[str] = None  # populated by joined queries only
 
     @staticmethod
     def from_row(row) -> "PurchaseInvoiceItem":
@@ -1289,6 +1328,8 @@ class PurchaseInvoiceItem:
             price_inr=row["price_inr"],
             price_per=row["price_per"],
             total_inr=row["total_inr"],
+            purchase_order_id=row["purchase_order_id"] if "purchase_order_id" in row.keys() else None,
+            source_po_number=row["source_po_number"] if "source_po_number" in row.keys() else None,
         )
 
 
@@ -1347,6 +1388,13 @@ class PurchaseInvoice:
     items: List[PurchaseInvoiceItem] = field(default_factory=list)
     vehicle_numbers: List[str] = field(default_factory=list)
     computed_subtotal_inr: Optional[float] = None  # precomputed by list queries that don't load items
+    # The full purchase-order list this invoice was raised against - a
+    # shipment can cover more than one of our purchase orders (of the same
+    # supplier) at once. purchase_order_id above stays the first/primary one
+    # for older single-PO call sites; these are populated from the
+    # purchase_invoice_purchase_order_links table.
+    purchase_order_ids: List[int] = field(default_factory=list)
+    purchase_orders: List["PurchaseOrder"] = field(default_factory=list)  # populated by the service, not from_row
 
     @staticmethod
     def from_row(row) -> "PurchaseInvoice":
@@ -2024,7 +2072,7 @@ class ExportInvoice(CifMoneyLadder):
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
     container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
-    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no}]
+    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_name}]
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -2193,12 +2241,13 @@ class ExportInvoice(CifMoneyLadder):
         construction (apply_fob_uplift spreads exactly charges_total across
         the lines), so this lands on the exact same figure as the base
         cif_value_usd - discount_amount would - no behaviour change for that
-        case. The fix only bites under FOB terms (sea_freight and insurance
-        are held at zero there, but certification/other_charges are not -
-        see drops_sea_freight/drops_insurance in app/utils.py): previously
-        those still-typed charges vanished from invoice_value_usd entirely
-        because subtotal_usd never carried them and fob_value_usd (rightly)
-        doesn't either; now they always reach the buyer's payable figure.
+        case. The fix only bites under FOB terms (sea_freight, insurance and
+        certification are all held at zero there - see drops_sea_freight/
+        drops_insurance/drops_certification in app/utils.py - but
+        other_charges is not gated by any delivery term): previously
+        other_charges vanished from invoice_value_usd entirely because
+        subtotal_usd never carried it and fob_value_usd (rightly) doesn't
+        either; now it always reaches the buyer's payable figure.
 
         Otherwise (genuine CIF/CFR terms, uplift never run) falls back to
         exactly the base formula - cif_value_usd - discount_amount - since
