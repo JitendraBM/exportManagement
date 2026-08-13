@@ -33,7 +33,9 @@ _HEADER_FIELDS = [
 
 
 def _extract_header(form) -> dict:
-    return {key: form.get(key, "") for key in _HEADER_FIELDS}
+    fields = {key: form.get(key, "") for key in _HEADER_FIELDS}
+    fields["purchase_order_ids"] = form.getlist("purchase_order_ids[]")
+    return fields
 
 
 def _extract_items(form) -> list:
@@ -45,6 +47,7 @@ def _extract_items(form) -> list:
     units = form.getlist("item_unit[]")
     prices = form.getlist("item_price_inr[]")
     price_pers = form.getlist("item_price_per[]")
+    source_po_ids = form.getlist("item_purchase_order_id[]")
     items = []
     for i in range(len(product_names)):
         items.append({
@@ -56,6 +59,7 @@ def _extract_items(form) -> list:
             "unit": units[i] if i < len(units) else "SQM",
             "price_inr": prices[i] if i < len(prices) else "",
             "price_per": price_pers[i] if i < len(price_pers) else "BOX",
+            "purchase_order_id": source_po_ids[i] if i < len(source_po_ids) else "",
         })
     return items
 
@@ -64,12 +68,46 @@ def _extract_vehicle_numbers(form) -> list:
     return form.getlist("vehicle_number[]")
 
 
-def _form_context():
+def _alt_qty_map(items) -> dict:
+    """Same purpose as purchase_orders._product_meta_map's `alt_qty` -
+    product_id -> Alternate Quantity for rows already tied to a catalog
+    product, so the form can auto-fill Qty from Boxes. A purchase invoice
+    has no product picker of its own (its lines are prefilled from the
+    purchase order), so this map is the only source of the per-box figure."""
+    container = current_app.container
+    result = {}
+    for item in items or []:
+        raw_id = item.get("product_id") if isinstance(item, dict) else item.product_id
+        if not raw_id:
+            continue
+        try:
+            product_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if product_id in result:
+            continue
+        try:
+            product = container.product_service.get_product(product_id, g.user.company_id)
+            result[product_id] = product.alternate_quantity or ""
+        except NotFoundError:
+            pass
+    return result
+
+
+def _form_context(exclude_purchase_invoice_id=None):
     """(leads, purchase orders, suppliers) for the form's Start-from and
-    Seller pickers."""
+    Seller pickers. `purchase_orders` is only the ones still outstanding
+    (see PurchaseInvoiceService.list_all_outstanding) - a PO already fully
+    invoiced drops off the "Start from" picker, all suppliers at once since
+    the template filters the checkbox list down to whichever supplier is
+    currently selected. `exclude_purchase_invoice_id` (set when editing) makes
+    that invoice's own items not count against its own PO(s), so re-opening
+    it for edit doesn't make its own already-picked PO(s) disappear."""
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
-    purchase_orders = container.purchase_order_service.list_all(g.user.company_id)
+    purchase_orders = container.purchase_invoice_service.list_all_outstanding(
+        g.user.company_id, exclude_purchase_invoice_id
+    )
     suppliers = container.supplier_service.list_all(g.user.company_id)
     return leads, purchase_orders, suppliers
 
@@ -102,17 +140,26 @@ def new_purchase_invoice():
                 "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
                 suppliers=suppliers, form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
+                alt_qty_map=_alt_qty_map(items),
+                selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
             ), 400
 
     leads, purchase_orders, suppliers = _form_context()
     prefill = None
     form_items = None
-    purchase_order_id = request.args.get("purchase_order_id")
+    # `purchase_order_ids` (comma-separated) is the multi-select "Start
+    # from" reload; a lone `purchase_order_id` is still accepted for the
+    # older single-PO entry point (purchase_orders/print.html's own "Create
+    # purchase invoice" button).
+    raw_ids = request.args.get("purchase_order_ids") or request.args.get("purchase_order_id") or ""
+    po_ids = [p for p in raw_ids.split(",") if p.strip()]
     lead_id = request.args.get("lead_id")
-    if purchase_order_id:
+    if po_ids:
         try:
-            purchase_order = container.purchase_order_service.get(int(purchase_order_id), g.user.company_id)
-            built = container.purchase_invoice_service.build_prefill_from_purchase_order(purchase_order)
+            purchase_orders_selected = [
+                container.purchase_order_service.get(int(p), g.user.company_id) for p in po_ids
+            ]
+            built = container.purchase_invoice_service.build_prefill_from_purchase_orders(purchase_orders_selected)
             prefill = built["fields"]
             prefill["invoice_date"] = date.today().isoformat()
             form_items = built["items"]
@@ -128,7 +175,38 @@ def new_purchase_invoice():
         "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
         suppliers=suppliers, form_data=prefill, form_items=form_items,
         form_vehicle_numbers=None, today=date.today().isoformat(),
+        alt_qty_map=_alt_qty_map(form_items),
+        selected_purchase_order_ids=(prefill or {}).get("purchase_order_ids") or [],
     )
+
+
+def _linked_purchase_orders(container, purchase_invoice):
+    """Every purchase order this purchase invoice was raised against, in the
+    order they were selected - normally the whole point of the "several POs
+    at once" feature is that they're all the same supplier, so this is
+    usually a short list."""
+    result = []
+    for po_id in purchase_invoice.purchase_order_ids:
+        try:
+            result.append(container.purchase_order_service.get(po_id, g.user.company_id))
+        except NotFoundError:
+            pass
+    return result
+
+
+def _related_proformas(purchase_orders):
+    """Every distinct proforma invoice behind this purchase invoice's linked
+    purchase orders. A purchase invoice never points at a proforma directly -
+    the link runs through its purchase order(s), where the proforma was
+    chosen; several POs on the same invoice can (rarely) trace back to more
+    than one proforma, so this is a list, not a single link."""
+    seen = set()
+    result = []
+    for po in purchase_orders:
+        if po.proforma_invoice_id and po.proforma_invoice_id not in seen:
+            seen.add(po.proforma_invoice_id)
+            result.append(po)
+    return result
 
 
 @purchase_invoices_bp.route("/<int:purchase_invoice_id>")
@@ -140,8 +218,18 @@ def view_purchase_invoice(purchase_invoice_id):
     except NotFoundError:
         abort(404)
     packing_lists = container.packing_list_service.list_for_purchase_invoice(purchase_invoice_id, g.user.company_id)
+    purchase_orders = _linked_purchase_orders(container, purchase_invoice)
+    proforma_invoices = []
+    for po in _related_proformas(purchase_orders):
+        try:
+            proforma_invoices.append(
+                container.proforma_invoice_service.get(po.proforma_invoice_id, g.user.company_id)
+            )
+        except NotFoundError:
+            pass
     return render_template("purchase_invoices/view.html", purchase_invoice=purchase_invoice,
-                           packing_lists=packing_lists)
+                           packing_lists=packing_lists, purchase_orders=purchase_orders,
+                           proforma_invoices=proforma_invoices)
 
 
 @purchase_invoices_bp.route("/<int:purchase_invoice_id>/edit", methods=["GET", "POST"])
@@ -166,19 +254,23 @@ def edit_purchase_invoice(purchase_invoice_id):
             return redirect(url_for("purchase_invoices.view_purchase_invoice", purchase_invoice_id=purchase_invoice_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, purchase_orders, suppliers = _form_context()
+            leads, purchase_orders, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
             items = _extract_items(request.form)
             return render_template(
                 "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
                 purchase_orders=purchase_orders, suppliers=suppliers, form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
+                alt_qty_map=_alt_qty_map(items),
+                selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
             ), 400
 
-    leads, purchase_orders, suppliers = _form_context()
+    leads, purchase_orders, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
     return render_template(
         "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
         purchase_orders=purchase_orders, suppliers=suppliers, form_data=None, form_items=None,
         form_vehicle_numbers=None, today=date.today().isoformat(),
+        alt_qty_map=_alt_qty_map(purchase_invoice.items),
+        selected_purchase_order_ids=purchase_invoice.purchase_order_ids,
     )
 
 
@@ -238,4 +330,5 @@ def view_purchase_invoice_version(purchase_invoice_id, version_number):
         abort(404)
     return render_template(
         "purchase_invoices/view.html", purchase_invoice=historical_purchase_invoice, historical_version=version,
+        purchase_orders=[], proforma_invoices=[],
     )

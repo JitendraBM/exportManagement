@@ -52,13 +52,26 @@
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN &amp; invoice no. (imported for exemption purchases)</span></h3></div>
+    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN, invoice no. &amp; name (imported for exemption purchases)</span></h3></div>
     <div id="purchase-detail-rows">
       {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
       {% for pd in pd_rows %}
       <div class="form-row purchase-detail-row">
-        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}"></div>
-        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}"></div>
+        <div class="field">
+          <label>Supplier GSTIN</label>
+          <input type="hidden" name="pd_supplier_gstin[]" value="{{ pd.supplier_gstin or '' }}">
+          <div>{{ pd.supplier_gstin or '—' }}</div>
+        </div>
+        <div class="field">
+          <label>Supplier invoice no.</label>
+          <input type="hidden" name="pd_supplier_invoice_no[]" value="{{ pd.supplier_invoice_no or '' }}">
+          <div>{{ pd.supplier_invoice_no or '—' }}</div>
+        </div>
+        <div class="field">
+          <label>Supplier name</label>
+          <input type="hidden" name="pd_supplier_name[]" value="{{ pd.supplier_name or '' }}">
+          <div>{{ pd.supplier_name or '—' }}</div>
+        </div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
       </div>
       {% endfor %}
@@ -982,11 +995,16 @@
       const div = document.createElement('div');
       div.className = 'form-row purchase-detail-row';
       div.innerHTML = `
-        <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]"></div>
-        <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]"></div>
+        <div class="field"><label>Supplier GSTIN</label><input type="hidden" name="pd_supplier_gstin[]"><div class="js-pd-gstin-display">—</div></div>
+        <div class="field"><label>Supplier invoice no.</label><input type="hidden" name="pd_supplier_invoice_no[]"><div class="js-pd-invno-display">—</div></div>
+        <div class="field"><label>Supplier name</label><input type="hidden" name="pd_supplier_name[]"><div class="js-pd-name-display">—</div></div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
       div.querySelector('[name="pd_supplier_gstin[]"]').value = pd.supplier_gstin || '';
       div.querySelector('[name="pd_supplier_invoice_no[]"]').value = pd.supplier_invoice_no || '';
+      div.querySelector('[name="pd_supplier_name[]"]').value = pd.supplier_name || '';
+      div.querySelector('.js-pd-gstin-display').textContent = pd.supplier_gstin || '—';
+      div.querySelector('.js-pd-invno-display').textContent = pd.supplier_invoice_no || '—';
+      div.querySelector('.js-pd-name-display').textContent = pd.supplier_name || '—';
       pdWrap.appendChild(div);
     });
 
@@ -1035,8 +1053,9 @@
     const div = document.createElement('div');
     div.className = 'form-row purchase-detail-row';
     div.innerHTML = `
-      <div class="field"><label>Supplier GSTIN</label><input type="text" name="pd_supplier_gstin[]"></div>
-      <div class="field"><label>Supplier invoice no.</label><input type="text" name="pd_supplier_invoice_no[]"></div>
+      <div class="field"><label>Supplier GSTIN</label><input type="hidden" name="pd_supplier_gstin[]"><div>—</div></div>
+      <div class="field"><label>Supplier invoice no.</label><input type="hidden" name="pd_supplier_invoice_no[]"><div>—</div></div>
+      <div class="field"><label>Supplier name</label><input type="hidden" name="pd_supplier_name[]"><div>—</div></div>
       <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
     wrap.appendChild(div);
   });

@@ -22,9 +22,24 @@
       <textarea id="description" name="description" rows="3">{{ data.description | default('', true) }}</textarea>
     </div>
     <div class="form-row">
+      {# Picked from the Administration -> Miscellaneous HSN CODE list, which
+         pairs each code with its GST slab - choosing one fills IGST % below
+         from that slab (see the script) so the two can't disagree. A product
+         can hold a code since removed from that list, so the stored value
+         stays selectable rather than silently blanking. #}
       <div class="field" style="max-width:280px;">
         <label for="hsn_code">HSN code</label>
-        <input type="text" id="hsn_code" name="hsn_code" value="{{ data.hsn_code | default('', true) }}">
+        {% set chosen_hsn = data.hsn_code | default('', true) %}
+        <select id="hsn_code" name="hsn_code">
+          <option value="">&mdash; none &mdash;</option>
+          {% if chosen_hsn and chosen_hsn not in hsn_code_options | map(attribute='name') | list %}
+          <option value="{{ chosen_hsn }}" selected>{{ chosen_hsn }}</option>
+          {% endif %}
+          {% for hsn in hsn_code_options %}
+          <option value="{{ hsn.name }}" data-gst-slab="{{ hsn.gst_slab }}" {{ 'selected' if hsn.name == chosen_hsn }}>{{ hsn.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; HSN Code.</div>
       </div>
       <div class="field">
         <label for="category_id">Category</label>
@@ -133,6 +148,23 @@
   }
   igst.addEventListener('input', recalc);
   recalc();
+
+  // Picking an HSN code fills IGST % from that code's GST slab (the pair the
+  // Miscellaneous list keeps together), then re-derives SGST/CGST from it.
+  // Only fires on an actual pick, so a rate typed by hand - or one carried by
+  // a product whose code has since left the list - is never overwritten on
+  // load. A code with no slab (the blank "none" option, or an off-list value)
+  // leaves the rate alone: there is nothing to take it from.
+  const hsn = document.getElementById('hsn_code');
+  if (hsn) {
+    hsn.addEventListener('change', function () {
+      const slab = hsn.options[hsn.selectedIndex].dataset.gstSlab;
+      if (slab !== undefined && slab !== '') {
+        igst.value = slab;
+        recalc();
+      }
+    });
+  }
 
   // ---- pallet types list editor --------------------------------------------------
   // Alt qty per pallet is display-only (never submitted): Boxes per pallet x

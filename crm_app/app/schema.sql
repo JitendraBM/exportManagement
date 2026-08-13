@@ -390,6 +390,18 @@ CREATE TABLE IF NOT EXISTS misc_container_types (
 );
 CREATE INDEX IF NOT EXISTS idx_misc_container_types_company ON misc_container_types(company_id);
 
+CREATE TABLE IF NOT EXISTS misc_hsn_codes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "HSN CODE", e.g. 69072100
+    related_products TEXT,        -- "Related to Products" - what the code covers, e.g. GLAZED VITRIFIED TILES (a note for whoever reads the list; optional)
+    gst_slab     TEXT NOT NULL,   -- "GST SLAB" for that HSN, e.g. 18
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_hsn_codes_company ON misc_hsn_codes(company_id);
+
 -- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
 -- Company" area. Each permit records a stuffing-place name + place of
@@ -832,7 +844,25 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_items (
     unit                   TEXT NOT NULL DEFAULT 'SQM',
     price_inr              REAL NOT NULL DEFAULT 0,
     price_per              TEXT NOT NULL DEFAULT 'BOX',
-    total_inr              REAL NOT NULL DEFAULT 0
+    total_inr              REAL NOT NULL DEFAULT 0,
+    -- Which purchase order (of possibly several on the same purchase invoice)
+    -- this line was prefilled from; NULL for a row typed in by hand with no
+    -- PO origin. Drives both the "grouped by purchase order" product table
+    -- and the outstanding-quantity check that decides whether a PO still
+    -- needs invoicing (see PurchaseInvoiceRepository.invoiced_totals_for_purchase_order).
+    purchase_order_id      INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL
+);
+
+-- The many-to-many between a purchase invoice and the purchase orders it was
+-- raised against - a supplier's shipment can cover more than one of our
+-- purchase orders at once. purchase_invoices.purchase_order_id (above) still
+-- holds the first/primary one for the older single-PO call sites; this table
+-- is the authoritative full list.
+CREATE TABLE IF NOT EXISTS purchase_invoice_purchase_order_links (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_invoice_id   INTEGER NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+    purchase_order_id     INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    UNIQUE (purchase_invoice_id, purchase_order_id)
 );
 
 -- Vehicle numbers are a plain repeatable list of values (a supplier's
@@ -1031,14 +1061,18 @@ CREATE TABLE IF NOT EXISTS export_invoice_container_details (
     sealing_date          TEXT           -- yyyy-mm-dd, printed dd/mm/yyyy
 );
 
--- Purchase Details: supplier GSTIN + invoice-no rows imported from the
--- exemption purchases in the chain, editable, and spilling past 4 in print.
+-- Purchase Details: supplier name + GSTIN + invoice-no rows imported from
+-- the exemption purchases in the chain, editable, and spilling past 4 in
+-- print. supplier_name is the seller as that purchase invoice recorded it,
+-- snapshotted at import time so renaming the supplier later can't rewrite
+-- an already-issued export invoice.
 CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
     export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
     sr_no                    INTEGER NOT NULL,
     supplier_gstin           TEXT,
-    supplier_invoice_no      TEXT
+    supplier_invoice_no      TEXT,
+    supplier_name            TEXT
 );
 
 -- ============================================================
@@ -1228,6 +1262,8 @@ CREATE INDEX IF NOT EXISTS idx_purchase_invoices_date ON purchase_invoices(invoi
 CREATE INDEX IF NOT EXISTS idx_purchase_invoices_po ON purchase_invoices(purchase_order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoice_items_pi ON purchase_invoice_items(purchase_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoice_vehicles_pi ON purchase_invoice_vehicles(purchase_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_pi_po_links_invoice ON purchase_invoice_purchase_order_links(purchase_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_pi_po_links_po ON purchase_invoice_purchase_order_links(purchase_order_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoices_company ON export_invoices(company_id);
 CREATE INDEX IF NOT EXISTS idx_export_invoices_created_by ON export_invoices(created_by);
 CREATE INDEX IF NOT EXISTS idx_export_invoices_date ON export_invoices(invoice_date);

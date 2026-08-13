@@ -95,15 +95,17 @@ class TestExportCrud:
         assert got.cif_value_usd == pytest.approx(121.0)
         assert got.fob_value_usd == pytest.approx(21.0)   # exactly 3 x the typed 7
 
-    def test_invoice_value_includes_certification_and_other_under_fob_terms(self, container, seed):
+    def test_invoice_value_includes_other_charges_under_fob_terms(self, container, seed):
         # The actual bug being fixed: under FOB terms, FOB value must move
         # only when a line's typed price or quantity changes - never with
         # the discount, and (unlike the base CifMoneyLadder ladder) never
         # with the four charges either, when fob_pricing was never ticked.
         # Invoice value is then built back UP from it: FOB + every charge -
-        # discount (ExportInvoice.invoice_value_usd). sea_freight/insurance
-        # are auto-zeroed by _build_header under FOB terms, but
-        # certification/other are not - they still have to reach the buyer's
+        # discount (ExportInvoice.invoice_value_usd). sea_freight/insurance/
+        # certification are all auto-zeroed by _build_header under FOB terms
+        # (drops_sea_freight/drops_insurance/drops_certification - same rule
+        # quotations and proforma invoices use), but other_charges is not
+        # gated by any delivery term - it still has to reach the buyer's
         # payable figure rather than silently vanishing.
         inv = make_export(container, seed, nature_of_contract="FOB", sea_freight="100",
                           insurance="50", certification="20", other_charges="10", discount_amount="10",
@@ -111,10 +113,10 @@ class TestExportCrud:
                                   "price_usd": "6", "igst_percent": "18"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
         assert got.items[0].fob_price_usd is None          # fob_pricing was never ticked
-        assert got.sea_freight == 0 and got.insurance == 0  # dropped by FOB terms
+        assert got.sea_freight == 0 and got.insurance == 0 and got.certification == 0  # dropped by FOB terms
         assert got.cif_value_usd == 60.0
         assert got.fob_value_usd == 60.0                    # goods total only - discount/charges don't touch it
-        assert got.invoice_value_usd == 80.0                # 60 + (0+0+20+10) - 10
+        assert got.invoice_value_usd == 60.0                # 60 + (0+0+0+10) - 10
 
     def test_fob_value_falls_back_to_the_base_ladder_under_cif_terms_without_a_push(self, container, seed):
         # Genuine CIF/CFR terms with the price typed directly as the CIF

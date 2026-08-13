@@ -18,7 +18,7 @@ from typing import Optional, List, Sequence
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
@@ -1124,6 +1124,49 @@ class MiscPortOfLoadingRepository:
         self.db.execute("DELETE FROM misc_ports_of_loading WHERE id = ?", (row_id,))
 
 
+class MiscHsnCodeRepository:
+    """The HSN CODE drop list (Administration -> Miscellaneous): an HSN code
+    plus the GST slab that applies to it."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscHsnCode]:
+        row = self.db.query_one("SELECT * FROM misc_hsn_codes WHERE id = ?", (row_id,))
+        return MiscHsnCode.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscHsnCode]:
+        rows = self.db.query(
+            "SELECT * FROM misc_hsn_codes WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscHsnCode.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscHsnCode]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_hsn_codes WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscHsnCode.from_row(row) if row else None
+
+    def create(self, entry: MiscHsnCode) -> MiscHsnCode:
+        new_id = self.db.execute(
+            "INSERT INTO misc_hsn_codes (company_id, name, related_products, gst_slab) VALUES (?, ?, ?, ?)",
+            (entry.company_id, entry.name, entry.related_products, entry.gst_slab),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscHsnCode) -> None:
+        self.db.execute(
+            "UPDATE misc_hsn_codes SET name = ?, related_products = ?, gst_slab = ?,"
+            " updated_at = datetime('now') WHERE id = ?",
+            (entry.name, entry.related_products, entry.gst_slab, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_hsn_codes WHERE id = ?", (row_id,))
+
+
 # ============================================================
 # PRODUCT CATALOG (products -> folders -> designs)
 # ============================================================
@@ -2103,7 +2146,7 @@ class ExportInvoiceRepository:
         ]
         invoice.purchase_details = [
             dict(r) for r in self.db.query(
-                "SELECT supplier_gstin, supplier_invoice_no FROM export_invoice_purchase_details "
+                "SELECT supplier_gstin, supplier_invoice_no, supplier_name FROM export_invoice_purchase_details "
                 "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -2320,9 +2363,10 @@ class ExportInvoiceRepository:
             for i, pd in enumerate(invoice.purchase_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_purchase_details "
-                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no) "
-                    "VALUES (?, ?, ?, ?)",
-                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None),
+                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no, supplier_name) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None,
+                     pd.get("supplier_name") or None),
                 )
 
     def delete(self, invoice_id: int) -> None:
@@ -2648,7 +2692,10 @@ class PurchaseInvoiceRepository:
 
     def _attach_children(self, purchase_invoice: PurchaseInvoice) -> PurchaseInvoice:
         item_rows = self.db.query(
-            "SELECT * FROM purchase_invoice_items WHERE purchase_invoice_id = ? ORDER BY sr_no",
+            """SELECT pinvi.*, po.po_number AS source_po_number
+               FROM purchase_invoice_items pinvi
+               LEFT JOIN purchase_orders po ON po.id = pinvi.purchase_order_id
+               WHERE pinvi.purchase_invoice_id = ? ORDER BY pinvi.sr_no""",
             (purchase_invoice.id,),
         )
         purchase_invoice.items = [PurchaseInvoiceItem.from_row(r) for r in item_rows]
@@ -2657,6 +2704,12 @@ class PurchaseInvoiceRepository:
             (purchase_invoice.id,),
         )
         purchase_invoice.vehicle_numbers = [r["vehicle_number"] for r in vehicle_rows]
+        link_rows = self.db.query(
+            "SELECT purchase_order_id FROM purchase_invoice_purchase_order_links "
+            "WHERE purchase_invoice_id = ? ORDER BY id",
+            (purchase_invoice.id,),
+        )
+        purchase_invoice.purchase_order_ids = [r["purchase_order_id"] for r in link_rows]
         return purchase_invoice
 
     def get_by_id(self, purchase_invoice_id: int) -> Optional[PurchaseInvoice]:
@@ -2676,15 +2729,43 @@ class PurchaseInvoiceRepository:
         return [PurchaseInvoice.from_row(r) for r in rows]
 
     def list_for_purchase_order(self, purchase_order_id: int) -> List[PurchaseInvoice]:
-        """Every purchase invoice generated from this purchase order, newest
-        first. Normally just one, but nothing stops a supplier's shipment
+        """Every purchase invoice raised against this purchase order, newest
+        first - via the link table, so this also finds an invoice that
+        covers this PO as one of several rather than as its sole/primary
+        one. Normally just one, but nothing stops a supplier's shipment
         against one PO arriving (and being invoiced) in more than one part."""
         rows = self.db.query(
             self._SELECT.format(items_total=self._ITEMS_TOTAL) +
-            " WHERE pinv.purchase_order_id = ? ORDER BY pinv.id DESC",
+            """ WHERE pinv.id IN (
+                    SELECT purchase_invoice_id FROM purchase_invoice_purchase_order_links
+                    WHERE purchase_order_id = ?
+                ) ORDER BY pinv.id DESC""",
             (purchase_order_id,),
         )
         return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def invoiced_totals_for_purchase_order(self, purchase_order_id: int,
+                                            exclude_purchase_invoice_id: Optional[int] = None) -> List[dict]:
+        """Already-invoiced qty/boxes per product line for this PO, summed
+        across every purchase invoice item tagged with it (an item's own
+        purchase_order_id, not the invoice header's) - the outstanding-
+        quantity counterpart of PurchaseOrderRepository.product_totals_for_proforma,
+        one document further down the chain. `exclude_purchase_invoice_id`
+        lets the edit form ask "outstanding if I ignore what I myself already
+        cover" - otherwise re-opening an invoice that already fully covers
+        its own PO(s) would make them vanish from its own "Start from" list."""
+        sql = """SELECT product_id, product_name,
+                        COALESCE(SUM(quantity_boxes), 0) AS boxes,
+                        COALESCE(SUM(quantity_value), 0) AS quantity
+                 FROM purchase_invoice_items
+                 WHERE purchase_order_id = ?"""
+        params = [purchase_order_id]
+        if exclude_purchase_invoice_id:
+            sql += " AND purchase_invoice_id != ?"
+            params.append(exclude_purchase_invoice_id)
+        sql += " GROUP BY product_id, product_name"
+        rows = self.db.query(sql, tuple(params))
+        return [dict(r) for r in rows]
 
     def list_for_lead(self, lead_id: int) -> List[PurchaseInvoice]:
         rows = self.db.query(
@@ -2695,11 +2776,15 @@ class PurchaseInvoiceRepository:
         return [PurchaseInvoice.from_row(r) for r in rows]
 
     def count_map_by_purchase_order(self, company_id: int) -> dict:
-        """purchase_order_id -> how many purchase invoices point at it, so
-        the PO list can show a count without an N+1 query."""
+        """purchase_order_id -> how many purchase invoices point at it (via
+        the link table, so a PO counted as one of several on an invoice
+        still counts), so the PO list can show a count without an N+1 query."""
         rows = self.db.query(
-            "SELECT purchase_order_id, COUNT(*) AS cnt FROM purchase_invoices "
-            "WHERE company_id = ? AND purchase_order_id IS NOT NULL GROUP BY purchase_order_id",
+            """SELECT l.purchase_order_id, COUNT(DISTINCT l.purchase_invoice_id) AS cnt
+               FROM purchase_invoice_purchase_order_links l
+               JOIN purchase_invoices pinv ON pinv.id = l.purchase_invoice_id
+               WHERE pinv.company_id = ?
+               GROUP BY l.purchase_order_id""",
             (company_id,),
         )
         return {row["purchase_order_id"]: row["cnt"] for row in rows}
@@ -2727,6 +2812,7 @@ class PurchaseInvoiceRepository:
         )
         self._replace_items(new_id, purchase_invoice.items)
         self._replace_vehicles(new_id, purchase_invoice.vehicle_numbers)
+        self._replace_purchase_order_links(new_id, purchase_invoice.purchase_order_ids)
         return self.get_by_id(new_id)
 
     def update(self, purchase_invoice_id: int, purchase_invoice: PurchaseInvoice) -> None:
@@ -2754,6 +2840,7 @@ class PurchaseInvoiceRepository:
         )
         self._replace_items(purchase_invoice_id, purchase_invoice.items)
         self._replace_vehicles(purchase_invoice_id, purchase_invoice.vehicle_numbers)
+        self._replace_purchase_order_links(purchase_invoice_id, purchase_invoice.purchase_order_ids)
 
     def _replace_items(self, purchase_invoice_id: int, items: List[PurchaseInvoiceItem]) -> None:
         with self.db.get_connection() as conn:
@@ -2762,11 +2849,24 @@ class PurchaseInvoiceRepository:
                 conn.execute(
                     """INSERT INTO purchase_invoice_items
                        (purchase_invoice_id, sr_no, product_id, product_name, hsn_code,
-                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr, purchase_order_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (purchase_invoice_id, item.sr_no, item.product_id, item.product_name, item.hsn_code,
                      item.quantity_boxes, item.quantity_value, item.unit, item.price_inr,
-                     item.price_per, item.total_inr),
+                     item.price_per, item.total_inr, item.purchase_order_id),
+                )
+
+    def _replace_purchase_order_links(self, purchase_invoice_id: int, purchase_order_ids: List[int]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM purchase_invoice_purchase_order_links WHERE purchase_invoice_id = ?",
+                (purchase_invoice_id,),
+            )
+            for purchase_order_id in purchase_order_ids:
+                conn.execute(
+                    "INSERT INTO purchase_invoice_purchase_order_links (purchase_invoice_id, purchase_order_id) "
+                    "VALUES (?, ?)",
+                    (purchase_invoice_id, purchase_order_id),
                 )
 
     def _replace_vehicles(self, purchase_invoice_id: int, vehicle_numbers: List[str]) -> None:

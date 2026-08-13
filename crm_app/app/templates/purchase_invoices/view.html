@@ -18,8 +18,34 @@
   {% if not historical_version %}
   <div class="topbar-actions">
     <a href="{{ url_for('purchase_invoices.list_purchase_invoices') }}" class="btn btn-ghost btn-sm">← All purchase invoices</a>
-    {% if purchase_invoice.purchase_order_id %}
-    <a href="{{ url_for('purchase_orders.view_purchase_order', purchase_order_id=purchase_invoice.purchase_order_id) }}" class="btn btn-ghost btn-sm">View purchase order</a>
+    {% if purchase_orders | length == 1 %}
+    <a href="{{ url_for('purchase_orders.view_purchase_order', purchase_order_id=purchase_orders[0].id) }}" class="btn btn-ghost btn-sm">View purchase order</a>
+    {% elif purchase_orders %}
+    <details class="toolbar-menu">
+      <summary class="btn btn-ghost btn-sm">Purchase orders ({{ purchase_orders | length }}) ▾</summary>
+      <div class="toolbar-menu-panel">
+        {% for po in purchase_orders %}
+        <a href="{{ url_for('purchase_orders.view_purchase_order', purchase_order_id=po.id) }}" class="toolbar-menu-item">
+          <span class="mono">{{ po.po_number }}</span>
+          <span class="meta">{{ po.seller_name }} · {{ po.po_date }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+    {% if proforma_invoices | length == 1 %}
+    <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=proforma_invoices[0].id) }}" class="btn btn-ghost btn-sm">View proforma invoice</a>
+    {% elif proforma_invoices %}
+    <details class="toolbar-menu">
+      <summary class="btn btn-ghost btn-sm">Proforma invoices ({{ proforma_invoices | length }}) ▾</summary>
+      <div class="toolbar-menu-panel">
+        {% for pi in proforma_invoices %}
+        <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=pi.id) }}" class="toolbar-menu-item">
+          <span class="mono">{{ pi.invoice_number }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </details>
     {% endif %}
     {% if packing_lists %}
     <a href="{{ url_for('packing_lists.view_packing_list', packing_list_id=packing_lists[0].id) }}" class="btn btn-ghost btn-sm">📦 View packing list</a>
@@ -44,6 +70,16 @@
     <div class="field"><label>EPCG number</label><div>{{ purchase_invoice.epcg_number or '—' }}</div></div>
     <div class="field"><label>EPCG date</label><div>{{ purchase_invoice.epcg_date or '—' }}</div></div>
   </div>
+  {% if proforma_invoices %}
+  <div class="field">
+    <label>Proforma invoice{{ 's' if proforma_invoices | length > 1 }}</label>
+    <div>
+      {% for pi in proforma_invoices %}
+      <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=pi.id) }}">{{ pi.invoice_number }}</a>{{ ', ' if not loop.last }}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if purchase_invoice.vehicle_numbers %}
   <div class="field">
     <label>Vehicle numbers</label>
@@ -69,7 +105,7 @@
     <table class="ledger">
       <thead>
         <tr>
-          <th>Sr</th><th>Product</th><th>HSN code</th><th>Boxes</th><th>Qty</th><th>Unit</th>
+          <th>Sr</th><th>Product</th>{% if purchase_orders | length > 1 %}<th>Source PO</th>{% endif %}<th>HSN code</th><th>Boxes</th><th>Qty</th><th>Unit</th>
           <th>Price ({{ purchase_invoice.currency_name }})</th><th>Per</th><th class="num">Total ({{ purchase_invoice.currency_name }})</th>
         </tr>
       </thead>
@@ -78,6 +114,7 @@
         <tr>
           <td>{{ item.sr_no }}</td>
           <td>{{ item.product_name }}</td>
+          {% if purchase_orders | length > 1 %}<td class="text-sm text-soft">{{ item.source_po_number or '—' }}</td>{% endif %}
           <td>{{ item.hsn_code or '—' }}</td>
           <td>{{ item.quantity_boxes or '—' }}</td>
           <td>{{ item.quantity_value }}</td>

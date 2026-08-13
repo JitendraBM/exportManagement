@@ -167,6 +167,7 @@ def delete_category(category_id):
 def new_product():
     container = current_app.container
     categories_tree = container.product_service.list_categories_tree(g.user.company_id)
+    hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
     preselected_category_id = _int_or_none(request.args.get("category_id"))
     if request.method == "POST":
         try:
@@ -177,9 +178,11 @@ def new_product():
             flash(str(e), "error")
             return render_template("products/product_form.html", product=None, form_data=request.form,
                                     pallet_rows=_pallet_type_rows(request.form),
-                                    categories_tree=categories_tree, preselected_category_id=preselected_category_id), 400
+                                    categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                                    preselected_category_id=preselected_category_id), 400
     return render_template("products/product_form.html", product=None, form_data=None, pallet_rows=[],
-                            categories_tree=categories_tree, preselected_category_id=preselected_category_id)
+                            categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                            preselected_category_id=preselected_category_id)
 
 
 @products_bp.route("/<int:product_id>")
@@ -214,6 +217,7 @@ def edit_product(product_id):
     except NotFoundError:
         abort(404)
     categories_tree = container.product_service.list_categories_tree(g.user.company_id)
+    hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
 
     if request.method == "POST":
         try:
@@ -226,14 +230,16 @@ def edit_product(product_id):
             flash(str(e), "error")
             return render_template("products/product_form.html", product=product, form_data=request.form,
                                     pallet_rows=_pallet_type_rows(request.form),
-                                    categories_tree=categories_tree, preselected_category_id=product.category_id), 400
+                                    categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                                    preselected_category_id=product.category_id), 400
 
     pallet_rows = [
         {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet}
         for pt in container.product_service.pallet_types_for_product(product_id)
     ]
     return render_template("products/product_form.html", product=product, form_data=None, pallet_rows=pallet_rows,
-                            categories_tree=categories_tree, preselected_category_id=product.category_id)
+                            categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                            preselected_category_id=product.category_id)
 
 
 @products_bp.route("/<int:product_id>/delete", methods=["POST"])

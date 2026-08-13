@@ -132,12 +132,14 @@ def _extract_container_details(form) -> list:
 def _extract_purchase_details(form) -> list:
     gstins = form.getlist("pd_supplier_gstin[]")
     inv_nos = form.getlist("pd_supplier_invoice_no[]")
-    n = max(len(gstins), len(inv_nos))
+    names = form.getlist("pd_supplier_name[]")
+    n = max(len(gstins), len(inv_nos), len(names))
     rows = []
     for i in range(n):
         rows.append({
             "supplier_gstin": gstins[i] if i < len(gstins) else "",
             "supplier_invoice_no": inv_nos[i] if i < len(inv_nos) else "",
+            "supplier_name": names[i] if i < len(names) else "",
         })
     return rows
 

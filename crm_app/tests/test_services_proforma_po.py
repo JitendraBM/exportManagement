@@ -161,13 +161,16 @@ class TestProformaCrud:
 
     def test_cfr_terms_drop_only_the_insurance(self, container, seed):
         # CFR = cost AND FREIGHT: the seller keeps paying the freight, the
-        # buyer insures the cargo.
+        # buyer insures the cargo. Certification is only dropped under FOB
+        # (see drops_certification in app/utils.py), so CFR carries it same
+        # as sea freight.
         pi = self._create(container, seed, terms_of_delivery="CFR BEIRA",
                           sea_freight="10", insurance="20", certification="15")
         reloaded = container.proforma_invoice_service.get(pi.id, seed.company_id)
         assert reloaded.sea_freight == 10
         assert reloaded.insurance == 0
-        assert reloaded.cif_value_usd == 210.0  # 200 FOB total + 10 freight
+        assert reloaded.certification == 15
+        assert reloaded.cif_value_usd == 225.0  # 200 FOB total + 10 freight + 15 certification
         assert reloaded.fob_value_usd == 200.0  # always just the goods total
 
     def test_create_records_a_version(self, container, seed):
