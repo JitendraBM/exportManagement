@@ -52,7 +52,7 @@
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN, invoice no. &amp; name (imported for all purchases)</span></h3></div>
+    <div class="card-header"><h3>Purchase details <span class="text-soft text-sm">— supplier GSTIN, invoice no., name, Purchase under, EPCG number &amp; date (imported for all purchases)</span></h3></div>
     <div id="purchase-detail-rows">
       {% set pd_rows = form_purchase_details if form_purchase_details is not none else (invoice.purchase_details if invoice else []) %}
       {% for pd in pd_rows %}
@@ -72,11 +72,107 @@
           <input type="hidden" name="pd_supplier_name[]" value="{{ pd.supplier_name or '' }}">
           <div>{{ pd.supplier_name or '—' }}</div>
         </div>
+        <div class="field">
+          <label>Purchase under</label>
+          <input type="hidden" name="pd_purchase_type[]" value="{{ pd.purchase_type or 'full_tax' }}">
+          <div>{{ PURCHASE_TYPES.get(pd.purchase_type, pd.purchase_type) if pd.purchase_type else '—' }}</div>
+        </div>
+        <div class="field">
+          <label>EPCG number</label>
+          <input type="hidden" name="pd_epcg_number[]" value="{{ pd.epcg_number or '' }}">
+          <div>{{ pd.epcg_number or '—' }}</div>
+        </div>
+        <div class="field">
+          <label>EPCG date</label>
+          <input type="hidden" name="pd_epcg_date[]" value="{{ pd.epcg_date or '' }}">
+          <div>{{ pd.epcg_date or '—' }}</div>
+        </div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>
       </div>
       {% endfor %}
     </div>
     <button type="button" class="btn btn-ghost btn-sm" id="add-pd-btn">+ Add supplier row</button>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Container details</h3></div>
+    <div class="form-row">
+      <div class="field">
+        <label for="booking_no">Booking no. <span class="text-soft text-sm">(from Booking Details under Master Data, narrowed to the buyer picked above — fills in vessel/voyage, transporter and every container row below)</span></label>
+        <select id="booking_no" name="booking_no">
+          <option value="">— Select a booking —</option>
+          {% if data.booking_no and data.booking_no not in bookings | map(attribute='booking_no') | list %}
+          <option value="{{ data.booking_no }}" selected>{{ data.booking_no }}</option>
+          {% endif %}
+          {% for b in bookings if b.booking_no %}
+          <option value="{{ b.booking_no }}" {{ 'selected' if b.booking_no == data.booking_no }}
+                  data-buyer-id="{{ b.buyer_id }}"
+                  data-vessel-name="{{ b.vessel_name or '' }}"
+                  data-voyage-no="{{ b.voyage_no or '' }}"
+                  data-transporter-name="{{ b.transporter_name or '' }}"
+                  data-containers='{{ b.containers | tojson }}'
+                  data-container-details='{{ b.container_details | tojson }}'>
+            {{ b.booking_no }}{% if b.buyer_name %} — {{ b.buyer_name }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label for="vessel_name">Vessel Name/Flight name <span class="text-soft text-sm">(printed together with Voyage no. as "Vessel / Flight Name &amp; No" on the invoice and packing list; filled in from the booking picked above)</span></label><input type="text" id="vessel_name" name="vessel_name" placeholder="e.g. MSC ANNA" value="{{ data.vessel_name | default('', true) }}" readonly></div>
+      <div class="field"><label for="voyage_no">Voyage No.</label><input type="text" id="voyage_no" name="voyage_no" placeholder="e.g. VOY 214W" value="{{ data.voyage_no | default('', true) }}" readonly></div>
+    </div>
+
+    <div id="container-rows" style="margin-top:14px;">
+      {% set c_rows = form_containers if form_containers is not none else (invoice.containers if invoice else []) %}
+      {% for c in c_rows %}
+      <div class="form-row container-row">
+        <div class="field"><label>Container type</label><input type="text" name="container_type[]" class="js-container-type" value="{{ c.container_type or '' }}" readonly></div>
+        <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count" value="{{ c.container_count or '' }}"></div>
+        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="hint">Pick a booking above to fill this and the 11B table in below; No. of containers can be corrected by hand afterwards (e.g. if this invoice only covers part of the booking) — use Remove to drop a row this invoice doesn't need.</p>
+
+    {# Transporter used to be typed per container; every container on one
+       invoice is in practice carried by the same transporter, so it's now a
+       single invoice-level pick that gets applied to every 11B row at save
+       time (see _extract_container_details) - storage and printing are
+       still per-row and untouched. Defaults from whatever the first saved
+       row already carries. #}
+    {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
+    {% set cd_transporter = (cd_rows[0].transporter_name if cd_rows else '') %}
+    <div class="form-row" style="margin-top:14px;">
+      <div class="field">
+        <label for="cd_transporter_name">Transporter <span class="text-soft text-sm">(applies to every container below; filled in from the booking picked above)</span></label>
+        <input type="text" id="cd_transporter_name" name="cd_transporter_name" value="{{ cd_transporter | default('', true) }}" readonly>
+      </div>
+    </div>
+
+    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
+    <div class="table-wrap">
+      <table class="ledger" id="cd-table">
+        <thead>
+          <tr><th>Sr</th><th class="cd-type-col">Container type</th><th>Container no.</th><th>Max permitted weight</th><th>Tare weight</th><th>Vehicle no.</th><th>LR no.</th><th>Line seal no.</th><th>RFID seal no.</th><th></th></tr>
+        </thead>
+        <tbody id="cd-body">
+          {% for cd in cd_rows %}
+          <tr class="cd-row">
+            <td class="cd-sr">{{ loop.index }}</td>
+            <td class="cd-type-col"><input type="text" name="cd_container_type[]" value="{{ cd.container_type or '' }}" readonly></td>
+            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}" readonly></td>
+            <td><input type="number" step="any" name="cd_tare_weight_kg[]" value="{{ cd.tare_weight_kg if cd.tare_weight_kg is not none else '' }}" readonly></td>
+            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_lr_no[]" value="{{ cd.lr_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}" readonly></td>
+            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}" readonly></td>
+            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">Only readable here — pick a booking above to fill this table in; use Remove to drop a container this invoice doesn't carry.</p>
   </div>
 
   <div class="card">
@@ -100,13 +196,22 @@
       </div>
       <div class="field">
         <label for="tax_mode">Supply meant for</label>
-        {% set tm = data.tax_mode | default('igst', true) %}
+        {# A purchase under exemption (0.1% GST) forces this onto LUT - that
+           concessional rate only holds when the export itself carries no
+           IGST - so it's locked read-only the moment any purchase-detail row
+           imported below is one (see pd_rows in the Purchase details card
+           above, whose purchase_type this reads). _build_header enforces the
+           same rule server-side regardless, recomputed fresh from the
+           purchase chain rather than trusted from this field. #}
+        {% set has_exemption_purchase = pd_rows | selectattr('purchase_type', 'equalto', 'exemption') | list | length > 0 %}
+        {% set tm = 'lut' if has_exemption_purchase else data.tax_mode | default('igst', true) %}
         {% set primary_lut = (company.lut_details | selectattr('is_primary') | list | first) if company and company.lut_details else None %}
         {% set lut_no = (primary_lut or (company.lut_details[0] if company and company.lut_details else None) or {}).get('lut_number') if company and company.lut_details else None %}
-        <select id="tax_mode" name="tax_mode">
+        <select id="tax_mode" name="tax_mode" {{ 'disabled' if has_exemption_purchase }}>
           <option value="igst" {{ 'selected' if tm != 'lut' }}>With Payment of IGST</option>
           <option value="lut" {{ 'selected' if tm == 'lut' }}>Without Payment of IGST under LUT{{ ' no. ' + lut_no if lut_no else '' }}</option>
         </select>
+        <div class="text-sm text-soft" id="tax-mode-lock-hint" {{ '' if has_exemption_purchase else 'hidden' }}>Locked — a linked purchase invoice is under GST exemption (0.1%).</div>
       </div>
       <div class="field">
         {# Options come from Administration -> Miscellaneous (currency_options). #}
@@ -127,8 +232,76 @@
           {% for currency in currency_options %}
           <option value="{{ currency.name }}" data-symbol="{{ currency.symbol }}" {{ 'selected' if currency.name == chosen_currency }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
           {% endfor %}
+          {% if current_user.is_admin and not selected_ids %}<option value="__add_currency__">+ Add a new currency&hellip;</option>{% endif %}
         </select>
         {% if selected_ids %}<div class="text-sm text-soft">Locked to the linked proforma invoice's currency.</div>{% endif %}
+        {% if current_user.is_admin and not selected_ids %}
+        <div id="currency-add-panel" hidden style="margin-top:8px;">
+          <div class="form-row">
+            <div class="field">
+              <label for="currency-add-name">Currency name<span class="required-mark">*</span></label>
+              <input type="text" id="currency-add-name" placeholder="e.g. USD">
+            </div>
+            <div class="field">
+              <label for="currency-add-symbol">Symbol<span class="required-mark">*</span></label>
+              <input type="text" id="currency-add-symbol" placeholder="e.g. $">
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="currency-add-save">Add currency</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="currency-add-cancel">Cancel</button>
+        </div>
+        <script>
+        (function () {
+          const select = document.getElementById('currency_code');
+          const panel = document.getElementById('currency-add-panel');
+          const nameEl = document.getElementById('currency-add-name');
+          const symbolEl = document.getElementById('currency-add-symbol');
+          let previous = select.value;
+
+          function closePanel() {
+            panel.hidden = true;
+            nameEl.value = '';
+            symbolEl.value = '';
+            select.value = previous;
+          }
+
+          select.addEventListener('change', () => {
+            if (select.value !== '__add_currency__') { previous = select.value; return; }
+            select.value = previous;
+            panel.hidden = false;
+            nameEl.focus();
+          });
+
+          document.getElementById('currency-add-cancel').addEventListener('click', closePanel);
+
+          [nameEl, symbolEl].forEach((el) => el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); addCurrency(); }
+          }));
+
+          document.getElementById('currency-add-save').addEventListener('click', addCurrency);
+
+          function addCurrency() {
+            const body = new FormData();
+            body.append('name', nameEl.value);
+            body.append('symbol', symbolEl.value);
+            fetch('/misc/api/currencies', { method: 'POST', body: body })
+              .then(r => r.json().then(data => ({ ok: r.ok, data })))
+              .then(({ ok, data }) => {
+                if (!ok) { alert(data.error || 'Could not add the currency.'); return; }
+                const label = data.name + ' [ ' + data.symbol + ' ]';
+                const option = new Option(label, data.name, false, false);
+                option.dataset.symbol = data.symbol;
+                select.add(option, select.options[select.options.length - 1]);
+                previous = data.name;
+                select.value = data.name;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                closePanel();
+              })
+              .catch(() => alert('Something went wrong adding the currency.'));
+          }
+        })();
+        </script>
+        {% endif %}
       </div>
       <div class="field">
         <div class="flex-between">
@@ -223,87 +396,6 @@
     <div class="field"><label for="payment_terms">Payment terms</label><input type="text" id="payment_terms" name="payment_terms" placeholder="e.g. 40% Advance & Remain Before Delivery" value="{{ data.payment_terms | default('', true) }}"></div>
   </div>
 
-  <div class="card">
-    <div class="card-header"><h3>Container details</h3></div>
-    <div class="form-row">
-      <div class="field">
-        <label for="booking_no">Booking no. <span class="text-soft text-sm">(from Booking Details under Master Data, narrowed to the buyer picked above — fills in vessel/voyage, transporter and every container row below)</span></label>
-        <select id="booking_no" name="booking_no">
-          <option value="">— Select a booking —</option>
-          {% if data.booking_no and data.booking_no not in bookings | map(attribute='booking_no') | list %}
-          <option value="{{ data.booking_no }}" selected>{{ data.booking_no }}</option>
-          {% endif %}
-          {% for b in bookings if b.booking_no %}
-          <option value="{{ b.booking_no }}" {{ 'selected' if b.booking_no == data.booking_no }}
-                  data-buyer-id="{{ b.buyer_id }}"
-                  data-vessel-name="{{ b.vessel_name or '' }}"
-                  data-voyage-no="{{ b.voyage_no or '' }}"
-                  data-transporter-name="{{ b.transporter_name or '' }}"
-                  data-containers='{{ b.containers | tojson }}'
-                  data-container-details='{{ b.container_details | tojson }}'>
-            {{ b.booking_no }}{% if b.buyer_name %} — {{ b.buyer_name }}{% endif %}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field"><label for="vessel_name">Vessel Name/Flight name <span class="text-soft text-sm">(printed together with Voyage no. as "Vessel / Flight Name &amp; No" on the invoice and packing list; filled in from the booking picked above)</span></label><input type="text" id="vessel_name" name="vessel_name" placeholder="e.g. MSC ANNA" value="{{ data.vessel_name | default('', true) }}" readonly></div>
-      <div class="field"><label for="voyage_no">Voyage No.</label><input type="text" id="voyage_no" name="voyage_no" placeholder="e.g. VOY 214W" value="{{ data.voyage_no | default('', true) }}" readonly></div>
-    </div>
-
-    <div id="container-rows" style="margin-top:14px;">
-      {% set c_rows = form_containers if form_containers is not none else (invoice.containers if invoice else []) %}
-      {% for c in c_rows %}
-      <div class="form-row container-row">
-        <div class="field"><label>Container type</label><input type="text" name="container_type[]" class="js-container-type" value="{{ c.container_type or '' }}" readonly></div>
-        <div class="field" style="max-width:120px;"><label>No. of containers</label><input type="number" min="0" step="1" name="container_count[]" class="js-container-count" value="{{ c.container_count or '' }}"></div>
-        <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-container">Remove</button></div>
-      </div>
-      {% endfor %}
-    </div>
-    <p class="hint">Pick a booking above to fill this and the 11B table in below; No. of containers can be corrected by hand afterwards (e.g. if this invoice only covers part of the booking) — use Remove to drop a row this invoice doesn't need.</p>
-
-    {# Transporter used to be typed per container; every container on one
-       invoice is in practice carried by the same transporter, so it's now a
-       single invoice-level pick that gets applied to every 11B row at save
-       time (see _extract_container_details) - storage and printing are
-       still per-row and untouched. Defaults from whatever the first saved
-       row already carries. #}
-    {% set cd_rows = form_container_details if form_container_details is not none else (invoice.container_details if invoice else []) %}
-    {% set cd_transporter = (cd_rows[0].transporter_name if cd_rows else '') %}
-    <div class="form-row" style="margin-top:14px;">
-      <div class="field">
-        <label for="cd_transporter_name">Transporter <span class="text-soft text-sm">(applies to every container below; filled in from the booking picked above)</span></label>
-        <input type="text" id="cd_transporter_name" name="cd_transporter_name" value="{{ cd_transporter | default('', true) }}" readonly>
-      </div>
-    </div>
-
-    <h4 style="margin-top:16px;">Container details (11B) <span class="text-soft text-sm">— one row per physical container</span></h4>
-    <div class="table-wrap">
-      <table class="ledger" id="cd-table">
-        <thead>
-          <tr><th>Sr</th><th class="cd-type-col">Container type</th><th>Container no.</th><th>Max permitted weight</th><th>Tare weight</th><th>Vehicle no.</th><th>LR no.</th><th>Line seal no.</th><th>RFID seal no.</th><th></th></tr>
-        </thead>
-        <tbody id="cd-body">
-          {% for cd in cd_rows %}
-          <tr class="cd-row">
-            <td class="cd-sr">{{ loop.index }}</td>
-            <td class="cd-type-col"><input type="text" name="cd_container_type[]" value="{{ cd.container_type or '' }}" readonly></td>
-            <td><input type="text" name="cd_container_no[]" value="{{ cd.container_no or '' }}" readonly></td>
-            <td><input type="text" name="cd_max_permitted_weight[]" value="{{ cd.max_permitted_weight or '' }}" readonly></td>
-            <td><input type="number" step="any" name="cd_tare_weight_kg[]" value="{{ cd.tare_weight_kg if cd.tare_weight_kg is not none else '' }}" readonly></td>
-            <td><input type="text" name="cd_vehicle_no[]" value="{{ cd.vehicle_no or '' }}" readonly></td>
-            <td><input type="text" name="cd_lr_no[]" value="{{ cd.lr_no or '' }}" readonly></td>
-            <td><input type="text" name="cd_line_seal_no[]" value="{{ cd.line_seal_no or '' }}" readonly></td>
-            <td><input type="text" name="cd_rfid_seal_no[]" value="{{ cd.rfid_seal_no or '' }}" readonly></td>
-            <td><button type="button" class="btn-link-danger js-remove-cd">Remove</button></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="hint">Only readable here — pick a booking above to fill this table in; use Remove to drop a container this invoice doesn't carry.</p>
-  </div>
-
   {# Export Under used to be its own visible card (a "Government scheme"
      textarea plus EPCG licence no./date). Government scheme is now always
      OurCompany.government_schemes, live at print time - see the printed
@@ -374,6 +466,7 @@
               <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
               <textarea name="item_product_name[]" class="js-product-name" rows="2" required>{{ row.product_name }}</textarea>
               <input type="hidden" name="item_surface[]" class="js-surface" value="{{ row.surface or '' }}">
+              <input type="hidden" name="item_pallet_weight_kg[]" class="js-pallet-weight" value="{{ row.pallet_weight_kg or '' }}">
               <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
             </td>
             <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
@@ -562,6 +655,10 @@
 
 <script>
 (function () {
+  // For the JS-built purchase-detail rows below (Load from PIs / + Add
+  // supplier row) - the server-rendered rows resolve this label directly.
+  const PURCHASE_TYPE_LABELS = {{ PURCHASE_TYPES | tojson }};
+
   function setUnitValue(sel, u) {
     if (!u) return;
     if (!Array.from(sel.options).some((o) => o.value === u)) sel.appendChild(new Option(u, u));
@@ -580,6 +677,7 @@
         <input type="hidden" name="item_product_id[]" class="js-product-id">
         <textarea name="item_product_name[]" class="js-product-name" rows="2" required></textarea>
         <input type="hidden" name="item_surface[]" class="js-surface">
+        <input type="hidden" name="item_pallet_weight_kg[]" class="js-pallet-weight">
         <button type="button" class="btn btn-ghost btn-sm js-choose-product">📦 Choose product</button>
       </td>
       <td><input type="text" name="item_hsn_code[]" class="js-hsn" readonly tabindex="-1"></td>
@@ -680,7 +778,9 @@
     (types || []).forEach((t) => {
       let label = `${t.name} — ${t.boxes_per_pallet} boxes/plt`;
       if (t.alt_qty_per_pallet) label += ` (${t.alt_qty_per_pallet} ${unit})`;
-      sel.appendChild(new Option(label, String(t.boxes_per_pallet)));
+      const opt = new Option(label, String(t.boxes_per_pallet));
+      opt.dataset.weightKg = t.weight_kg ?? '';
+      sel.appendChild(opt);
     });
     sel.appendChild(new Option('Manual — type Plts by hand', 'manual'));
     if (previous !== null && Array.from(sel.options).some((o) => o.value === previous)) sel.value = previous;
@@ -689,6 +789,13 @@
   function recalcRowPallets(tr) {
     const sel = tr.querySelector('.js-pallet-type');
     const palletsEl = tr.querySelector('.js-pallets');
+    const weightEl = tr.querySelector('.js-pallet-weight');
+    // The selected pallet type's own weight_kg, snapshotted here so the
+    // container-split's Gross (KG) formula (Net + Plts x this) can use it
+    // without needing to know which type it was - blank for Loose/Manual,
+    // where the weight is unknown and Gross falls back to the product's own
+    // per-box gross weight instead (see ExportPackingListService.build_items).
+    weightEl.value = (sel.value !== '' && sel.value !== 'manual') ? (sel.selectedOptions[0].dataset.weightKg || '') : '';
     if (sel.value === '') { palletsEl.value = ''; palletsEl.readOnly = true; return; }
     if (sel.value === 'manual') { palletsEl.readOnly = false; return; }
     const perPallet = parseFloat(sel.value) || 0;
@@ -712,6 +819,7 @@
       sel.value = '';
       palletsEl.value = '';
       palletsEl.readOnly = true;
+      tr.querySelector('.js-pallet-weight').value = '';
       return;
     }
     const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
@@ -948,6 +1056,24 @@
       const el = document.getElementById(name);
       if (el && !el.value.trim() && data.fields[name]) el.value = data.fields[name];
     });
+
+    // Supply meant for: locked onto LUT the moment any purchase-detail row
+    // this load imports is under exemption (0.1% GST) - mirrors the
+    // server-side render (see the tax_mode <select> in the Invoice details
+    // card) and _build_header's own enforcement at save time. Explicitly
+    // released again on a reload that no longer has one, rather than only
+    // ever locking, so picking a different set of PIs can unlock it too.
+    const taxModeSelect = document.getElementById('tax_mode');
+    const taxModeHint = document.getElementById('tax-mode-lock-hint');
+    if (data.fields.tax_mode_locked) {
+      taxModeSelect.value = 'lut';
+      taxModeSelect.disabled = true;
+      if (taxModeHint) taxModeHint.hidden = false;
+    } else {
+      taxModeSelect.disabled = false;
+      if (taxModeHint) taxModeHint.hidden = true;
+    }
+
     refreshCurrencyLabels();
     applyDeliveryTermCharges();
 
@@ -973,13 +1099,23 @@
         <div class="field"><label>Supplier GSTIN</label><input type="hidden" name="pd_supplier_gstin[]"><div class="js-pd-gstin-display">—</div></div>
         <div class="field"><label>Supplier invoice no.</label><input type="hidden" name="pd_supplier_invoice_no[]"><div class="js-pd-invno-display">—</div></div>
         <div class="field"><label>Supplier name</label><input type="hidden" name="pd_supplier_name[]"><div class="js-pd-name-display">—</div></div>
+        <div class="field"><label>Purchase under</label><input type="hidden" name="pd_purchase_type[]"><div class="js-pd-type-display">—</div></div>
+        <div class="field"><label>EPCG number</label><input type="hidden" name="pd_epcg_number[]"><div class="js-pd-epcg-number-display">—</div></div>
+        <div class="field"><label>EPCG date</label><input type="hidden" name="pd_epcg_date[]"><div class="js-pd-epcg-date-display">—</div></div>
         <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
       div.querySelector('[name="pd_supplier_gstin[]"]').value = pd.supplier_gstin || '';
       div.querySelector('[name="pd_supplier_invoice_no[]"]').value = pd.supplier_invoice_no || '';
       div.querySelector('[name="pd_supplier_name[]"]').value = pd.supplier_name || '';
+      div.querySelector('[name="pd_purchase_type[]"]').value = pd.purchase_type || 'full_tax';
+      div.querySelector('[name="pd_epcg_number[]"]').value = pd.epcg_number || '';
+      div.querySelector('[name="pd_epcg_date[]"]').value = pd.epcg_date || '';
       div.querySelector('.js-pd-gstin-display').textContent = pd.supplier_gstin || '—';
       div.querySelector('.js-pd-invno-display').textContent = pd.supplier_invoice_no || '—';
       div.querySelector('.js-pd-name-display').textContent = pd.supplier_name || '—';
+      div.querySelector('.js-pd-type-display').textContent =
+        (pd.purchase_type && PURCHASE_TYPE_LABELS[pd.purchase_type]) || pd.purchase_type || '—';
+      div.querySelector('.js-pd-epcg-number-display').textContent = pd.epcg_number || '—';
+      div.querySelector('.js-pd-epcg-date-display').textContent = pd.epcg_date || '—';
       pdWrap.appendChild(div);
     });
 
@@ -1050,6 +1186,9 @@
       <div class="field"><label>Supplier GSTIN</label><input type="hidden" name="pd_supplier_gstin[]"><div>—</div></div>
       <div class="field"><label>Supplier invoice no.</label><input type="hidden" name="pd_supplier_invoice_no[]"><div>—</div></div>
       <div class="field"><label>Supplier name</label><input type="hidden" name="pd_supplier_name[]"><div>—</div></div>
+      <div class="field"><label>Purchase under</label><input type="hidden" name="pd_purchase_type[]"><div>—</div></div>
+      <div class="field"><label>EPCG number</label><input type="hidden" name="pd_epcg_number[]"><div>—</div></div>
+      <div class="field"><label>EPCG date</label><input type="hidden" name="pd_epcg_date[]"><div>—</div></div>
       <div class="field" style="max-width:90px;align-self:flex-end;"><button type="button" class="btn-link-danger js-remove-pd">Remove</button></div>`;
     wrap.appendChild(div);
   });
@@ -1265,6 +1404,7 @@
       hsn: tr.querySelector('.js-hsn').value || '',
       net: parseFloat(tr.dataset.netWeight) || 0,
       gross: parseFloat(tr.dataset.grossWeight) || 0,
+      palletWeightKg: parseFloat(tr.querySelector('.js-pallet-weight').value) || 0,
       group: tr.dataset.groupLabel || '',
     })).filter((line) => line.name);
   }
@@ -1343,9 +1483,18 @@
     tr.querySelector('.js-alloc-qty').textContent = qty ? `${fmt(qty)} ${line.unit}` : '—';
     if (force) {
       const pallets = line.boxes ? round2(boxes * line.pallets / line.boxes) : 0;
+      const net = line.net ? round2(boxes * line.net) : 0;
       tr.querySelector('.js-alloc-pallets').value = pallets || '';
-      tr.querySelector('.js-alloc-net').value = line.net ? round2(boxes * line.net) : '';
-      tr.querySelector('.js-alloc-gross').value = line.gross ? round2(boxes * line.gross) : '';
+      tr.querySelector('.js-alloc-net').value = net || '';
+      // Gross = Net + Plts x the selected pallet type's own weight, once a
+      // real type is known for this goods line; falls back to the product's
+      // flat per-box gross weight (the old formula) for Loose/Manual, where
+      // no pallet weight is known - see ExportPackingListService.build_items,
+      // which mirrors this server-side at save time.
+      const gross = line.palletWeightKg
+        ? round2(net + pallets * line.palletWeightKg)
+        : (line.gross ? round2(boxes * line.gross) : 0);
+      tr.querySelector('.js-alloc-gross').value = gross || '';
     }
   }
 

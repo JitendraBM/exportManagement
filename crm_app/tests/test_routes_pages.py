@@ -529,6 +529,84 @@ class TestExportPackingListRoutes:
         assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
         assert lines[2].startswith("EPCG LICENCE NO : 2431000888")
 
+    def test_exemption_purchase_locks_tax_mode_and_prints_in_the_0_1_percent_gst_block(self, admin_ctx):
+        """A purchase invoice under exemption (0.1% GST) forces the export
+        invoice onto LUT even though 'igst' is what gets posted here (see
+        ExportInvoiceService._build_header/_has_exemption_purchase), and only
+        then does the printed sheet's "Purchase Details of 0.1% GST" block
+        list that supplier's GSTIN/invoice."""
+        client, container, admin, company_id = admin_ctx
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44")
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-01-01"},
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_value": "144", "price_usd": "5.92"}])
+        po = container.purchase_order_service.create(
+            admin, {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+                    "proforma_invoice_id": str(proforma.id), "purchase_type": "exemption"},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+        container.purchase_invoice_service.create(
+            admin, {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
+                    "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id), "purchase_type": "exemption"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_inr": "500", "price_per": "BOX",
+              "quantity_boxes": "10"}], [])
+
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "proforma_invoice_ids[]": str(proforma.id), "tax_mode": "igst",
+            # What "Load from selected PIs" would have posted for this
+            # chain's Purchase Details row (see build_prefill_from_proformas).
+            "pd_supplier_gstin[]": "24ABVFA1170D1ZO", "pd_supplier_invoice_no[]": "GSTT/4987",
+            "pd_supplier_name[]": "Alive Granito", "pd_purchase_type[]": "exemption",
+        })
+        got = container.export_invoice_service.get(invoice.id, company_id)
+        assert got.tax_mode == "lut"
+
+        page = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "Purchase Details of" in page
+        anchor = page.find("Purchase Details of")
+        block = page[anchor:anchor + 800]
+        assert "24ABVFA1170D1ZO" in block
+        assert "GSTT/4987" in block
+
+    def test_full_tax_only_purchase_keeps_the_0_1_percent_gst_block_empty(self, admin_ctx):
+        """Same chain, but the purchase invoice is full_tax (not exemption):
+        tax_mode stays whatever was posted, and nothing prints in the 0.1%
+        GST block even though the general Purchase Details card elsewhere
+        still lists every purchase regardless of type."""
+        client, container, admin, company_id = admin_ctx
+        product = container.product_service.create_product(
+            current_user=admin, product_name="GVT 600X1200", description="", hsn_code="69072100",
+            igst_percent="18", quantity="4", alternate_quantity="1.44")
+        proforma = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "ROBUST INTERNATIONAL", "invoice_date": "2026-01-01"},
+            [{"product_name": "GVT 600X1200", "product_id": str(product.id), "quantity_value": "144", "price_usd": "5.92"}])
+        po = container.purchase_order_service.create(
+            admin, {"seller_name": "Alive Granito", "po_date": "2026-01-10", "seller_gstin": "24ABVFA1170D1ZO",
+                    "proforma_invoice_id": str(proforma.id), "purchase_type": "full_tax"},
+            [{"product_name": "Tiles", "product_id": str(product.id), "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+        container.purchase_invoice_service.create(
+            admin, {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
+                    "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id), "purchase_type": "full_tax"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_inr": "500", "price_per": "BOX",
+              "quantity_boxes": "10"}], [])
+
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={
+            "proforma_invoice_ids[]": str(proforma.id), "tax_mode": "igst",
+            "pd_supplier_gstin[]": "24ABVFA1170D1ZO", "pd_supplier_invoice_no[]": "GSTT/4987",
+            "pd_supplier_name[]": "Alive Granito", "pd_purchase_type[]": "full_tax",
+        })
+        got = container.export_invoice_service.get(invoice.id, company_id)
+        assert got.tax_mode == "igst"
+
+        page = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        anchor = page.find("Purchase Details of")
+        assert anchor != -1
+        block = page[anchor:anchor + 800]
+        assert "24ABVFA1170D1ZO" not in block
+
     def test_the_epcg_line_is_absent_when_there_is_no_licence(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")

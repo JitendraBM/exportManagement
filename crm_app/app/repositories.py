@@ -18,7 +18,7 @@ from typing import Optional, List, Sequence
 from app.database import Database
 from app.models import (
     Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
-    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
+    PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, MiscCountry, MiscUnit, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
@@ -391,10 +391,11 @@ class SqlitePartyRepository(PartyRepositoryBase):
         multi-table write convert_from_lead needs."""
         new_id = self.db.execute(
             f"""INSERT INTO {self.table} (company_id, lead_id, company_name, phone, email, facebook,
-                                           instagram, other_social, address, status, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                           instagram, other_social, address, country, status, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (party.company_id, party.lead_id, party.company_name, party.phone, party.email,
-             party.facebook, party.instagram, party.other_social, party.address, party.status, party.created_by),
+             party.facebook, party.instagram, party.other_social, party.address, party.country,
+             party.status, party.created_by),
         )
         party.id = new_id
         return party
@@ -409,11 +410,11 @@ class SqlitePartyRepository(PartyRepositoryBase):
         self.db.execute(
             f"""UPDATE {self.table} SET company_name = ?, phone = ?, email = ?,
                                         facebook = ?, instagram = ?, other_social = ?,
-                                        address = ?, updated_at = datetime('now')
+                                        address = ?, country = ?, updated_at = datetime('now')
                 WHERE id = ?""",
             (fields["company_name"], fields["phone"], fields["email"],
              fields.get("facebook"), fields.get("instagram"), fields.get("other_social"),
-             fields.get("address"), party_id),
+             fields.get("address"), fields.get("country"), party_id),
         )
 
     def delete(self, party_id: int) -> None:
@@ -1167,6 +1168,90 @@ class MiscHsnCodeRepository:
         self.db.execute("DELETE FROM misc_hsn_codes WHERE id = ?", (row_id,))
 
 
+class MiscCountryRepository:
+    """The COUNTRY drop list (Administration -> Miscellaneous): one name
+    per row, feeding a Buyer's "Country Name" field."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscCountry]:
+        row = self.db.query_one("SELECT * FROM misc_countries WHERE id = ?", (row_id,))
+        return MiscCountry.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscCountry]:
+        rows = self.db.query(
+            "SELECT * FROM misc_countries WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscCountry.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscCountry]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_countries WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscCountry.from_row(row) if row else None
+
+    def create(self, entry: MiscCountry) -> MiscCountry:
+        new_id = self.db.execute(
+            "INSERT INTO misc_countries (company_id, name) VALUES (?, ?)",
+            (entry.company_id, entry.name),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscCountry) -> None:
+        self.db.execute(
+            "UPDATE misc_countries SET name = ?, updated_at = datetime('now') WHERE id = ?",
+            (entry.name, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_countries WHERE id = ?", (row_id,))
+
+
+class MiscUnitRepository:
+    """The UNIT drop list (Administration -> Miscellaneous): a unit
+    abbreviation plus what it means in words, kept together on one row."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def get_by_id(self, row_id: int) -> Optional[MiscUnit]:
+        row = self.db.query_one("SELECT * FROM misc_units WHERE id = ?", (row_id,))
+        return MiscUnit.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[MiscUnit]:
+        rows = self.db.query(
+            "SELECT * FROM misc_units WHERE company_id = ? ORDER BY name COLLATE NOCASE",
+            (company_id,),
+        )
+        return [MiscUnit.from_row(r) for r in rows]
+
+    def find_by_name(self, company_id: int, name: str) -> Optional[MiscUnit]:
+        row = self.db.query_one(
+            "SELECT * FROM misc_units WHERE company_id = ? AND name = ? COLLATE NOCASE",
+            (company_id, name),
+        )
+        return MiscUnit.from_row(row) if row else None
+
+    def create(self, entry: MiscUnit) -> MiscUnit:
+        new_id = self.db.execute(
+            "INSERT INTO misc_units (company_id, name, meaning) VALUES (?, ?, ?)",
+            (entry.company_id, entry.name, entry.meaning),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, row_id: int, entry: MiscUnit) -> None:
+        self.db.execute(
+            "UPDATE misc_units SET name = ?, meaning = ?, updated_at = datetime('now') WHERE id = ?",
+            (entry.name, entry.meaning, row_id),
+        )
+
+    def delete(self, row_id: int) -> None:
+        self.db.execute("DELETE FROM misc_units WHERE id = ?", (row_id,))
+
+
 # ============================================================
 # PRODUCT CATALOG (products -> folders -> designs)
 # ============================================================
@@ -1520,9 +1605,9 @@ class ProductPalletTypeRepository:
             conn.execute("DELETE FROM product_pallet_types WHERE product_id = ?", (product_id,))
             for order, pt in enumerate(pallet_types):
                 conn.execute(
-                    "INSERT INTO product_pallet_types (company_id, product_id, name, boxes_per_pallet, sort_order) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (company_id, product_id, pt.name, pt.boxes_per_pallet, order),
+                    "INSERT INTO product_pallet_types (company_id, product_id, name, boxes_per_pallet, weight_kg, sort_order) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (company_id, product_id, pt.name, pt.boxes_per_pallet, pt.weight_kg, order),
                 )
 
 
@@ -1936,21 +2021,6 @@ class ProformaInvoiceRepository:
         )
         return [ProformaInvoice.from_row(r) for r in rows]
 
-    def list_for_lead(self, lead_id: int) -> List[ProformaInvoice]:
-        """Same 'reference-only' join pattern as QuotationRepository.list_for_lead -
-        a converted client sees its proforma invoices through its originating
-        lead_id, nothing to keep in sync by hand."""
-        rows = self.db.query(
-            """SELECT pi.*, u.full_name AS created_by_name,
-                      COALESCE((SELECT SUM(total_usd) FROM proforma_invoice_items WHERE proforma_invoice_id = pi.id), 0) AS items_total
-               FROM proforma_invoices pi
-               JOIN users u ON u.id = pi.created_by
-               WHERE pi.lead_id = ?
-               ORDER BY pi.invoice_date DESC, pi.id DESC""",
-            (lead_id,),
-        )
-        return [ProformaInvoice.from_row(r) for r in rows]
-
     def list_for_quotation(self, quotation_id: int) -> List[ProformaInvoice]:
         """Every proforma invoice generated from this quotation, newest first -
         used to link back to an already-generated PI instead of starting a
@@ -1994,7 +2064,7 @@ class ProformaInvoiceRepository:
     def create(self, invoice: ProformaInvoice) -> ProformaInvoice:
         new_id = self.db.execute(
             """INSERT INTO proforma_invoices
-               (company_id, invoice_number, invoice_date, lead_id, quotation_id, export_ref_no,
+               (company_id, invoice_number, invoice_date, quotation_id, export_ref_no,
                 buyer_order_no, other_reference, consignee_name, consignee_address, notify_name,
                 notify_address, country_of_origin, country_of_destination,
                 port_of_loading, port_of_discharge, final_destination, transhipment, partial_shipment,
@@ -2003,8 +2073,8 @@ class ProformaInvoiceRepository:
                 fob_pricing, round_off,
                 bank_name, bank_account_number, bank_ifsc_code, bank_swift_code, bank_branch,
                 bank_address, display_mode, status, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (invoice.company_id, invoice.invoice_number, invoice.invoice_date, invoice.lead_id,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (invoice.company_id, invoice.invoice_number, invoice.invoice_date,
              invoice.quotation_id, invoice.export_ref_no, invoice.buyer_order_no, invoice.other_reference,
              invoice.consignee_name, invoice.consignee_address, invoice.notify_name, invoice.notify_address,
              invoice.country_of_origin, invoice.country_of_destination,
@@ -2028,7 +2098,7 @@ class ProformaInvoiceRepository:
         moved by update_status below, so re-saving an invoice can never
         silently un-confirm it (or confirm it) as a side effect."""
         self.db.execute(
-            """UPDATE proforma_invoices SET invoice_date = ?, lead_id = ?, quotation_id = ?,
+            """UPDATE proforma_invoices SET invoice_date = ?, quotation_id = ?,
                                              export_ref_no = ?, buyer_order_no = ?, other_reference = ?,
                                              consignee_name = ?, consignee_address = ?, notify_name = ?,
                                              notify_address = ?, country_of_origin = ?, country_of_destination = ?,
@@ -2044,7 +2114,7 @@ class ProformaInvoiceRepository:
                                              currency_code = ?, currency_symbol = ?,
                                              updated_at = datetime('now')
                WHERE id = ?""",
-            (invoice.invoice_date, invoice.lead_id, invoice.quotation_id, invoice.export_ref_no,
+            (invoice.invoice_date, invoice.quotation_id, invoice.export_ref_no,
              invoice.buyer_order_no, invoice.other_reference, invoice.consignee_name,
              invoice.consignee_address, invoice.notify_name, invoice.notify_address,
              invoice.country_of_origin, invoice.country_of_destination,
@@ -2182,7 +2252,8 @@ class ExportInvoiceRepository:
         ]
         invoice.purchase_details = [
             dict(r) for r in self.db.query(
-                "SELECT supplier_gstin, supplier_invoice_no, supplier_name FROM export_invoice_purchase_details "
+                "SELECT supplier_gstin, supplier_invoice_no, supplier_name, purchase_type, epcg_number, epcg_date "
+                "FROM export_invoice_purchase_details "
                 "WHERE export_invoice_id = ? ORDER BY sr_no", (invoice_id,)
             )
         ]
@@ -2361,11 +2432,12 @@ class ExportInvoiceRepository:
                     """INSERT INTO export_invoice_items
                        (export_invoice_id, sr_no, product_id, product_name, dimension_mm, hsn_code, surface,
                         pallets, quantity_boxes, quantity_unit, quantity_value, unit, price_usd,
-                        fob_price_usd, total_usd, igst_percent)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        fob_price_usd, total_usd, igst_percent, pallet_weight_kg)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (invoice_id, item.sr_no, item.product_id, item.product_name, item.dimension_mm, item.hsn_code,
                      item.surface, item.pallets, item.quantity_boxes, item.quantity_unit, item.quantity_value,
-                     item.unit, item.price_usd, item.fob_price_usd, item.total_usd, item.igst_percent),
+                     item.unit, item.price_usd, item.fob_price_usd, item.total_usd, item.igst_percent,
+                     item.pallet_weight_kg),
                 )
 
             conn.execute("DELETE FROM export_invoice_proforma_links WHERE export_invoice_id = ?", (invoice_id,))
@@ -2405,10 +2477,12 @@ class ExportInvoiceRepository:
             for i, pd in enumerate(invoice.purchase_details, start=1):
                 conn.execute(
                     "INSERT INTO export_invoice_purchase_details "
-                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no, supplier_name) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(export_invoice_id, sr_no, supplier_gstin, supplier_invoice_no, supplier_name, purchase_type, "
+                    " epcg_number, epcg_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (invoice_id, i, pd.get("supplier_gstin") or None, pd.get("supplier_invoice_no") or None,
-                     pd.get("supplier_name") or None),
+                     pd.get("supplier_name") or None, pd.get("purchase_type") or "full_tax",
+                     pd.get("epcg_number") or None, pd.get("epcg_date") or None),
                 )
 
             conn.execute("DELETE FROM export_invoice_product_sources WHERE export_invoice_id = ?", (invoice_id,))
@@ -2587,20 +2661,11 @@ class PurchaseOrderRepository:
         )
         return [PurchaseOrder.from_row(r) for r in rows]
 
-    def list_for_lead(self, lead_id: int) -> List[PurchaseOrder]:
-        """Same 'reference-only' join pattern as QuotationRepository.list_for_lead -
-        a converted client sees its purchase orders through its originating lead_id."""
-        rows = self.db.query(
-            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
-            " WHERE po.lead_id = ? ORDER BY po.po_date DESC, po.id DESC",
-            (lead_id,),
-        )
-        return [PurchaseOrder.from_row(r) for r in rows]
-
     def list_for_seller(self, supplier_id: int) -> List[PurchaseOrder]:
         """A Supplier's natural link to its purchase orders is
         seller_supplier_id, not an originating lead - unlike Buyer,
-        which sees its documents through lead_id instead."""
+        which sees its documents by walking up the proforma_invoice_id ->
+        quotation_id chain to the Quotation's own lead_id instead."""
         rows = self.db.query(
             self._SELECT.format(items_total=self._ITEMS_TOTAL) +
             " WHERE po.seller_supplier_id = ? ORDER BY po.po_date DESC, po.id DESC",
@@ -2653,14 +2718,14 @@ class PurchaseOrderRepository:
     def create(self, purchase_order: PurchaseOrder) -> PurchaseOrder:
         new_id = self.db.execute(
             """INSERT INTO purchase_orders
-               (company_id, po_number, po_date, lead_id, proforma_invoice_id, seller_supplier_id,
+               (company_id, po_number, po_date, proforma_invoice_id, seller_supplier_id,
                 seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, delivery_time,
                 advance_percent, payment_terms, remarks, igst_percent, cgst_percent, sgst_percent,
                 purchase_type, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_order.company_id, purchase_order.po_number, purchase_order.po_date,
-             purchase_order.lead_id, purchase_order.proforma_invoice_id, purchase_order.seller_supplier_id,
+             purchase_order.proforma_invoice_id, purchase_order.seller_supplier_id,
              purchase_order.seller_name, purchase_order.seller_address, purchase_order.seller_pan,
              purchase_order.seller_gstin, purchase_order.seller_ref_no, purchase_order.port_of_loading,
              purchase_order.port_of_discharge, purchase_order.container_details, purchase_order.delivery_time,
@@ -2674,7 +2739,7 @@ class PurchaseOrderRepository:
 
     def update(self, purchase_order_id: int, purchase_order: PurchaseOrder) -> None:
         self.db.execute(
-            """UPDATE purchase_orders SET po_date = ?, lead_id = ?, proforma_invoice_id = ?,
+            """UPDATE purchase_orders SET po_date = ?, proforma_invoice_id = ?,
                                            seller_supplier_id = ?, seller_name = ?, seller_address = ?,
                                            seller_pan = ?, seller_gstin = ?, seller_ref_no = ?,
                                            port_of_loading = ?, port_of_discharge = ?, container_details = ?,
@@ -2683,7 +2748,7 @@ class PurchaseOrderRepository:
                                            purchase_type = ?, currency_code = ?, currency_symbol = ?,
                                            updated_at = datetime('now')
                WHERE id = ?""",
-            (purchase_order.po_date, purchase_order.lead_id, purchase_order.proforma_invoice_id,
+            (purchase_order.po_date, purchase_order.proforma_invoice_id,
              purchase_order.seller_supplier_id, purchase_order.seller_name, purchase_order.seller_address,
              purchase_order.seller_pan, purchase_order.seller_gstin, purchase_order.seller_ref_no,
              purchase_order.port_of_loading, purchase_order.port_of_discharge, purchase_order.container_details,
@@ -2848,8 +2913,8 @@ class PurchaseInvoiceRepository:
                 seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, transporter_name, epcg_number, epcg_date,
                 supplier_pdf_path, discount_amount, insurance_other, freight, igst_amount, cgst_amount,
-                sgst_amount, round_off, remarks, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                sgst_amount, round_off, purchase_type, remarks, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_invoice.company_id, purchase_invoice.purchase_invoice_number, purchase_invoice.invoice_number,
              purchase_invoice.invoice_date, purchase_invoice.purchase_order_id, purchase_invoice.lead_id,
              purchase_invoice.seller_supplier_id, purchase_invoice.seller_name, purchase_invoice.seller_address,
@@ -2858,8 +2923,8 @@ class PurchaseInvoiceRepository:
              purchase_invoice.transporter_name, purchase_invoice.epcg_number, purchase_invoice.epcg_date,
              purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount, purchase_invoice.insurance_other,
              purchase_invoice.freight, purchase_invoice.igst_amount, purchase_invoice.cgst_amount,
-             purchase_invoice.sgst_amount, purchase_invoice.round_off, purchase_invoice.remarks,
-             purchase_invoice.currency_code, purchase_invoice.currency_symbol,
+             purchase_invoice.sgst_amount, purchase_invoice.round_off, purchase_invoice.purchase_type,
+             purchase_invoice.remarks, purchase_invoice.currency_code, purchase_invoice.currency_symbol,
              purchase_invoice.created_by),
         )
         self._replace_items(new_id, purchase_invoice.items)
@@ -2876,8 +2941,8 @@ class PurchaseInvoiceRepository:
                                              transporter_name = ?, epcg_number = ?, epcg_date = ?,
                                              supplier_pdf_path = ?, discount_amount = ?, insurance_other = ?,
                                              freight = ?, igst_amount = ?, cgst_amount = ?, sgst_amount = ?,
-                                             round_off = ?, remarks = ?, currency_code = ?, currency_symbol = ?,
-                                             updated_at = datetime('now')
+                                             round_off = ?, purchase_type = ?, remarks = ?, currency_code = ?,
+                                             currency_symbol = ?, updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_invoice.invoice_number, purchase_invoice.invoice_date, purchase_invoice.purchase_order_id,
              purchase_invoice.lead_id, purchase_invoice.seller_supplier_id, purchase_invoice.seller_name,
@@ -2887,8 +2952,8 @@ class PurchaseInvoiceRepository:
              purchase_invoice.epcg_date, purchase_invoice.supplier_pdf_path, purchase_invoice.discount_amount,
              purchase_invoice.insurance_other, purchase_invoice.freight, purchase_invoice.igst_amount,
              purchase_invoice.cgst_amount, purchase_invoice.sgst_amount, purchase_invoice.round_off,
-             purchase_invoice.remarks, purchase_invoice.currency_code, purchase_invoice.currency_symbol,
-             purchase_invoice_id),
+             purchase_invoice.purchase_type, purchase_invoice.remarks, purchase_invoice.currency_code,
+             purchase_invoice.currency_symbol, purchase_invoice_id),
         )
         self._replace_items(purchase_invoice_id, purchase_invoice.items)
         self._replace_vehicles(purchase_invoice_id, purchase_invoice.vehicle_numbers)
@@ -3018,15 +3083,6 @@ class PackingListRepository:
             (company_id,),
         )
         return [r["consignee_name"] for r in rows]
-
-    def list_for_lead(self, lead_id: int) -> List[PackingList]:
-        """Same 'reference-only' join pattern as QuotationRepository.list_for_lead -
-        a converted client sees its packing lists through its originating lead_id."""
-        rows = self.db.query(
-            self._SELECT + " WHERE pl.lead_id = ? ORDER BY pl.packing_list_date DESC, pl.id DESC",
-            (lead_id,),
-        )
-        return self._attach_items([PackingList.from_row(r) for r in rows])
 
     def list_for_proforma(self, proforma_invoice_id: int) -> List[PackingList]:
         """Every packing list generated from one proforma invoice - drives the
@@ -3193,15 +3249,15 @@ class PackingListRepository:
     def create(self, packing_list: PackingList) -> PackingList:
         new_id = self.db.execute(
             """INSERT INTO packing_lists
-               (company_id, packing_list_number, packing_list_date, lead_id, proforma_invoice_id,
+               (company_id, packing_list_number, packing_list_date, proforma_invoice_id,
                 quotation_id, purchase_order_id, purchase_invoice_id, export_ref_no, buyer_order_no,
                 other_reference, consignee_name, consignee_address,
                 notify_name, notify_address, country_of_origin, country_of_destination, vessel_flight,
                 port_of_loading, port_of_discharge, final_destination, container_details,
                 terms_of_delivery, remarks, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (packing_list.company_id, packing_list.packing_list_number, packing_list.packing_list_date,
-             packing_list.lead_id, packing_list.proforma_invoice_id, packing_list.quotation_id,
+             packing_list.proforma_invoice_id, packing_list.quotation_id,
              packing_list.purchase_order_id, packing_list.purchase_invoice_id, packing_list.export_ref_no,
              packing_list.buyer_order_no, packing_list.other_reference, packing_list.consignee_name,
              packing_list.consignee_address, packing_list.notify_name, packing_list.notify_address,
@@ -3215,7 +3271,7 @@ class PackingListRepository:
 
     def update(self, packing_list_id: int, packing_list: PackingList) -> None:
         self.db.execute(
-            """UPDATE packing_lists SET packing_list_date = ?, lead_id = ?, proforma_invoice_id = ?,
+            """UPDATE packing_lists SET packing_list_date = ?, proforma_invoice_id = ?,
                                          quotation_id = ?, purchase_order_id = ?, purchase_invoice_id = ?,
                                          export_ref_no = ?, buyer_order_no = ?, other_reference = ?,
                                          consignee_name = ?, consignee_address = ?, notify_name = ?,
@@ -3224,7 +3280,7 @@ class PackingListRepository:
                                          final_destination = ?, container_details = ?, terms_of_delivery = ?,
                                          remarks = ?, updated_at = datetime('now')
                WHERE id = ?""",
-            (packing_list.packing_list_date, packing_list.lead_id, packing_list.proforma_invoice_id,
+            (packing_list.packing_list_date, packing_list.proforma_invoice_id,
              packing_list.quotation_id, packing_list.purchase_order_id, packing_list.purchase_invoice_id,
              packing_list.export_ref_no, packing_list.buyer_order_no, packing_list.other_reference,
              packing_list.consignee_name, packing_list.consignee_address, packing_list.notify_name,

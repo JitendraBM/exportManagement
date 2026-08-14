@@ -26,13 +26,28 @@
     <a href="{{ url_for('purchase_orders.list_purchase_orders') }}" class="btn btn-ghost btn-sm">← All purchase orders</a>
     <div class="flex gap-8">
       {% if not historical_version %}
+      {% if proforma_invoice %}
+      <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=proforma_invoice.id) }}" class="btn btn-ghost btn-sm">📄 View proforma invoice</a>
+      {% endif %}
       {% if packing_lists %}
       <a href="{{ url_for('packing_lists.view_packing_list', packing_list_id=packing_lists[0].id) }}" class="btn btn-ghost btn-sm">📦 View packing list</a>
       {% else %}
       <a href="{{ url_for('packing_lists.new_packing_list', purchase_order_id=purchase_order.id) }}" class="btn btn-ghost btn-sm">📦 Create packing list</a>
       {% endif %}
-      {% if purchase_invoices %}
+      {% if purchase_invoices | length == 1 %}
       <a href="{{ url_for('purchase_invoices.view_purchase_invoice', purchase_invoice_id=purchase_invoices[0].id) }}" class="btn btn-ghost btn-sm">🧾 View purchase invoice</a>
+      {% elif purchase_invoices %}
+      <details class="toolbar-menu">
+        <summary class="btn btn-ghost btn-sm">🧾 Purchase invoices ({{ purchase_invoices | length }}) ▾</summary>
+        <div class="toolbar-menu-panel">
+          {% for pi in purchase_invoices %}
+          <a href="{{ url_for('purchase_invoices.view_purchase_invoice', purchase_invoice_id=pi.id) }}" class="toolbar-menu-item">
+            <span class="mono">{{ pi.purchase_invoice_number }}</span>
+            <span class="meta">{{ pi.invoice_date }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </details>
       {% else %}
       <a href="{{ url_for('purchase_invoices.new_purchase_invoice', purchase_order_id=purchase_order.id) }}" class="btn btn-ghost btn-sm">🧾 Create purchase invoice</a>
       {% endif %}

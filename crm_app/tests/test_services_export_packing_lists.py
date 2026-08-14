@@ -34,12 +34,13 @@ def make_product(container, seed, name, hsn, category_id=None, alt_qty="1.44", n
     )
 
 
-def item_for(product, boxes, pallets=None, price="5.92"):
+def item_for(product, boxes, pallets=None, price="5.92", pallet_weight_kg=None):
     return {
         "product_id": str(product.id), "product_name": product.product_name,
         "hsn_code": product.hsn_code, "quantity_boxes": str(boxes),
         "quantity_value": "0", "unit": "SQM", "price_usd": price,
         "pallets": "" if pallets is None else str(pallets),
+        "pallet_weight_kg": "" if pallet_weight_kg is None else str(pallet_weight_kg),
     }
 
 
@@ -217,6 +218,57 @@ class TestDerivedFigures:
         packing_list = packing_list_for(container, seed, invoice)
         assert packing_list.total_net_weight == pytest.approx(2400)
         assert packing_list.total_gross_weight == pytest.approx(2480)
+
+    def test_gross_weight_is_net_plus_pallets_times_pallet_type_weight_once_a_type_is_selected(self, container, seed):
+        # A named pallet type (its own weight, snapshotted the moment it's
+        # picked on the goods line - ExportInvoiceItem.pallet_weight_kg)
+        # replaces the flat per-box gross formula: Net = 100 boxes x 26.5 =
+        # 2650, plus 20 pallets x 22.5 kg/pallet = 450, so Gross = 3100 - NOT
+        # 100 x the product's own per-box gross weight (2700).
+        product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
+        invoice = make_export(
+            container, seed, [item_for(product, 100, pallets=20, pallet_weight_kg=22.5)],
+            allocations=[alloc(0, 0, 100)],
+        )
+        packing_list = packing_list_for(container, seed, invoice)
+        assert packing_list.total_net_weight == pytest.approx(2650)
+        assert packing_list.total_gross_weight == pytest.approx(3100)
+
+    def test_pallet_type_weight_formula_splits_correctly_across_containers(self, container, seed):
+        product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
+        invoice = make_export(
+            container, seed, [item_for(product, 100, pallets=20, pallet_weight_kg=22.5)],
+            allocations=[alloc(0, 0, 60), alloc(1, 0, 40)],
+        )
+        packing_list = packing_list_for(container, seed, invoice)
+        # 60 boxes -> net 1590, 12 pallets (pro-rata) x 22.5 = 270 -> gross 1860.
+        # 40 boxes -> net 1060, 8 pallets x 22.5 = 180 -> gross 1240.
+        nets = [i.net_weight_kg for i in packing_list.items]
+        grosses = [i.gross_weight_kg for i in packing_list.items]
+        assert nets == pytest.approx([1590, 1060])
+        assert grosses == pytest.approx([1860, 1240])
+        assert packing_list.total_gross_weight == pytest.approx(3100)
+
+    def test_a_typed_gross_override_wins_over_the_pallet_weight_formula(self, container, seed):
+        product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
+        invoice = make_export(
+            container, seed, [item_for(product, 100, pallets=20, pallet_weight_kg=22.5)],
+            allocations=[alloc(0, 0, 100, gross_weight_kg="2999")],
+        )
+        packing_list = packing_list_for(container, seed, invoice)
+        assert packing_list.total_gross_weight == pytest.approx(2999)
+
+    def test_no_pallet_type_falls_back_to_the_products_per_box_gross_weight(self, container, seed):
+        # No pallet type known for this line (Loose, or Plts typed by hand
+        # with no type picked) - pallets is set but pallet_weight_kg isn't,
+        # so Gross falls back to the old Boxes x per-box formula.
+        product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
+        invoice = make_export(
+            container, seed, [item_for(product, 100, pallets=20)],
+            allocations=[alloc(0, 0, 100)],
+        )
+        packing_list = packing_list_for(container, seed, invoice)
+        assert packing_list.total_gross_weight == pytest.approx(2700)
 
     def test_container_identity_is_snapshotted_from_section_11b(self, container, seed):
         product = make_product(container, seed, "GVT 600X1200", "69072100")

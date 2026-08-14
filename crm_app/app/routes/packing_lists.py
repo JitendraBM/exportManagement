@@ -20,7 +20,7 @@ from app.utils import login_required, admin_required, verify_delete_password
 packing_lists_bp = Blueprint("packing_lists", __name__, url_prefix="/packing-lists")
 
 _HEADER_FIELDS = [
-    "packing_list_date", "lead_id", "proforma_invoice_id", "quotation_id", "purchase_order_id",
+    "packing_list_date", "proforma_invoice_id", "quotation_id", "purchase_order_id",
     "purchase_invoice_id", "export_ref_no", "buyer_order_no", "other_reference", "remarks",
 ]
 
@@ -120,12 +120,11 @@ def _source_boxes_map(proforma_invoice_id, quotation_id, company_id, purchase_or
 
 def _form_context():
     container = current_app.container
-    leads = container.lead_service.list_for_dashboard(g.user)
     invoices = container.proforma_invoice_service.list_all(g.user.company_id)
     quotations = container.quotation_service.list_all(g.user.company_id)
     purchase_orders = container.purchase_order_service.list_all(g.user.company_id)
     purchase_invoices = container.purchase_invoice_service.list_all(g.user.company_id)
-    return leads, invoices, quotations, purchase_orders, purchase_invoices
+    return invoices, quotations, purchase_orders, purchase_invoices
 
 
 def _product_map(items) -> dict:
@@ -250,11 +249,11 @@ def new_packing_list():
             return redirect(url_for("packing_lists.view_packing_list", packing_list_id=packing_list.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, invoices, quotations, purchase_orders, purchase_invoices = _form_context()
+            invoices, quotations, purchase_orders, purchase_invoices = _form_context()
             items = _extract_items(request.form)
             product_map = _product_map(items)
             return render_template(
-                "packing_lists/form.html", packing_list=None, leads=leads, invoices=invoices, quotations=quotations,
+                "packing_lists/form.html", packing_list=None, invoices=invoices, quotations=quotations,
                 purchase_orders=purchase_orders, purchase_invoices=purchase_invoices,
                 form_data=request.form, form_items=items, item_groups=_group_items_by_product(items),
                 product_map=product_map, pallet_types_map=_pallet_types_map(product_map),
@@ -265,14 +264,13 @@ def new_packing_list():
                 ),
             ), 400
 
-    leads, invoices, quotations, purchase_orders, purchase_invoices = _form_context()
+    invoices, quotations, purchase_orders, purchase_invoices = _form_context()
     prefill = None
     form_items = None
     proforma_invoice_id = request.args.get("proforma_invoice_id")
     quotation_id = request.args.get("quotation_id")
     purchase_order_id = request.args.get("purchase_order_id")
     purchase_invoice_id = request.args.get("purchase_invoice_id")
-    lead_id = request.args.get("lead_id")
     if purchase_invoice_id:
         try:
             purchase_invoice = container.purchase_invoice_service.get(int(purchase_invoice_id), g.user.company_id)
@@ -309,15 +307,9 @@ def new_packing_list():
             form_items = built["items"]
         except (NotFoundError, ValueError):
             pass
-    elif lead_id:
-        try:
-            lead = container.lead_service.get(int(lead_id), g.user.company_id)
-            prefill = {"lead_id": lead.id, "packing_list_date": date.today().isoformat()}
-        except (NotFoundError, ValueError):
-            pass
     product_map = _product_map(form_items) if form_items else {}
     return render_template(
-        "packing_lists/form.html", packing_list=None, leads=leads, invoices=invoices, quotations=quotations,
+        "packing_lists/form.html", packing_list=None, invoices=invoices, quotations=quotations,
         purchase_orders=purchase_orders, purchase_invoices=purchase_invoices,
         form_data=prefill, form_items=form_items, item_groups=_group_items_by_product(form_items or []),
         product_map=product_map, pallet_types_map=_pallet_types_map(product_map),
@@ -361,11 +353,11 @@ def edit_packing_list(packing_list_id):
             return redirect(url_for("packing_lists.view_packing_list", packing_list_id=packing_list_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, invoices, quotations, purchase_orders, purchase_invoices = _form_context()
+            invoices, quotations, purchase_orders, purchase_invoices = _form_context()
             items = _extract_items(request.form)
             product_map = _product_map(items)
             return render_template(
-                "packing_lists/form.html", packing_list=packing_list, leads=leads, invoices=invoices,
+                "packing_lists/form.html", packing_list=packing_list, invoices=invoices,
                 quotations=quotations, purchase_orders=purchase_orders, purchase_invoices=purchase_invoices,
                 form_data=request.form, form_items=items, item_groups=_group_items_by_product(items),
                 product_map=product_map, pallet_types_map=_pallet_types_map(product_map),
@@ -376,10 +368,10 @@ def edit_packing_list(packing_list_id):
                 ),
             ), 400
 
-    leads, invoices, quotations, purchase_orders, purchase_invoices = _form_context()
+    invoices, quotations, purchase_orders, purchase_invoices = _form_context()
     product_map = _product_map(packing_list.items)
     return render_template(
-        "packing_lists/form.html", packing_list=packing_list, leads=leads, invoices=invoices, quotations=quotations,
+        "packing_lists/form.html", packing_list=packing_list, invoices=invoices, quotations=quotations,
         purchase_orders=purchase_orders, purchase_invoices=purchase_invoices,
         form_data=None, form_items=None, item_groups=_group_items_by_product(packing_list.items),
         product_map=product_map, pallet_types_map=_pallet_types_map(product_map),

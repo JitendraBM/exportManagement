@@ -66,8 +66,11 @@
     <div><div class="text-sm text-soft">IGST</div><div>{{ (product.igst_percent ~ ' %') if product.igst_percent is not none else '—' }}</div></div>
     <div><div class="text-sm text-soft">SGST / CGST (half of IGST)</div><div>{{ (product.sgst_percent ~ ' %') if product.sgst_percent is not none else '—' }} / {{ (product.cgst_percent ~ ' %') if product.cgst_percent is not none else '—' }}</div></div>
     <div><div class="text-sm text-soft">Pallet packing</div><div>
-      Loose (no pallets)
-      {%- for pt in pallet_types %} · {{ pt.name }} ({{ pt.boxes_per_pallet | int if pt.boxes_per_pallet == (pt.boxes_per_pallet | int) else pt.boxes_per_pallet }} boxes){% endfor %}
+      {%- if pallet_types -%}
+      {%- for pt in pallet_types %}{{ ' · ' if not loop.first }}{{ pt.name }} ({{ pt.boxes_per_pallet | int if pt.boxes_per_pallet == (pt.boxes_per_pallet | int) else pt.boxes_per_pallet }} boxes){% endfor %}
+      {%- else -%}
+      —
+      {%- endif -%}
     </div></div>
     <div><div class="text-sm text-soft">Quantity</div><div>{{ product.quantity or '—' }}{% if product.quantity %} {{ product.quantity_unit }}{% endif %}</div></div>
     <div><div class="text-sm text-soft">Alt quantity</div><div>{{ product.alternate_quantity or '—' }}{% if product.alternate_quantity %} {{ product.alternate_quantity_unit }}{% endif %}</div></div>

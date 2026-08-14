@@ -210,9 +210,13 @@ class TestProformaCrud:
             container.proforma_invoice_service.get(pi.id, seed.company_id)
 
     def test_generating_proforma_advances_client_status(self, container, seed):
+        # A proforma invoice has no lead_id of its own - advance_client_status
+        # resolves the lead by walking up quotation_id to the Quotation, which
+        # is the only document type that still carries lead_id directly.
         lead = make_lead(container, seed.admin)
         client = container.buyer_service.convert_lead(lead.id, seed.admin)
-        self._create(container, seed, lead_id=lead.id)
+        q = make_quotation(container, seed, lead_id=lead.id)
+        self._create(container, seed, quotation_id=q.id)
         reloaded = container.buyer_service.get(client.id, seed.company_id)
         assert reloaded.status == "purchase_order_submission_pending"
 
@@ -365,19 +369,22 @@ class TestDocumentFeed:
         assert row["link"][0] == "quotations.view_quotation"
 
     def test_includes_all_four_document_types(self, container, seed):
+        # Only the Quotation carries lead_id directly - the Proforma
+        # Invoice/Purchase Order/Packing List are found by document_feed
+        # walking UP their own quotation_id/proforma_invoice_id chain to it.
         lead = make_lead(container, seed.admin)
         client = container.buyer_service.convert_lead(lead.id, seed.admin)
-        make_quotation(container, seed, lead_id=lead.id)
-        container.proforma_invoice_service.create(
+        q = make_quotation(container, seed, lead_id=lead.id)
+        pi = container.proforma_invoice_service.create(
             seed.admin, {"consignee_name": "B", "invoice_date": "2026-02-01",
-                         "lead_id": lead.id},
+                         "quotation_id": q.id},
             [{"product_name": "T", "quantity_value": "1", "price_usd": "1"}])
         container.purchase_order_service.create(
-            seed.admin, {"seller_name": "S", "po_date": "2026-03-01", "lead_id": lead.id},
+            seed.admin, {"seller_name": "S", "po_date": "2026-03-01", "proforma_invoice_id": pi.id},
             [{"product_name": "T", "quantity_boxes": "1", "quantity_value": "1",
               "price_inr": "10", "price_per": "BOX"}])
         container.packing_list_service.create(
-            seed.admin, {"packing_list_date": "2026-04-01", "lead_id": lead.id},
+            seed.admin, {"packing_list_date": "2026-04-01", "proforma_invoice_id": pi.id},
             [{"product_name": "T", "quantity_boxes": "1"}])
 
         types = {r["type"] for r in container.buyer_service.document_feed(client)}

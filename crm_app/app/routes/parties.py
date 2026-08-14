@@ -73,6 +73,7 @@ def build_party_blueprint(name: str, service_attr: str) -> Blueprint:
                     "instagram": request.form.get("instagram", ""),
                     "other_social": request.form.get("other_social", ""),
                     "address": request.form.get("address", ""),
+                    "country": request.form.get("country", ""),
                 }, contacts=_extract_contacts(request.form))
                 flash(f"{service.client_type} '{party.company_name}' added.", "success")
                 return redirect(url_for(f"{name}.view_party", party_id=party.id))
@@ -124,6 +125,7 @@ def build_party_blueprint(name: str, service_attr: str) -> Blueprint:
                     "instagram": request.form.get("instagram", ""),
                     "other_social": request.form.get("other_social", ""),
                     "address": request.form.get("address", ""),
+                    "country": request.form.get("country", ""),
                 })
                 flash(f"{service.client_type} details updated.", "success")
                 return redirect(url_for(f"{name}.view_party", party_id=party_id))

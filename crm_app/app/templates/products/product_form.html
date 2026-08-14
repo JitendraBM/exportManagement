@@ -54,45 +54,61 @@
       </div>
     </div>
     <div class="form-row">
-      <div class="field"><label for="igst_percent">IGST %</label><input type="number" step="0.01" min="0" max="100" id="igst_percent" name="igst_percent" value="{{ data.igst_percent | default('', true) }}"></div>
+      <div class="field"><label for="igst_percent">IGST % (auto)</label><input type="number" step="0.01" min="0" max="100" id="igst_percent" name="igst_percent" value="{{ data.igst_percent | default('', true) }}" readonly tabindex="-1"></div>
       <div class="field"><label for="sgst_display">SGST % (auto)</label><input type="number" id="sgst_display" value="{{ data.sgst_percent | default('', true) }}" readonly tabindex="-1"></div>
       <div class="field"><label for="cgst_display">CGST % (auto)</label><input type="number" id="cgst_display" value="{{ data.cgst_percent | default('', true) }}" readonly tabindex="-1"></div>
     </div>
-    <div class="hint">IGST is a percentage (0–100); leave it blank if it doesn't apply. SGST and CGST are calculated automatically as half of IGST.</div>
+    <div class="hint">IGST is set automatically from the chosen HSN code's GST slab. SGST and CGST are calculated automatically as half of IGST.</div>
 
     <div class="form-row">
       <div class="field" style="max-width:160px;">
-        <label for="quantity_unit">Quantity unit</label>
-        <input type="text" id="quantity_unit" name="quantity_unit" placeholder="e.g. PCS"
-               value="{{ data.quantity_unit | default('PCS', true) }}">
+        <label for="quantity_unit">Unit</label>
+        {% set chosen_unit = data.quantity_unit | default('PCS', true) %}
+        <select id="quantity_unit" name="quantity_unit">
+          {% if chosen_unit and chosen_unit not in unit_options | map(attribute='name') | list %}
+          <option value="{{ chosen_unit }}" selected>{{ chosen_unit }}</option>
+          {% endif %}
+          {% for unit in unit_options %}
+          <option value="{{ unit.name }}" {{ 'selected' if unit.name == chosen_unit }}>{{ unit.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit.</div>
       </div>
       <div class="field">
-        <label for="quantity">Quantity (per box)</label>
+        <label for="quantity">Quantity Per Unit</label>
         <input type="text" id="quantity" name="quantity" value="{{ data.quantity | default('', true) }}">
       </div>
     </div>
     <div class="form-row">
       <div class="field" style="max-width:160px;">
-        <label for="alternate_quantity_unit">Alt quantity unit</label>
-        <input type="text" id="alternate_quantity_unit" name="alternate_quantity_unit" placeholder="e.g. SQM"
-               value="{{ data.alternate_quantity_unit | default('SQM', true) }}">
-        <div class="hint">Prefills the Unit column on every document.</div>
+        <label for="alternate_quantity_unit">Alt Qty Per Unit</label>
+        {% set chosen_alt_unit = data.alternate_quantity_unit | default('SQM', true) %}
+        <select id="alternate_quantity_unit" name="alternate_quantity_unit">
+          {% if chosen_alt_unit and chosen_alt_unit not in unit_options | map(attribute='name') | list %}
+          <option value="{{ chosen_alt_unit }}" selected>{{ chosen_alt_unit }}</option>
+          {% endif %}
+          {% for unit in unit_options %}
+          <option value="{{ unit.name }}" {{ 'selected' if unit.name == chosen_alt_unit }}>{{ unit.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit. Prefills the Unit column on every document.</div>
       </div>
       <div class="field">
-        <label for="alternate_quantity">Alt quantity (per box)</label>
+        <label for="alternate_quantity">Quantity Per Alt Qty Unit</label>
         <input type="text" id="alternate_quantity" name="alternate_quantity" value="{{ data.alternate_quantity | default('', true) }}">
         <div class="hint">Drives the Boxes × Alt Quantity auto-calc on quotations, proforma invoices and packing lists.</div>
       </div>
     </div>
     <div class="field">
-      <label>Pallet packing</label>
+      <label>Packing Details</label>
       <div class="table-wrap">
         <table class="ledger" id="pallet-types-table">
           <thead>
             <tr>
-              <th style="min-width:160px;">Pallet type</th>
-              <th style="max-width:140px;">Boxes per pallet</th>
-              <th>Alt qty per pallet (auto)</th>
+              <th style="min-width:160px;">Packing Type</th>
+              <th style="max-width:120px;">Weight</th>
+              <th style="max-width:140px;">Unit Per Packing</th>
+              <th>Alt Qty per Packing</th>
               <th></th>
             </tr>
           </thead>
@@ -100,12 +116,14 @@
             <tr>
               <td class="text-soft">Loose (built-in)</td>
               <td class="text-soft">—</td>
+              <td class="text-soft">1</td>
               <td class="text-soft">Goods sold unpalletised — zero pallets</td>
               <td></td>
             </tr>
             {% for row in pallet_rows %}
             <tr class="pallet-type-row">
               <td><input type="text" name="pallet_type_name[]" class="js-pallet-name" value="{{ row.name }}"></td>
+              <td><input type="number" step="0.01" min="0" name="pallet_type_weight[]" class="js-pallet-weight" value="{{ row.weight_kg | default('', true) }}"></td>
               <td><input type="number" step="0.01" min="0" name="pallet_type_boxes[]" class="js-pallet-boxes" value="{{ row.boxes_per_pallet }}"></td>
               <td class="js-pallet-alt text-sm text-soft">—</td>
               <td><button type="button" class="btn-link-danger js-remove-pallet-type">Remove</button></td>
@@ -114,19 +132,14 @@
           </tbody>
         </table>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm" id="add-pallet-type-btn">+ Add pallet type</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="add-pallet-type-btn">+ Add Packing Type</button>
       <div class="hint">Named pallet storage options for this product (e.g. "pine pallet" holding 31 boxes). Every product also always offers "Loose" — no pallets at all. The Alt qty per pallet is worked out automatically as Boxes per pallet × Alternate quantity per box. These options fill the Pallet type dropdown on proforma invoices and packing lists; the printed PDFs are unchanged.</div>
     </div>
 
     <div class="form-row">
       <div class="field">
-        <label for="net_weight_kg">Net weight per box (KG)</label>
+        <label for="net_weight_kg">Net Weight per Unit (KG)</label>
         <input type="number" step="0.001" min="0" id="net_weight_kg" name="net_weight_kg" value="{{ data.net_weight_kg | default('', true) }}">
-      </div>
-      <div class="field">
-        <label for="gross_weight_kg">Gross weight per box (KG)</label>
-        <input type="number" step="0.001" min="0" id="gross_weight_kg" name="gross_weight_kg" value="{{ data.gross_weight_kg | default('', true) }}">
-        <div class="hint">Drives the Boxes × weight auto-calc on a packing list's Net wt/Gross wt columns (stays editable per row on any packing list).</div>
       </div>
     </div>
 
@@ -180,6 +193,7 @@
     tr.className = 'pallet-type-row';
     tr.innerHTML = `
       <td><input type="text" name="pallet_type_name[]" class="js-pallet-name" placeholder="e.g. pine pallet"></td>
+      <td><input type="number" step="0.01" min="0" name="pallet_type_weight[]" class="js-pallet-weight"></td>
       <td><input type="number" step="0.01" min="0" name="pallet_type_boxes[]" class="js-pallet-boxes"></td>
       <td class="js-pallet-alt text-sm text-soft">—</td>
       <td><button type="button" class="btn-link-danger js-remove-pallet-type">Remove</button></td>`;
@@ -207,7 +221,7 @@
     if (e.target.classList.contains('js-pallet-boxes')) recalcPalletAltQty();
   });
   altQtyInput.addEventListener('input', recalcPalletAltQty);
-  unitSelect.addEventListener('input', recalcPalletAltQty);
+  unitSelect.addEventListener('change', recalcPalletAltQty);
   recalcPalletAltQty();
 })();
 </script>

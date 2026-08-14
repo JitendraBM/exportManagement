@@ -218,6 +218,31 @@ code, .mono, .num { font-family: var(--font-mono); }
 }
 .card-header h2, .card-header h3 { margin: 0; }
 
+/* Collapsible <details class="card misc-card"> cards on the Miscellaneous
+   page - native details/summary (no JS), same arrow-rotation treatment as
+   .nav-dropdown-summary above. Collapsed by default (no `open` attribute);
+   a URL fragment targeting a row/section inside a still-collapsed card
+   auto-expands it via the browser's native details-fragment behavior. */
+.misc-card > summary.card-header {
+  list-style: none;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.misc-card > summary.card-header::-webkit-details-marker { display: none; }
+.misc-card > summary.card-header::after {
+  content: '▾';
+  font-size: .8rem;
+  color: #91a3b3;
+  flex-shrink: 0;
+  transition: transform .15s ease;
+}
+.misc-card[open] > summary.card-header {
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--color-line);
+  padding-bottom: 14px;
+}
+.misc-card[open] > summary.card-header::after { transform: rotate(180deg); }
+
 .grid { display: grid; gap: 20px; }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
@@ -262,6 +287,15 @@ table.ledger tr:last-child td { border-bottom: none; }
 table.ledger tr:hover td { background: rgba(182, 116, 42, 0.045); }
 table.ledger td.num, table.ledger th.num { text-align: right; font-family: var(--font-mono); }
 .table-wrap { overflow-x: auto; }
+
+/* Jumped-to row after an add/edit on the Miscellaneous page (or any
+   ledger table using row anchors) - briefly highlighted so it's obvious
+   which row the page scrolled to, then fades on its own. */
+table.ledger tr:target td { animation: target-row-fade 2.4s ease-out; }
+@keyframes target-row-fade {
+  from { background: rgba(182, 116, 42, 0.22); }
+  to { background: transparent; }
+}
 
 /* ---------------------------------------------------------------
    Status "stamp" badges - the page's signature element

@@ -51,18 +51,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="field">
-        <label for="lead_select">Prefill from an existing lead <span class="text-soft text-sm">(optional)</span></label>
-        <select id="lead_select">
-          <option value="">— Select a lead to prefill —</option>
-          {% for l in leads %}
-            <option value="{{ l.id }}" data-name="{{ l.company_name }}">{{ l.company_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
     </div>
     <p class="hint">Choosing a proforma invoice or a quotation reloads this page with one starting row per product — you then pick the design for each row and split the quantities into smaller, per-design amounts. Choosing a purchase order does the same, and when that PO was generated from a proforma that already has a packing list, its design rows are imported ready-filled. Choosing a purchase invoice imports its linked purchase order's packing list wholesale, as the invoice's own PL.</p>
-    <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
     <input type="hidden" name="proforma_invoice_id" id="proforma_invoice_id" value="{{ data.proforma_invoice_id | default('', true) }}">
     <input type="hidden" name="quotation_id" id="quotation_id" value="{{ data.quotation_id | default('', true) }}">
     <input type="hidden" name="purchase_order_id" id="purchase_order_id" value="{{ data.purchase_order_id | default('', true) }}">
@@ -557,12 +547,6 @@
     const id = e.target.value;
     if (!id) return;
     window.location = '{{ url_for("packing_lists.new_packing_list") }}?quotation_id=' + encodeURIComponent(id);
-  });
-
-  // ---- lead dropdown prefill --------------------------------------------------
-  document.getElementById('lead_select').addEventListener('change', (e) => {
-    const opt = e.target.selectedOptions[0];
-    document.getElementById('lead_id').value = opt.value || '';
   });
 
   // ---- product picker modal (flat searchable product list) --------------------------------------------------

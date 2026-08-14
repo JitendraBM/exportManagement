@@ -236,6 +236,7 @@ class Party:
     status: str
     created_by: int
     address: Optional[str] = None
+    country: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     contacts: List[ContactPerson] = field(default_factory=list)
@@ -255,6 +256,7 @@ class Party:
             status=row["status"],
             created_by=row["created_by"],
             address=row["address"] if "address" in row.keys() else None,
+            country=row["country"] if "country" in row.keys() else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -499,6 +501,24 @@ class MiscNatureOfContract:
 
 
 @dataclass
+class MiscCountry:
+    """One row of the COUNTRY drop list maintained under Administration ->
+    Miscellaneous. Fills the "Country Name" field on a Buyer's profile."""
+    id: Optional[int]
+    company_id: int
+    name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @staticmethod
+    def from_row(row) -> "MiscCountry":
+        return MiscCountry(
+            id=row["id"], company_id=row["company_id"], name=row["name"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+@dataclass
 class MiscContainerType:
     """One row of the CONTAINER TYPE drop list maintained under
     Administration -> Miscellaneous. Feeds the container-type dropdown on
@@ -547,6 +567,33 @@ class MiscHsnCode:
             id=row["id"], company_id=row["company_id"], name=row["name"],
             gst_slab=row["gst_slab"],
             related_products=row["related_products"] if "related_products" in row.keys() else None,
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+
+@dataclass
+class MiscUnit:
+    """One row of the UNIT drop list maintained under Administration ->
+    Miscellaneous: a unit abbreviation and what it means in words, kept
+    together so the two can never disagree (the same reasoning as
+    MiscPortOfLoading's name/pin_code pairing)."""
+    id: Optional[int]
+    company_id: int
+    name: str        # "Unit", e.g. SQM
+    meaning: str      # "Meaning", e.g. Square Meter
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        """How the unit reads where both halves are shown: `SQM - Square Meter`."""
+        return f"{self.name} - {self.meaning}"
+
+    @staticmethod
+    def from_row(row) -> "MiscUnit":
+        return MiscUnit(
+            id=row["id"], company_id=row["company_id"],
+            name=row["name"], meaning=row["meaning"],
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -779,6 +826,7 @@ class ProductPalletType:
     product_id: int
     name: str
     boxes_per_pallet: float
+    weight_kg: Optional[float] = None
     sort_order: int = 0
     created_at: Optional[str] = None
 
@@ -790,6 +838,7 @@ class ProductPalletType:
             product_id=row["product_id"],
             name=row["name"],
             boxes_per_pallet=row["boxes_per_pallet"],
+            weight_kg=row["weight_kg"] if "weight_kg" in row.keys() else None,
             sort_order=row["sort_order"],
             created_at=row["created_at"],
         )
@@ -1189,7 +1238,6 @@ class PurchaseOrder:
     po_date: str
     seller_name: str
     created_by: int
-    lead_id: Optional[int] = None
     proforma_invoice_id: Optional[int] = None
     seller_supplier_id: Optional[int] = None
     seller_address: Optional[str] = None
@@ -1226,7 +1274,6 @@ class PurchaseOrder:
             company_id=row["company_id"],
             po_number=row["po_number"],
             po_date=row["po_date"],
-            lead_id=row["lead_id"],
             proforma_invoice_id=row["proforma_invoice_id"],
             seller_supplier_id=row["seller_supplier_id"],
             seller_name=row["seller_name"],
@@ -1396,6 +1443,7 @@ class PurchaseInvoice:
     cgst_amount: float = 0
     sgst_amount: float = 0
     round_off: float = 0
+    purchase_type: str = DEFAULT_PURCHASE_TYPE  # key of PURCHASE_TYPES - typed, not derived, unlike PurchaseOrder's
     remarks: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -1447,6 +1495,7 @@ class PurchaseInvoice:
             cgst_amount=row["cgst_amount"],
             sgst_amount=row["sgst_amount"],
             round_off=row["round_off"],
+            purchase_type=(row["purchase_type"] if "purchase_type" in row.keys() else None) or DEFAULT_PURCHASE_TYPE,
             remarks=row["remarks"],
             created_by=row["created_by"],
             created_at=row["created_at"],
@@ -1552,7 +1601,6 @@ class PackingList:
     packing_list_date: str
     consignee_name: str
     created_by: int
-    lead_id: Optional[int] = None
     proforma_invoice_id: Optional[int] = None
     quotation_id: Optional[int] = None
     purchase_order_id: Optional[int] = None
@@ -1588,7 +1636,6 @@ class PackingList:
             company_id=row["company_id"],
             packing_list_number=row["packing_list_number"],
             packing_list_date=row["packing_list_date"],
-            lead_id=row["lead_id"],
             proforma_invoice_id=row["proforma_invoice_id"],
             quotation_id=row["quotation_id"] if "quotation_id" in row.keys() else None,
             purchase_order_id=row["purchase_order_id"] if "purchase_order_id" in row.keys() else None,
@@ -1709,7 +1756,6 @@ class ProformaInvoice(CifMoneyLadder):
     invoice_date: str
     consignee_name: str
     created_by: int
-    lead_id: Optional[int] = None
     quotation_id: Optional[int] = None
     export_ref_no: Optional[str] = None
     buyer_order_no: Optional[str] = None
@@ -1771,7 +1817,6 @@ class ProformaInvoice(CifMoneyLadder):
             company_id=row["company_id"],
             invoice_number=row["invoice_number"],
             invoice_date=row["invoice_date"],
-            lead_id=row["lead_id"],
             quotation_id=row["quotation_id"],
             export_ref_no=row["export_ref_no"],
             buyer_order_no=row["buyer_order_no"],
@@ -1969,6 +2014,12 @@ class ExportInvoiceItem:
     # an FOB-typed-price mode; price_usd is always the absolute FOB price the
     # user typed. See ExportInvoice.cif_value_usd, which builds CIF up from it.
     fob_price_usd: Optional[float] = None
+    # The weight_kg of whichever named pallet type is currently selected on
+    # this line (product_pallet_types.weight_kg), snapshotted the moment it's
+    # picked - None for Loose/Manual/no product. Feeds the Export Packing
+    # List's container-split Gross (KG) = Net (KG) + Plts x this; see
+    # ExportPackingListService.build_items.
+    pallet_weight_kg: Optional[float] = None
 
     @property
     def tax_usd(self) -> float:
@@ -1994,6 +2045,7 @@ class ExportInvoiceItem:
             total_usd=row["total_usd"],
             igst_percent=row["igst_percent"] if "igst_percent" in row.keys() else 0,
             fob_price_usd=row["fob_price_usd"] if "fob_price_usd" in row.keys() else None,
+            pallet_weight_kg=row["pallet_weight_kg"] if "pallet_weight_kg" in row.keys() else None,
         )
 
 
@@ -2110,7 +2162,7 @@ class ExportInvoice(CifMoneyLadder):
     proforma_invoice_ids: List[int] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # [{container_type, container_count}]
     container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
-    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_name}]
+    purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_name, purchase_type, epcg_number, epcg_date}]
     product_sources: List[dict] = field(default_factory=list)  # [{product_name, po_number, quantity_boxes}] - which PO(s) each goods line's boxes came from
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items

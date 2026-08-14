@@ -28,6 +28,7 @@ _HEADER_FIELDS = [
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "transporter_name", "epcg_number", "epcg_date",
     "discount_amount", "insurance_other", "freight", "igst_amount", "cgst_amount", "sgst_amount", "round_off",
+    "purchase_type",
     "remarks", "currency_code",
 ]
 
@@ -68,12 +69,16 @@ def _extract_vehicle_numbers(form) -> list:
     return form.getlist("vehicle_number[]")
 
 
-def _alt_qty_map(items) -> dict:
-    """Same purpose as purchase_orders._product_meta_map's `alt_qty` -
-    product_id -> Alternate Quantity for rows already tied to a catalog
-    product, so the form can auto-fill Qty from Boxes. A purchase invoice
-    has no product picker of its own (its lines are prefilled from the
-    purchase order), so this map is the only source of the per-box figure."""
+def _product_meta_map(items) -> dict:
+    """product_id -> {'alt_qty', 'igst'} for rows already tied to a catalog
+    product - same shape and purpose as purchase_orders._product_meta_map:
+    `alt_qty` drives the form's Boxes x Alternate Quantity auto-calc for
+    Qty, `igst` lets the form auto-fill IGST/CGST/SGST from the chosen
+    Purchase under type (the same rate a Full Tax Purchase would derive on
+    a purchase order, see PurchaseOrderService.base_igst_percent). A
+    purchase invoice has no product picker of its own (its lines are
+    prefilled from the purchase order), so this map is the only source of
+    both figures."""
     container = current_app.container
     result = {}
     for item in items or []:
@@ -88,7 +93,7 @@ def _alt_qty_map(items) -> dict:
             continue
         try:
             product = container.product_service.get_product(product_id, g.user.company_id)
-            result[product_id] = product.alternate_quantity or ""
+            result[product_id] = {"alt_qty": product.alternate_quantity or "", "igst": product.igst_percent or ""}
         except NotFoundError:
             pass
     return result
@@ -140,7 +145,7 @@ def new_purchase_invoice():
                 "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
                 suppliers=suppliers, form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
-                alt_qty_map=_alt_qty_map(items),
+                product_meta_map=_product_meta_map(items),
                 selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
             ), 400
 
@@ -175,7 +180,7 @@ def new_purchase_invoice():
         "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
         suppliers=suppliers, form_data=prefill, form_items=form_items,
         form_vehicle_numbers=None, today=date.today().isoformat(),
-        alt_qty_map=_alt_qty_map(form_items),
+        product_meta_map=_product_meta_map(form_items),
         selected_purchase_order_ids=(prefill or {}).get("purchase_order_ids") or [],
     )
 
@@ -260,7 +265,7 @@ def edit_purchase_invoice(purchase_invoice_id):
                 "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
                 purchase_orders=purchase_orders, suppliers=suppliers, form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
-                alt_qty_map=_alt_qty_map(items),
+                product_meta_map=_product_meta_map(items),
                 selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
             ), 400
 
@@ -269,7 +274,7 @@ def edit_purchase_invoice(purchase_invoice_id):
         "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
         purchase_orders=purchase_orders, suppliers=suppliers, form_data=None, form_items=None,
         form_vehicle_numbers=None, today=date.today().isoformat(),
-        alt_qty_map=_alt_qty_map(purchase_invoice.items),
+        product_meta_map=_product_meta_map(purchase_invoice.items),
         selected_purchase_order_ids=purchase_invoice.purchase_order_ids,
     )
 

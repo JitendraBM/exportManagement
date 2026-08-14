@@ -19,6 +19,7 @@
     <div class="flex gap-8" style="align-items:center;">
       <a href="{{ url_for('commercial_invoices.list_commercial_invoices') }}" class="btn btn-ghost btn-sm">← All commercial invoices</a>
       <a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🌐 Export invoice {{ invoice.export_invoice_number }}</a>
+      <a href="{{ url_for('commercial_packing_lists.view_commercial_packing_list', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">📦 Commercial packing list</a>
     </div>
     <div class="flex gap-8">
       <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / PDF</button>

@@ -62,7 +62,7 @@
     {% set chosen_currency_obj = (currency_options | selectattr('name', 'equalto', chosen_currency) | list | first) %}
     {% set chosen_symbol = chosen_currency_obj.symbol if chosen_currency_obj else '$' %}
     <div class="form-row">
-      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed quotation; amounts are typed in this currency.') }}
+      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed quotation; amounts are typed in this currency.', can_add=current_user.is_admin) }}
       <div class="field"><label for="packing_details">Packing details</label><input type="text" id="packing_details" name="packing_details" placeholder="e.g. PALLATE" value="{{ data.packing_details | default('', true) }}"></div>
     </div>
 

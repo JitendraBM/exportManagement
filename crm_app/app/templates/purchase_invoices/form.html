@@ -89,7 +89,7 @@
   <div class="card">
     <div class="card-header"><h3>Invoice details</h3></div>
     <div class="form-row">
-      {{ currency_select(chosen_currency, currency_options, hint="Shown on the invoice record; amounts are typed in this currency.") }}
+      {{ currency_select(chosen_currency, currency_options, hint="Shown on the invoice record; amounts are typed in this currency.", can_add=current_user.is_admin) }}
       <div class="field"><label for="invoice_number">Invoice number<span class="required-mark">*</span></label><input type="text" id="invoice_number" name="invoice_number" required placeholder="Supplier's own invoice no." value="{{ data.invoice_number | default('', true) }}"></div>
       <div class="field"><label for="invoice_date">Invoice date<span class="required-mark">*</span></label><input type="date" id="invoice_date" name="invoice_date" required value="{{ data.invoice_date | default(today, true) }}"></div>
       <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
@@ -145,7 +145,8 @@
         <tbody id="items-body">
           {% set rows = form_items if form_items is not none else (purchase_invoice.items if purchase_invoice else []) %}
           {% for row in rows %}
-          <tr class="item-row" data-alt-qty="{{ alt_qty_map.get(row.product_id | int, '') if row.product_id else '' }}">
+          {% set meta = product_meta_map.get(row.product_id | int, {}) if row.product_id else {} %}
+          <tr class="item-row" data-alt-qty="{{ meta.get('alt_qty', '') }}" data-igst="{{ meta.get('igst', '') }}">
             <td class="js-sr">{{ loop.index }}</td>
             <td>
               <input type="hidden" name="item_product_id[]" class="js-product-id" value="{{ row.product_id or '' }}">
@@ -187,6 +188,17 @@
   <div class="card">
     <div class="card-header"><h3>Charges &amp; taxes</h3></div>
     <p class="hint">Typed in directly from the supplier's own invoice - these aren't derived from our tax rules, since they must match what the supplier actually charged.</p>
+    <div class="form-row">
+      <div class="field" style="max-width:260px;">
+        <label for="purchase_type">Purchase under<span class="required-mark">*</span></label>
+        {% set selected_purchase_type = data.purchase_type | default('full_tax', true) if data else 'full_tax' %}
+        <select id="purchase_type" name="purchase_type">
+          {% for key, label in PURCHASE_TYPES.items() %}
+            <option value="{{ key }}" {{ 'selected' if selected_purchase_type == key }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
     <div class="form-row">
       <div class="field"><label for="discount_amount">Discount</label><input type="number" step="0.01" id="discount_amount" name="discount_amount" value="{{ data.discount_amount | default(0, true) }}"></div>
       <div class="field"><label for="insurance_other">Insurance and Other</label><input type="number" step="0.01" id="insurance_other" name="insurance_other" value="{{ data.insurance_other | default(0, true) }}"></div>
@@ -301,19 +313,72 @@
 
   function num(id) { return parseFloat(document.getElementById(id).value) || 0; }
 
-  function recalcTotals() {
+  function computeSubtotal() {
     let subtotal = 0;
     itemsBody.querySelectorAll('.item-row').forEach((tr) => {
       const total = rowTotal(tr);
       tr.querySelector('.js-total').textContent = total.toFixed(2);
       subtotal += total;
     });
+    return subtotal;
+  }
+
+  function recalcTotals() {
+    const subtotal = computeSubtotal();
     document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
     const invoiceValue = subtotal + num('freight') + num('insurance_other')
       + num('igst_amount') + num('cgst_amount') + num('sgst_amount')
       - num('discount_amount') + num('round_off');
     document.getElementById('invoice-value-display').textContent = invoiceValue.toFixed(2);
   }
+
+  // ---- Purchase under -> IGST/CGST/SGST auto-fill --------------------------------------------------
+  // Mirrors PurchaseOrderService.base_igst_percent/_tax_percentages (see the
+  // live preview in purchase_orders/form.html): the rate comes from the
+  // chosen Purchase under type (flat EXEMPTION_IGST_PERCENT for Exemption,
+  // else the highest catalog product igst_percent among the lines for a
+  // Full Tax Purchase), split into IGST vs CGST+SGST by comparing our
+  // company's GSTIN state code against the seller's. Unlike the PO form
+  // this only fills the typed IGST/CGST/SGST inputs as a starting point -
+  // the user can still hand-edit them to match the supplier's own invoice,
+  // and the fill only runs again on a later Purchase under/seller GSTIN
+  // change, never on every keystroke.
+  const OUR_GSTIN = {{ (our_company.gstin if our_company else '') | default('', true) | tojson }};
+  const EXEMPTION_IGST_PERCENT = {{ EXEMPTION_IGST_PERCENT }};
+
+  function stateCode(gstin) { return (gstin || '').trim().slice(0, 2); }
+  function isIntraState(a, b) {
+    const x = stateCode(a);
+    return /^\d{2}$/.test(x) && x === stateCode(b);
+  }
+
+  function currentTaxRates() {
+    const purchaseType = document.getElementById('purchase_type').value;
+    let rate = 0;
+    if (purchaseType === 'exemption') {
+      rate = EXEMPTION_IGST_PERCENT;
+    } else {
+      itemsBody.querySelectorAll('.item-row').forEach((tr) => {
+        const productRate = parseFloat(tr.dataset.igst);
+        if (productRate) rate = Math.max(rate, productRate);
+      });
+    }
+    const intra = isIntraState(OUR_GSTIN, document.getElementById('seller_gstin').value);
+    const half = Math.round((rate / 2) * 10000) / 10000;
+    return intra ? { igst: 0, cgst: half, sgst: half } : { igst: rate, cgst: 0, sgst: 0 };
+  }
+
+  function applyPurchaseType() {
+    const subtotal = computeSubtotal();
+    const rates = currentTaxRates();
+    document.getElementById('igst_amount').value = (subtotal * rates.igst / 100).toFixed(2);
+    document.getElementById('cgst_amount').value = (subtotal * rates.cgst / 100).toFixed(2);
+    document.getElementById('sgst_amount').value = (subtotal * rates.sgst / 100).toFixed(2);
+    recalcTotals();
+  }
+
+  document.getElementById('purchase_type').addEventListener('change', applyPurchaseType);
+  document.getElementById('seller_gstin').addEventListener('input', applyPurchaseType);
 
   addRowBtn.addEventListener('click', () => {
     itemsBody.appendChild(rowTemplate());

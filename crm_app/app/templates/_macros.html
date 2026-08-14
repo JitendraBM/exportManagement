@@ -1,7 +1,7 @@
 {# Shared form widgets. Import with:
-     {% from "_macros.html" import currency_select, port_of_loading_select %} #}
+     {% from "_macros.html" import currency_select, port_of_loading_select, country_select %} #}
 
-{% macro currency_select(chosen, options, label='Currency', hint='', locked=false, locked_hint='Locked - inherited from the linked document and cannot be changed here.') %}
+{% macro currency_select(chosen, options, label='Currency', hint='', locked=false, locked_hint='Locked - inherited from the linked document and cannot be changed here.', can_add=false) %}
 {# The currency a document is written in. Options come from Administration ->
    Miscellaneous; a document can hold a currency since removed from that list,
    so the stored value stays selectable rather than silently switching.
@@ -10,7 +10,14 @@
    whose currency it must match (e.g. a proforma invoice generated from a
    quotation) - re-enabled just before submit (see each form's script) so the
    locked value still posts; _build_header enforces the same rule
-   server-side regardless. #}
+   server-side regardless.
+
+   With can_add (pass current_user.is_admin - the list itself is admin-only)
+   and not locked, the dropdown also carries an "+ Add a new currency" entry
+   that adds one to that list in place, so a missing currency doesn't cost a
+   detour to Miscellaneous and a half-typed document. Mirrors the port of
+   loading quick-add below; its panel inputs likewise have NO name attribute
+   so they never post with the document form. #}
 <div class="field">
   <label for="currency_code">{{ label }}</label>
   <select id="currency_code" name="currency_code" {{ 'disabled' if locked }}>
@@ -20,9 +27,77 @@
     {% for currency in options %}
     <option value="{{ currency.name }}" data-symbol="{{ currency.symbol }}" {{ 'selected' if currency.name == chosen }}>{{ currency.name }} [ {{ currency.symbol }} ]</option>
     {% endfor %}
+    {% if can_add and not locked %}<option value="__add_currency__">+ Add a new currency&hellip;</option>{% endif %}
   </select>
   {% if locked %}<div class="text-sm text-soft">{{ locked_hint }}</div>
   {% elif hint %}<div class="text-sm text-soft">{{ hint }}</div>{% endif %}
+  {% if can_add and not locked %}
+  <div id="currency-add-panel" hidden style="margin-top:8px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="currency-add-name">Currency name<span class="required-mark">*</span></label>
+        <input type="text" id="currency-add-name" placeholder="e.g. USD">
+      </div>
+      <div class="field">
+        <label for="currency-add-symbol">Symbol<span class="required-mark">*</span></label>
+        <input type="text" id="currency-add-symbol" placeholder="e.g. $">
+      </div>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm" id="currency-add-save">Add currency</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="currency-add-cancel">Cancel</button>
+  </div>
+  <script>
+  (function () {
+    const select = document.getElementById('currency_code');
+    const panel = document.getElementById('currency-add-panel');
+    const nameEl = document.getElementById('currency-add-name');
+    const symbolEl = document.getElementById('currency-add-symbol');
+    let previous = select.value;
+
+    function closePanel() {
+      panel.hidden = true;
+      nameEl.value = '';
+      symbolEl.value = '';
+      select.value = previous;
+    }
+
+    select.addEventListener('change', () => {
+      if (select.value !== '__add_currency__') { previous = select.value; return; }
+      select.value = previous;
+      panel.hidden = false;
+      nameEl.focus();
+    });
+
+    document.getElementById('currency-add-cancel').addEventListener('click', closePanel);
+
+    [nameEl, symbolEl].forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addCurrency(); }
+    }));
+
+    document.getElementById('currency-add-save').addEventListener('click', addCurrency);
+
+    function addCurrency() {
+      const body = new FormData();
+      body.append('name', nameEl.value);
+      body.append('symbol', symbolEl.value);
+      fetch('/misc/api/currencies', { method: 'POST', body: body })
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) { alert(data.error || 'Could not add the currency.'); return; }
+          const label = data.name + ' [ ' + data.symbol + ' ]';
+          const option = new Option(label, data.name, false, false);
+          option.dataset.symbol = data.symbol;
+          select.add(option, select.options[select.options.length - 1]);
+          previous = data.name;
+          select.value = data.name;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          closePanel();
+        })
+        .catch(() => alert('Something went wrong adding the currency.'));
+    }
+  })();
+  </script>
+  {% endif %}
 </div>
 {% endmacro %}
 
@@ -114,6 +189,89 @@
           closePanel();
         })
         .catch(() => alert('Something went wrong adding the port.'));
+    }
+  })();
+  </script>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro country_select(chosen, options, label='Country Name', can_add=false, field_id='country') %}
+{# The country a Buyer is based in. Options come from Administration ->
+   Miscellaneous; a buyer can hold a country since removed from that list, so
+   the stored value stays selectable rather than silently blanking.
+
+   With can_add (pass current_user.is_admin - the list itself is admin-only),
+   the dropdown also carries an "+ Add a new country" entry that adds one to
+   that list in place, so a missing country doesn't cost a detour to
+   Miscellaneous and a half-typed buyer. Mirrors port_of_loading_select
+   above; its panel input likewise has NO name attribute so it never posts
+   with the document form. #}
+<div class="field">
+  <label for="{{ field_id }}">{{ label }}</label>
+  <select id="{{ field_id }}" name="{{ field_id }}">
+    <option value="">&mdash; none &mdash;</option>
+    {% if chosen and chosen not in options | map(attribute='name') | list %}
+    <option value="{{ chosen }}" selected>{{ chosen }}</option>
+    {% endif %}
+    {% for country in options %}
+    <option value="{{ country.name }}" {{ 'selected' if country.name == chosen }}>{{ country.name }}</option>
+    {% endfor %}
+    {% if can_add %}<option value="__add_country__">+ Add a new country&hellip;</option>{% endif %}
+  </select>
+  {% if can_add %}
+  <div id="{{ field_id }}-add-panel" hidden style="margin-top:8px;">
+    <div class="form-row">
+      <div class="field">
+        <label for="{{ field_id }}-add-name">Country Name<span class="required-mark">*</span></label>
+        <input type="text" id="{{ field_id }}-add-name" placeholder="e.g. UNITED ARAB EMIRATES">
+      </div>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm" id="{{ field_id }}-add-save">Add country</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="{{ field_id }}-add-cancel">Cancel</button>
+  </div>
+  <script>
+  (function () {
+    const select = document.getElementById('{{ field_id }}');
+    const panel = document.getElementById('{{ field_id }}-add-panel');
+    const nameEl = document.getElementById('{{ field_id }}-add-name');
+    let previous = select.value;
+
+    function closePanel() {
+      panel.hidden = true;
+      nameEl.value = '';
+      select.value = previous;
+    }
+
+    select.addEventListener('change', () => {
+      if (select.value !== '__add_country__') { previous = select.value; return; }
+      select.value = previous;
+      panel.hidden = false;
+      nameEl.focus();
+    });
+
+    document.getElementById('{{ field_id }}-add-cancel').addEventListener('click', closePanel);
+
+    nameEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addCountry(); }
+    });
+
+    document.getElementById('{{ field_id }}-add-save').addEventListener('click', addCountry);
+
+    function addCountry() {
+      const body = new FormData();
+      body.append('name', nameEl.value);
+      fetch('/misc/api/countries', { method: 'POST', body: body })
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) { alert(data.error || 'Could not add the country.'); return; }
+          const option = new Option(data.name, data.name, false, false);
+          select.add(option, select.options[select.options.length - 1]);
+          previous = data.name;
+          select.value = data.name;
+          closePanel();
+        })
+        .catch(() => alert('Something went wrong adding the country.'));
     }
   })();
   </script>

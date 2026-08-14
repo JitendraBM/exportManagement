@@ -381,7 +381,13 @@
   </table>
 
   <!-- ============ PURCHASE DETAILS (0.1% GST) | INVOICE VALUE & IGST DETAILS ============ -->
-  {% set pd_list = invoice.purchase_details %}
+  {# The 0.1% concessional rate only applies to purchases made under
+     exemption, and only means anything on an invoice actually raised
+     without payment of IGST under LUT - so this block lists only the
+     exemption rows, and only prints them at all under that tax_mode.
+     Otherwise the block stays up (paired in the same table as Invoice
+     Value & IGST Details) but empty. #}
+  {% set pd_list = (invoice.purchase_details | selectattr('purchase_type', 'equalto', 'exemption') | list) if invoice.tax_mode == 'lut' else [] %}
   {% set pd_count = pd_list|length %}
   {% set pd_rows = ((pd_count + 1) // 2) %}
   {% set pd_rows = pd_rows if pd_rows >= 3 else 3 %}

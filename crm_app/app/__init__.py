@@ -25,7 +25,7 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
@@ -78,6 +78,8 @@ class ServiceContainer:
         self.misc_port_of_loading_repo = MiscPortOfLoadingRepository(db)
         self.misc_container_type_repo = MiscContainerTypeRepository(db)
         self.misc_hsn_code_repo = MiscHsnCodeRepository(db)
+        self.misc_country_repo = MiscCountryRepository(db)
+        self.misc_unit_repo = MiscUnitRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -121,7 +123,8 @@ class ServiceContainer:
         )
         self.misc_list_service = MiscListService(
             self.misc_currency_repo, self.misc_nature_of_contract_repo, self.misc_port_of_loading_repo,
-            self.misc_container_type_repo, self.misc_hsn_code_repo,
+            self.misc_container_type_repo, self.misc_hsn_code_repo, self.misc_country_repo,
+            self.misc_unit_repo,
         )
         self.booking_detail_service = BookingDetailService(self.booking_detail_repo, self.buyer_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)
@@ -144,7 +147,7 @@ class ServiceContainer:
         self.purchase_order_service = PurchaseOrderService(
             self.purchase_order_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
             self.document_version_service, self.party_repos, self.supplier_repo, self.company_repo,
-            self.proforma_fulfilment_service, self.misc_list_service,
+            self.proforma_fulfilment_service, self.misc_list_service, self.quotation_repo,
         )
         self.packing_list_service = PackingListService(
             self.packing_list_repo, self.product_repo, self.design_repo,
@@ -230,6 +233,10 @@ def create_app(config_class=Config) -> Flask:
         container_type_options = (
             app.container.misc_list_service.container_type_options(user.company_id) if user else []
         )
+        # ...and for the countries a Buyer's "Country Name" field picks from.
+        country_options = (
+            app.container.misc_list_service.list_countries(user.company_id) if user else []
+        )
         return dict(
             current_user=g.get("user"),
             our_company=our_company,
@@ -237,6 +244,7 @@ def create_app(config_class=Config) -> Flask:
             nature_of_contract_options=nature_of_contract_options,
             port_of_loading_options=port_of_loading_options,
             container_type_options=container_type_options,
+            country_options=country_options,
             LEAD_STATUSES=LEAD_STATUSES,
             CLIENT_STATUSES=CLIENT_STATUSES,
             CLIENT_TYPES=CLIENT_TYPES,
