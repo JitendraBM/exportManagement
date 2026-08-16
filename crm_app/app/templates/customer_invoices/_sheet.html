@@ -3,9 +3,12 @@
    real reference printout (EXP/001/26-27) field for field.
 
    Same header band and styling as the BRC commercial invoice - both come
-   from templates/commercial/ - and priced the same way: Rate is each line's
-   printed rate, the all-in CIF/CFR figure under those terms and the typed FOB
-   figure under FOB (see ExportInvoice.printed_items in app/models.py).
+   from templates/commercial/ - but priced differently: Rate is each line's
+   own typed rate in USD (item.price_usd, i.e. the stored FOB rate), not the
+   CIF/CFR-uplifted printed rate the export invoice's own sheet shows (see
+   ExportInvoice.printed_items in app/models.py, deliberately NOT used here).
+   Total Amount is qty x that same rate (item.total_usd), so the goods column
+   foots exactly to FOB Value below it instead of to the CIF/CFR value.
 
    The totals block runs UPWARDS: FOB Value opens it - the goods on their own,
    which under CIF/CFR terms is BELOW the goods column above (that column
@@ -54,12 +57,11 @@
       </tr>
     </thead>
     <tbody>
-      {# printed_items already carries the printed rate and the Total worked
-         out from it, with the last line absorbing what the rounded rate
-         leaves over - so read item.total_usd rather than recomputing
-         rate x qty here, or this column would foot a few cents short of the
-         same figure every other sheet closes on. #}
-      {% for item in invoice.printed_items %}
+      {# Deliberately invoice.items (the stored FOB-typed rate), not
+         invoice.printed_items (the CIF/CFR-uplifted rate every other sheet
+         prints) - see the header comment above. item.total_usd is that same
+         stored line's own total, qty x its own price_usd. #}
+      {% for item in invoice.items %}
       <tr class="ci-goods">
         <td class="ci-c">{{ loop.index }}</td>
         <td>

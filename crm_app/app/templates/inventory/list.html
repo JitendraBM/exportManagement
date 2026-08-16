@@ -58,14 +58,14 @@
     <div class="card">
       <div class="card-header"><h3>Designs matching "{{ query }}"</h3></div>
       <div class="table-wrap">
-        <table class="ledger">
+        <table class="ledger sortable-table">
           <thead>
             <tr>
               <th>Design</th>
               <th>Product</th>
-              <th>Boxes</th>
-              <th>Pieces</th>
-              <th>Quantity</th>
+              <th class="sortable-th" data-sort-key="qty">Total Purchased Qty <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
+              <th class="sortable-th" data-sort-key="sold">Total Sold Qty <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
+              <th class="sortable-th" data-sort-key="stock">Stock <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
               <th></th>
             </tr>
           </thead>
@@ -77,9 +77,9 @@
                 <strong>{{ design.design_name }}</strong>
               </td>
               <td class="text-sm">{{ design.product_name }}</td>
-              <td class="text-sm">{{ num(design.stock.boxes) }}</td>
-              <td class="text-sm">{{ num(design.stock.pcs) }}</td>
-              <td class="text-sm">{{ num(design.stock.quantity) }}{% if design.stock.unit %} {{ design.stock.unit }}{% endif %}</td>
+              <td class="text-sm" data-sort-value="{{ design.stock.boxes or 0 }}">{{ num(design.stock.boxes) }}{% if design.stock.qty_unit %} {{ design.stock.qty_unit }}{% endif %}</td>
+              <td class="text-sm" data-sort-value="{{ design.stock.sold_boxes or 0 }}">{{ num(design.stock.sold_boxes) }}{% if design.stock.qty_unit %} {{ design.stock.qty_unit }}{% endif %}</td>
+              <td class="text-sm" data-sort-value="{{ design.stock.net_pcs or 0 }}">{{ num(design.stock.net_pcs) }}</td>
               <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
             </tr>
             {% endfor %}
@@ -104,14 +104,14 @@
   <div class="card-header"><h3>In stock now</h3></div>
   {% if in_stock %}
   <div class="table-wrap">
-    <table class="ledger">
+    <table class="ledger sortable-table">
       <thead>
         <tr>
           <th>Design</th>
           <th>Product</th>
-          <th>Boxes</th>
-          <th>Pieces</th>
-          <th>Quantity</th>
+          <th class="sortable-th" data-sort-key="qty">Total Purchased Qty <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
+          <th class="sortable-th" data-sort-key="sold">Total Sold Qty <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
+          <th class="sortable-th" data-sort-key="stock">Stock <span class="sort-arrows"><span class="sort-arrow sort-asc" data-dir="asc" title="Sort ascending">▲</span><span class="sort-arrow sort-desc" data-dir="desc" title="Sort descending">▼</span></span></th>
           <th></th>
         </tr>
       </thead>
@@ -125,9 +125,9 @@
             <strong>{{ design.design_name }}</strong>
           </td>
           <td class="text-sm">{{ design.product_name }}</td>
-          <td class="text-sm">{{ num(design.stock.boxes) }}</td>
-          <td class="text-sm">{{ num(design.stock.pcs) }}</td>
-          <td class="text-sm">{{ num(design.stock.quantity) }}{% if design.stock.unit %} {{ design.stock.unit }}{% endif %}</td>
+          <td class="text-sm" data-sort-value="{{ design.stock.boxes or 0 }}">{{ num(design.stock.boxes) }}{% if design.stock.qty_unit %} {{ design.stock.qty_unit }}{% endif %}</td>
+          <td class="text-sm" data-sort-value="{{ design.stock.sold_boxes or 0 }}">{{ num(design.stock.sold_boxes) }}{% if design.stock.qty_unit %} {{ design.stock.qty_unit }}{% endif %}</td>
+          <td class="text-sm" data-sort-value="{{ design.stock.net_pcs or 0 }}">{{ num(design.stock.net_pcs) }}</td>
           <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
         </tr>
         {% endfor %}
@@ -186,5 +186,38 @@
 {% endif %}
 
 {% endif %}
+
+<style>
+  .sortable-th { white-space: nowrap; }
+  .sort-arrows { display: inline-flex; flex-direction: column; margin-left: 4px; vertical-align: middle; line-height: 0.6; }
+  .sort-arrow { cursor: pointer; font-size: .6rem; color: #9aa7b0; }
+  .sort-arrow:hover { color: var(--color-accent, #b6742a); }
+  .sort-arrow.active { color: var(--color-accent, #b6742a); }
+</style>
+<script>
+  document.querySelectorAll('.sortable-table').forEach(function (table) {
+    table.querySelectorAll('.sort-arrow').forEach(function (arrow) {
+      arrow.addEventListener('click', function () {
+        var th = arrow.closest('th');
+        var sortKey = th.getAttribute('data-sort-key');
+        var dir = arrow.getAttribute('data-dir');
+        var headerCells = Array.prototype.slice.call(th.parentNode.children);
+        var colIndex = headerCells.indexOf(th);
+        var tbody = table.querySelector('tbody');
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+
+        rows.sort(function (a, b) {
+          var av = parseFloat(a.children[colIndex].getAttribute('data-sort-value')) || 0;
+          var bv = parseFloat(b.children[colIndex].getAttribute('data-sort-value')) || 0;
+          return dir === 'asc' ? av - bv : bv - av;
+        });
+        rows.forEach(function (row) { tbody.appendChild(row); });
+
+        table.querySelectorAll('.sort-arrow').forEach(function (a) { a.classList.remove('active'); });
+        arrow.classList.add('active');
+      });
+    });
+  });
+</script>
 
 {% endblock %}

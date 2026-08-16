@@ -23,7 +23,7 @@ from app.repositories import (
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
-    ExportInvoiceRepository, ExportPackingListRepository,
+    ExportInvoiceRepository, ExportPackingListRepository, ExportDesignsPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
 )
@@ -69,6 +69,9 @@ class ServiceContainer:
         self.purchase_invoice_repo = PurchaseInvoiceRepository(db)
         self.export_invoice_repo = ExportInvoiceRepository(db)
         self.export_packing_list_repo = ExportPackingListRepository(db, self.export_invoice_repo)
+        self.export_designs_packing_list_repo = ExportDesignsPackingListRepository(
+            db, self.export_invoice_repo, self.export_packing_list_repo
+        )
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
@@ -116,7 +119,10 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
-        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo, self.design_repo)
+        self.inventory_service = InventoryService(
+            self.product_service, self.packing_list_repo, self.design_repo,
+            self.purchase_order_repo, self.export_invoice_repo, self.purchase_invoice_repo,
+        )
         self.permit_service = PermitService(
             self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
@@ -165,6 +171,7 @@ class ServiceContainer:
         # every save of its invoice, so it is wired first and handed in.
         self.export_packing_list_service = ExportPackingListService(
             self.export_packing_list_repo, self.export_invoice_repo, self.product_repo, self.category_repo,
+            self.design_repo, self.packing_list_repo, self.export_designs_packing_list_repo,
         )
         self.export_invoice_service = ExportInvoiceService(
             self.export_invoice_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
@@ -279,6 +286,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.export_invoices import export_invoices_bp
     from app.routes.export_packing_lists import export_packing_lists_bp
     from app.routes.export_annexures import export_annexures_bp
+    from app.routes.export_designs_packing_lists import export_designs_packing_lists_bp
     from app.routes.tax_invoices import tax_invoices_bp
     from app.routes.bl_drafts import bl_drafts_bp
     from app.routes.vgm_attachments import vgm_attachments_bp
@@ -315,6 +323,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(export_invoices_bp)
     app.register_blueprint(export_packing_lists_bp)
     app.register_blueprint(export_annexures_bp)
+    app.register_blueprint(export_designs_packing_lists_bp)
     app.register_blueprint(tax_invoices_bp)
     app.register_blueprint(bl_drafts_bp)
     app.register_blueprint(vgm_attachments_bp)

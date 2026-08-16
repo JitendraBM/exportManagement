@@ -436,6 +436,38 @@ class TestExportInvoice:
         inv.items[0].igst_percent = 18
         assert inv.tax_total_inr == pytest.approx(1002.48 * 86.70 * 0.18)
 
+    # ---- printed_items_precise: 5-decimal rate for the export invoice's
+    # own sheet only, everything else (tax invoice, BRC copy) still reads
+    # the 2-decimal printed_items above -------------------------------------
+    def test_printed_items_precise_carries_the_charges_at_5_decimals(self):
+        # 150 of charges over 144 SQM = 1.04166... rounded to 5dp (1.04167,
+        # not the 1.04 the ordinary printed_items rounds to), so the buyer
+        # is quoted 6.96167 on this sheet rather than 6.96.
+        inv = self._export_invoice(nature_of_contract="CIF BEIRA",
+                                   sea_freight=100, insurance=50)
+        inv.items = [self._item(144, 5.92)]
+        assert inv.charge_uplift_per_unit_precise == pytest.approx(1.04167)
+        precise = inv.printed_items_precise
+        assert precise[0].price_usd == pytest.approx(6.96167)
+        assert precise[0].total_usd == pytest.approx(1002.48)    # still 2dp money, still foots to CIF
+        assert inv.items[0].price_usd == 5.92                    # the stored line is still untouched
+        # The ordinary (2dp) printed_items is completely unaffected.
+        assert inv.printed_items[0].price_usd == pytest.approx(6.96)
+
+    def test_printed_items_precise_is_the_stored_items_under_fob_terms(self):
+        inv = self._export_invoice(nature_of_contract="FOB MUNDRA",
+                                   certification=2, other_charges=3)
+        inv.items = [self._item(10, 6)]
+        assert inv.charge_uplift_per_unit_precise == 0.0
+        assert inv.printed_items_precise[0] is inv.items[0]
+
+    def test_printed_items_precise_column_still_foots_to_the_cif_value_exactly(self):
+        inv = self._export_invoice(sea_freight=1234.57, insurance=321.09,
+                                   certification=150, other_charges=99.99)
+        inv.items = [self._item(144, 5.92), self._item(100.8, 6.37)]
+        precise = inv.printed_items_precise
+        assert sum(i.total_usd for i in precise) == pytest.approx(inv.cif_value_usd)
+
 
 # --------------------------------------------------------------------------
 # DocumentVersion JSON snapshot round-trip

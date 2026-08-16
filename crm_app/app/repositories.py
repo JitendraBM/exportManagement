@@ -23,7 +23,7 @@ from app.models import (
     PurchaseOrder, PurchaseOrderItem,
     PurchaseInvoice, PurchaseInvoiceItem,
     ExportInvoice, ExportInvoiceItem,
-    ExportPackingList, ExportPackingListItem,
+    ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
     PackingList, PackingListItem, DocumentVersion,
 )
 
@@ -2499,6 +2499,115 @@ class ExportInvoiceRepository:
         # Leaf document - the child tables all cascade, nothing downstream to null.
         self.db.execute("DELETE FROM export_invoices WHERE id = ?", (invoice_id,))
 
+    def source_purchase_order_ids(self, export_invoice_id: int, company_id: int) -> List[int]:
+        """Which purchase orders actually supplied this export invoice's
+        goods - what scopes the Designs Packing List's reference list to the
+        designs that were really on this shipment.
+
+        Two routes, because the precise one isn't always populated:
+        1. export_invoice_product_sources names the contributing PO per goods
+           line, but only by po_number (free text, no FK), so it is resolved
+           back to an id here;
+        2. otherwise the linked proforma invoices' own purchase orders - the
+           same walk design_totals_for_linked_purchase_orders already does.
+        Returns [] when neither resolves, and the caller falls back to an
+        unscoped reference."""
+        rows = self.db.query(
+            """SELECT DISTINCT po.id AS id
+               FROM export_invoice_product_sources ps
+               JOIN purchase_orders po ON po.po_number = ps.po_number AND po.company_id = ?
+               WHERE ps.export_invoice_id = ?""",
+            (company_id, export_invoice_id),
+        )
+        if rows:
+            return [r["id"] for r in rows]
+        rows = self.db.query(
+            """SELECT DISTINCT po.id AS id
+               FROM export_invoice_proforma_links l
+               JOIN purchase_orders po ON po.proforma_invoice_id = l.proforma_invoice_id
+                                      AND po.company_id = ?
+               WHERE l.export_invoice_id = ?""",
+            (company_id, export_invoice_id),
+        )
+        return [r["id"] for r in rows]
+
+    # ---- inventory (per-design Sale Qty, for the design's Stock History card) ----
+    def sold_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, quantity, qty_unit, unit} sold, read off the
+        Designs Packing List's per-container allocation
+        (export_packing_list_item_designs) rather than the export invoice's
+        own goods lines: a goods line is priced per PRODUCT and its boxes are
+        usually a mix of designs split across containers, which is exactly
+        what that table records. Lines nobody has allocated designs for yet
+        simply don't count."""
+        rows = self.db.query(
+            """SELECT dz.design_id AS design_id,
+                      COALESCE(SUM(dz.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(dz.quantity_value), 0) AS quantity,
+                      MIN(p.quantity_unit) AS qty_unit,
+                      MIN(p.alternate_quantity_unit) AS unit
+               FROM export_packing_lists epl
+               JOIN export_invoices ei ON ei.id = epl.export_invoice_id
+               JOIN export_packing_list_item_designs dz ON dz.export_packing_list_id = epl.id
+               JOIN designs d ON d.id = dz.design_id
+               JOIN products p ON p.id = d.product_id
+               WHERE ei.company_id = ? AND dz.design_id IS NOT NULL
+               GROUP BY dz.design_id""",
+            (company_id,),
+        )
+        return {r["design_id"]: {"boxes": r["boxes"], "quantity": r["quantity"],
+                                 "qty_unit": r["qty_unit"], "unit": r["unit"]}
+                for r in rows}
+
+    def sold_history_for_design(self, company_id: int, design_id: int) -> List[dict]:
+        """One row per export invoice this design was sold on (via the
+        Designs Packing List allocation) - the sell side of the design's
+        Purchase / Sale history. Newest first.
+
+        Two independent signals let the caller trace a sale back to its
+        source PO -> Purchase Invoice chain:
+        - `po_numbers`: purchase order numbers the invoice's own goods line
+          (same product) was sourced from (export_invoice_product_sources,
+          filled in from ExportInvoiceService.build_prefill_from_proformas).
+        - `pi_invoice_numbers`: supplier invoice numbers from this export
+          invoice's own Purchase Details block (export_invoice_purchase_details,
+          same build), which is `purchase_invoices.invoice_number` for
+          whichever purchase invoices actually fed it - so a PO's own
+          purchase invoice(s) can be matched here directly, PO -> PI ->
+          Export Invoice, not just PO -> Export Invoice.
+
+        Neither is scoped to this exact design's boxes specifically (a
+        goods line/Purchase Details block covers the whole product, not a
+        design split), so a match is corroborating evidence of the chain,
+        not a guaranteed exact lineage."""
+        rows = self.db.query(
+            """SELECT ei.id AS export_invoice_id, ei.export_invoice_number AS export_invoice_number,
+                      ei.invoice_date AS invoice_date, ei.consignee_name AS consignee_name,
+                      dz.quantity_boxes AS boxes, dz.quantity_value AS quantity,
+                      p.quantity_unit AS qty_unit, p.alternate_quantity_unit AS unit,
+                      (SELECT GROUP_CONCAT(DISTINCT eps.po_number) FROM export_invoice_product_sources eps
+                        WHERE eps.export_invoice_id = ei.id AND eps.product_name = p.product_name) AS po_numbers_raw,
+                      (SELECT GROUP_CONCAT(DISTINCT epd.supplier_invoice_no) FROM export_invoice_purchase_details epd
+                        WHERE epd.export_invoice_id = ei.id AND epd.supplier_invoice_no IS NOT NULL) AS pi_invoice_numbers_raw
+               FROM export_packing_lists epl
+               JOIN export_invoices ei ON ei.id = epl.export_invoice_id
+               JOIN export_packing_list_item_designs dz ON dz.export_packing_list_id = epl.id
+               JOIN designs d ON d.id = dz.design_id
+               JOIN products p ON p.id = d.product_id
+               WHERE ei.company_id = ? AND dz.design_id = ?
+               ORDER BY ei.invoice_date DESC, ei.id DESC""",
+            (company_id, design_id),
+        )
+        results = []
+        for r in rows:
+            row = dict(r)
+            po_raw = row.pop("po_numbers_raw")
+            pi_raw = row.pop("pi_invoice_numbers_raw")
+            row["po_numbers"] = po_raw.split(",") if po_raw else []
+            row["pi_invoice_numbers"] = pi_raw.split(",") if pi_raw else []
+            results.append(row)
+        return results
+
 
 class ExportPackingListRepository:
     """Persistence for the Export Packing List: a thin header (number/date)
@@ -2534,6 +2643,20 @@ class ExportPackingListRepository:
                 (packing_list.id,),
             )
         ]
+        # Design allocations are matched onto their item by the container
+        # split's own natural key (invoice_item_sr_no, container_sr_no),
+        # never by export_packing_list_items.id - that id doesn't survive a
+        # re-save of the parent invoice (see ExportPackingListItemDesign's
+        # docstring).
+        designs_by_key: dict = {}
+        for r in self.db.query(
+            "SELECT * FROM export_packing_list_item_designs WHERE export_packing_list_id = ?",
+            (packing_list.id,),
+        ):
+            d = ExportPackingListItemDesign.from_row(r)
+            designs_by_key.setdefault((d.invoice_item_sr_no, d.container_sr_no), []).append(d)
+        for item in packing_list.items:
+            item.designs = designs_by_key.get((item.invoice_item_sr_no, item.container_sr_no), [])
         packing_list.invoice = self.export_invoice_repo.get_by_id(packing_list.export_invoice_id)
         if packing_list.invoice:
             packing_list.export_invoice_number = packing_list.invoice.export_invoice_number
@@ -2613,6 +2736,112 @@ class ExportPackingListRepository:
         """Only needed for an explicit "regenerate from scratch" - deleting
         the parent invoice already cascades to both tables."""
         self.db.execute("DELETE FROM export_packing_lists WHERE export_invoice_id = ?", (export_invoice_id,))
+
+    # ---- Designs Packing List (per-line design allocation) ----
+    def save_item_designs(self, export_packing_list_id: int, invoice_item_sr_no: int, container_sr_no: int,
+                          rows: List[ExportPackingListItemDesign]) -> None:
+        """Replaces one container-split line's design allocation wholesale.
+        Keyed on the natural key, not export_packing_list_items.id (see
+        ExportPackingListItemDesign's docstring) - this table is untouched
+        by _replace_items, so a normal export invoice re-save never wipes
+        an allocation already saved here."""
+        with self.db.get_connection() as conn:
+            conn.execute(
+                """DELETE FROM export_packing_list_item_designs
+                   WHERE export_packing_list_id = ? AND invoice_item_sr_no = ? AND container_sr_no = ?""",
+                (export_packing_list_id, invoice_item_sr_no, container_sr_no),
+            )
+            for row in rows:
+                conn.execute(
+                    """INSERT INTO export_packing_list_item_designs
+                       (export_packing_list_id, invoice_item_sr_no, container_sr_no,
+                        design_id, design_name, quantity_boxes, quantity_value, unit)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (export_packing_list_id, invoice_item_sr_no, container_sr_no,
+                     row.design_id, row.design_name, row.quantity_boxes, row.quantity_value, row.unit),
+                )
+
+
+class ExportDesignsPackingListRepository:
+    """Persistence for the DESIGNS PACKING LIST document. Deliberately thin:
+    the allocation rows it prints live on the export packing list
+    (export_packing_list_item_designs, see ExportPackingListRepository), so
+    all this table holds is the document's own number/date - assigned once at
+    creation and never rewritten, the same rule export_packing_lists follows."""
+
+    def __init__(self, db: Database, export_invoice_repo: "ExportInvoiceRepository",
+                 export_packing_list_repo: "ExportPackingListRepository"):
+        self.db = db
+        self.export_invoice_repo = export_invoice_repo
+        self.export_packing_list_repo = export_packing_list_repo
+
+    def next_number(self, company_id: int, packing_list_date: str) -> str:
+        """DSGPL{YYYYMMDD}{seq}, the day-scoped sequence every generated
+        document number in this app uses."""
+        date_part = (packing_list_date or "")[:10].replace("-", "")
+        prefix = f"DSGPL{date_part}"
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS c FROM export_designs_packing_lists "
+            "WHERE company_id = ? AND packing_list_number LIKE ?",
+            (company_id, f"{prefix}%"),
+        )
+        return f"{prefix}{(row['c'] if row else 0) + 1:03d}"
+
+    def _load(self, row) -> Optional[ExportDesignsPackingList]:
+        if not row:
+            return None
+        doc = ExportDesignsPackingList.from_row(row)
+        doc.invoice = self.export_invoice_repo.get_by_id(doc.export_invoice_id)
+        doc.packing_list = self.export_packing_list_repo.get_for_invoice(doc.export_invoice_id)
+        if doc.invoice:
+            doc.export_invoice_number = doc.invoice.export_invoice_number
+        return doc
+
+    def get_by_id(self, doc_id: int) -> Optional[ExportDesignsPackingList]:
+        return self._load(self.db.query_one(
+            """SELECT d.*, u.full_name AS created_by_name FROM export_designs_packing_lists d
+               JOIN users u ON u.id = d.created_by WHERE d.id = ?""",
+            (doc_id,),
+        ))
+
+    def get_for_invoice(self, export_invoice_id: int) -> Optional[ExportDesignsPackingList]:
+        return self._load(self.db.query_one(
+            """SELECT d.*, u.full_name AS created_by_name FROM export_designs_packing_lists d
+               JOIN users u ON u.id = d.created_by WHERE d.export_invoice_id = ?""",
+            (export_invoice_id,),
+        ))
+
+    def list_all(self, company_id: int) -> List[ExportDesignsPackingList]:
+        rows = self.db.query(
+            """SELECT d.*, u.full_name AS created_by_name, ei.export_invoice_number
+               FROM export_designs_packing_lists d
+               JOIN users u ON u.id = d.created_by
+               JOIN export_invoices ei ON ei.id = d.export_invoice_id
+               WHERE d.company_id = ?
+               ORDER BY d.packing_list_date DESC, d.id DESC""",
+            (company_id,),
+        )
+        return [ExportDesignsPackingList.from_row(r) for r in rows]
+
+    def create(self, doc: ExportDesignsPackingList) -> ExportDesignsPackingList:
+        new_id = self.db.execute(
+            """INSERT INTO export_designs_packing_lists
+               (company_id, export_invoice_id, packing_list_number, packing_list_date, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (doc.company_id, doc.export_invoice_id, doc.packing_list_number,
+             doc.packing_list_date, doc.created_by),
+        )
+        return self.get_by_id(new_id)
+
+    def touch(self, doc_id: int) -> None:
+        """Bumps updated_at when the allocation behind an already-created
+        document changes - the number and date deliberately stay put."""
+        self.db.execute(
+            "UPDATE export_designs_packing_lists SET updated_at = datetime('now') WHERE id = ?", (doc_id,)
+        )
+
+    def delete(self, doc_id: int) -> None:
+        self.db.execute("DELETE FROM export_designs_packing_lists WHERE id = ?", (doc_id,))
 
 
 class PurchaseOrderRepository:
@@ -2722,8 +2951,8 @@ class PurchaseOrderRepository:
                 seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, delivery_time,
                 advance_percent, payment_terms, remarks, igst_percent, cgst_percent, sgst_percent,
-                purchase_type, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                purchase_type, tax_as_actual, currency_code, currency_symbol, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_order.company_id, purchase_order.po_number, purchase_order.po_date,
              purchase_order.proforma_invoice_id, purchase_order.seller_supplier_id,
              purchase_order.seller_name, purchase_order.seller_address, purchase_order.seller_pan,
@@ -2731,7 +2960,8 @@ class PurchaseOrderRepository:
              purchase_order.port_of_discharge, purchase_order.container_details, purchase_order.delivery_time,
              purchase_order.advance_percent, purchase_order.payment_terms, purchase_order.remarks,
              purchase_order.igst_percent, purchase_order.cgst_percent, purchase_order.sgst_percent,
-             purchase_order.purchase_type, purchase_order.currency_code, purchase_order.currency_symbol,
+             purchase_order.purchase_type, int(purchase_order.tax_as_actual),
+             purchase_order.currency_code, purchase_order.currency_symbol,
              purchase_order.created_by),
         )
         self._replace_items(new_id, purchase_order.items)
@@ -2745,7 +2975,7 @@ class PurchaseOrderRepository:
                                            port_of_loading = ?, port_of_discharge = ?, container_details = ?,
                                            delivery_time = ?, advance_percent = ?, payment_terms = ?,
                                            remarks = ?, igst_percent = ?, cgst_percent = ?, sgst_percent = ?,
-                                           purchase_type = ?, currency_code = ?, currency_symbol = ?,
+                                           purchase_type = ?, tax_as_actual = ?, currency_code = ?, currency_symbol = ?,
                                            updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_order.po_date, purchase_order.proforma_invoice_id,
@@ -2754,7 +2984,7 @@ class PurchaseOrderRepository:
              purchase_order.port_of_loading, purchase_order.port_of_discharge, purchase_order.container_details,
              purchase_order.delivery_time, purchase_order.advance_percent, purchase_order.payment_terms,
              purchase_order.remarks, purchase_order.igst_percent, purchase_order.cgst_percent,
-             purchase_order.sgst_percent, purchase_order.purchase_type,
+             purchase_order.sgst_percent, purchase_order.purchase_type, int(purchase_order.tax_as_actual),
              purchase_order.currency_code, purchase_order.currency_symbol, purchase_order_id),
         )
         self._replace_items(purchase_order_id, purchase_order.items)
@@ -2766,11 +2996,12 @@ class PurchaseOrderRepository:
                 conn.execute(
                     """INSERT INTO purchase_order_items
                        (purchase_order_id, sr_no, product_id, product_name, hsn_code,
-                        quantity_boxes, quantity_unit, quantity_value, unit, price_inr, price_per, total_inr)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, quantity_unit, quantity_value, unit, price_inr, price_per, total_inr,
+                        design_id, design_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (purchase_order_id, item.sr_no, item.product_id, item.product_name, item.hsn_code,
                      item.quantity_boxes, item.quantity_unit, item.quantity_value, item.unit, item.price_inr,
-                     item.price_per, item.total_inr),
+                     item.price_per, item.total_inr, item.design_id, item.design_name),
                 )
 
     def delete(self, purchase_order_id: int) -> None:
@@ -2780,6 +3011,91 @@ class PurchaseOrderRepository:
         directly from this purchase order."""
         with self.db.get_connection() as conn:
             _cascade_delete_purchase_order(conn, purchase_order_id)
+
+    # ---- inventory (per-design PO Qty, for the design's Stock History card) ----
+    def ordered_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, quantity, qty_unit, unit} ordered across every
+        purchase order line, attributed to a design via that PO's own linked
+        packing list (a PO line no longer carries a design tag itself - the
+        packing list, which already tags designs for the Received/Stock
+        columns, is the single source of truth). A PO+product with no
+        design-tagged packing list line is skipped entirely; a PO+product
+        split across several designs on the packing list is split the same
+        way here, pro-rated by each design's share of that packing list's
+        boxes for the product."""
+        po_items = self.db.query(
+            """SELECT i.purchase_order_id AS po_id, i.product_id AS product_id,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(p.quantity_unit) AS qty_unit,
+                      MIN(p.alternate_quantity_unit) AS unit
+               FROM purchase_orders po
+               JOIN purchase_order_items i ON i.purchase_order_id = po.id
+               JOIN products p ON p.id = i.product_id
+               WHERE po.company_id = ?
+               GROUP BY i.purchase_order_id, i.product_id""",
+            (company_id,),
+        )
+        design_tags = self.db.query(
+            """SELECT pl.purchase_order_id AS po_id, pli.product_id AS product_id,
+                      pli.design_id AS design_id,
+                      COALESCE(SUM(pli.quantity_boxes), 0) AS boxes
+               FROM packing_lists pl
+               JOIN packing_list_items pli ON pli.packing_list_id = pl.id
+               WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+                     AND pli.design_id IS NOT NULL
+               GROUP BY pl.purchase_order_id, pli.product_id, pli.design_id""",
+            (company_id,),
+        )
+        tag_map: dict = {}
+        for r in design_tags:
+            tag_map.setdefault((r["po_id"], r["product_id"]), []).append((r["design_id"], r["boxes"]))
+
+        totals: dict = {}
+        for item in po_items:
+            tags = tag_map.get((item["po_id"], item["product_id"]))
+            if not tags:
+                continue
+            tag_total = sum(boxes for _, boxes in tags)
+            if tag_total <= 0:
+                continue
+            for design_id, boxes in tags:
+                share = boxes / tag_total
+                entry = totals.setdefault(design_id, {"boxes": 0.0, "quantity": 0.0, "qty_unit": None, "unit": None})
+                entry["boxes"] += item["boxes"] * share
+                entry["quantity"] += item["quantity"] * share
+                entry["qty_unit"] = entry["qty_unit"] or item["qty_unit"]
+                entry["unit"] = entry["unit"] or item["unit"]
+        return totals
+
+    def purchase_history_for_design(self, company_id: int, design_id: int) -> List[dict]:
+        """One row per purchase order this design was received against (via
+        that PO's packing list design tags) - the buy side of the design's
+        Purchase / Sale history. Newest first. po_ordered_boxes/
+        po_product_tagged_boxes let the caller pro-rate the PO's own ordered
+        quantity down to this design's share, the same way
+        ordered_totals_by_design does at the company level."""
+        rows = self.db.query(
+            """SELECT po.id AS purchase_order_id, po.po_number AS po_number, po.po_date AS po_date,
+                      pl.packing_list_number AS packing_list_number, i.product_id AS product_id,
+                      i.quantity_boxes AS received_boxes, i.quantity_value AS received_quantity,
+                      p.alternate_quantity_unit AS unit, p.quantity_unit AS qty_unit,
+                      (SELECT COALESCE(SUM(oi.quantity_boxes), 0) FROM purchase_order_items oi
+                        WHERE oi.purchase_order_id = po.id AND oi.product_id = i.product_id) AS po_ordered_boxes,
+                      (SELECT COALESCE(SUM(pli.quantity_boxes), 0) FROM packing_lists pl2
+                        JOIN packing_list_items pli ON pli.packing_list_id = pl2.id
+                        WHERE pl2.purchase_order_id = po.id AND pli.product_id = i.product_id
+                              AND pli.design_id IS NOT NULL) AS po_product_tagged_boxes
+               FROM packing_lists pl
+               JOIN purchase_orders po ON po.id = pl.purchase_order_id
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               JOIN designs d ON d.id = i.design_id
+               JOIN products p ON p.id = d.product_id
+               WHERE pl.company_id = ? AND i.design_id = ?
+               ORDER BY po.po_date DESC, po.id DESC""",
+            (company_id, design_id),
+        )
+        return [dict(r) for r in rows]
 
 
 class PurchaseInvoiceRepository:
@@ -3013,11 +3329,15 @@ class PackingListRepository:
         self.db = db
 
     def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+        """Highest existing sequence suffix for this date prefix, not a row
+        count - a plain COUNT(*) collides with an existing later number once
+        an earlier same-day packing list has been deleted."""
         row = self.db.query_one(
-            "SELECT COUNT(*) AS cnt FROM packing_lists WHERE company_id = ? AND packing_list_number LIKE ?",
-            (company_id, f"{number_prefix}%"),
+            "SELECT MAX(CAST(SUBSTR(packing_list_number, ?) AS INTEGER)) AS max_seq "
+            "FROM packing_lists WHERE company_id = ? AND packing_list_number LIKE ?",
+            (len(number_prefix) + 1, company_id, f"{number_prefix}%"),
         )
-        return row["cnt"] if row else 0
+        return row["max_seq"] if row and row["max_seq"] is not None else 0
 
     _SELECT = """
         SELECT pl.*, u.full_name AS created_by_name, pi.invoice_number AS proforma_invoice_number,
@@ -3202,6 +3522,34 @@ class PackingListRepository:
         )
         return [dict(r) for r in rows]
 
+    def design_totals_for_product(self, company_id: int, product_id: int,
+                                  purchase_order_ids: Optional[List[int]] = None) -> List[dict]:
+        """The designs actually received for one product, with their box/qty
+        totals - the purchase-side reference shown beside each line on the
+        Designs Packing List, so whoever allocates knows exactly which
+        designs came in on this shipment and how many.
+
+        `purchase_order_ids` scopes it to the purchase orders that actually
+        fed this export invoice (see ExportInvoiceRepository.
+        source_purchase_order_ids); without it the answer would be every
+        design ever bought for that product across every order, which lists
+        designs that were never on this shipment. Only falls back to
+        company-wide when the caller can't resolve any source PO at all."""
+        if not product_id:
+            return []
+        sql = f"""SELECT {self._DESIGN_TOTALS_COLUMNS}
+                  FROM packing_lists pl
+                  JOIN packing_list_items i ON i.packing_list_id = pl.id
+                  WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+                    AND i.product_id = ? AND i.design_id IS NOT NULL"""
+        params: list = [company_id, product_id]
+        if purchase_order_ids:
+            sql += f" AND pl.purchase_order_id IN ({','.join('?' for _ in purchase_order_ids)})"
+            params.extend(purchase_order_ids)
+        sql += """ GROUP BY i.product_id, i.product_name, i.design_id, i.design_name
+                   ORDER BY i.design_name"""
+        return [dict(r) for r in self.db.query(sql, tuple(params))]
+
     # ---- inventory (designs bought = placed on a purchase order's packing list) ----
     # A packing list carrying a purchase_order_id is a PO's packing list: the
     # goods we've bought in. Summed per design, that's everything purchased;
@@ -3215,16 +3563,20 @@ class PackingListRepository:
                       COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
                       COALESCE(SUM(i.pcs), 0) AS pcs,
                       COALESCE(SUM(i.quantity_value), 0) AS quantity,
-                      MIN(i.unit) AS unit
+                      MIN(p.alternate_quantity_unit) AS unit,
+                      MIN(p.quantity_unit) AS qty_unit
                FROM packing_lists pl
                JOIN packing_list_items i ON i.packing_list_id = pl.id
+               JOIN designs d ON d.id = i.design_id
+               JOIN products p ON p.id = d.product_id
                WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
                  AND i.design_id IS NOT NULL
                GROUP BY i.design_id""",
             (company_id,),
         )
         return {r["design_id"]: {"boxes": r["boxes"], "pcs": r["pcs"],
-                                 "quantity": r["quantity"], "unit": r["unit"]}
+                                 "quantity": r["quantity"], "unit": r["unit"],
+                                 "qty_unit": r["qty_unit"]}
                 for r in rows}
 
     def bought_history_for_design(self, company_id: int, design_id: int) -> List[dict]:
@@ -3236,10 +3588,13 @@ class PackingListRepository:
                       po.seller_name AS seller_name, po.id AS purchase_order_id,
                       pl.packing_list_number AS packing_list_number,
                       i.quantity_boxes AS boxes, i.pcs AS pcs,
-                      i.quantity_value AS quantity, i.unit AS unit
+                      i.quantity_value AS quantity, p.alternate_quantity_unit AS unit,
+                      p.quantity_unit AS qty_unit
                FROM packing_lists pl
                JOIN purchase_orders po ON po.id = pl.purchase_order_id
                JOIN packing_list_items i ON i.packing_list_id = pl.id
+               JOIN designs d ON d.id = i.design_id
+               JOIN products p ON p.id = d.product_id
                WHERE pl.company_id = ? AND i.design_id = ?
                ORDER BY po.po_date DESC, po.id DESC""",
             (company_id, design_id),

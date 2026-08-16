@@ -24,7 +24,7 @@ _HEADER_FIELDS = [
     "po_date", "proforma_invoice_id", "seller_supplier_id",
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "delivery_time", "advance_percent", "payment_terms", "remarks",
-    "purchase_type",
+    "purchase_type", "tax_as_actual",
     "currency_code",
 ]
 

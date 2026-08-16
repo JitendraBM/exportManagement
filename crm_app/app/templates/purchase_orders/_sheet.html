@@ -95,7 +95,7 @@
   <!-- Buyer (our company) / order references -->
   <table>
     <colgroup>
-      <col style="width:20px"><col style="width:36%"><col style="width:14%"><col style="width:19%"><col><col>
+      <col style="width:20px"><col style="width:50%"><col style="width:12%"><col style="width:15%"><col><col>
     </colgroup>
     <tr>
       <td class="po-side" rowspan="3">BUYER</td>
@@ -223,13 +223,19 @@
       <col style="width:53%"><col style="width:15%"><col style="width:12%"><col style="width:20%">
     </colgroup>
     <tr>
-      <td class="po-val po-mid" rowspan="{{ 6 if annex_items else 5 }}">ORDER VALUE SAY IN WORD :<br>{{ purchase_order.order_value_inr | inr_in_words(purchase_order.currency_name) }}</td>
+      {% set tax_rows = 1 if purchase_order.tax_as_actual else 3 %}
+      <td class="po-val po-mid" rowspan="{{ tax_rows + (1 if annex_items else 0) + 2 }}">{{ 'ORDER TAXABLE VALUE SAY IN WORD' if purchase_order.tax_as_actual else 'ORDER VALUE SAY IN WORD' }} :<br>{{ purchase_order.order_value_inr | inr_in_words(purchase_order.currency_name) }}</td>
       {% if annex_items %}
       <td class="po-charge-label" colspan="2">ANNEXURE</td>
       <td class="po-val po-right">{{ inr(annex_total) }}</td>
     </tr>
     <tr>
       {% endif %}
+      {% if purchase_order.tax_as_actual %}
+      <td class="po-charge-label" colspan="3">TAX AS ACTUAL</td>
+    </tr>
+    <tr>
+      {% else %}
       <td class="po-charge-label">IGST</td>
       <td class="po-val po-right">{{ '{:.2f}'.format(purchase_order.igst_percent) }}%</td>
       <td class="po-val po-right">{{ inr(purchase_order.igst_amount) }}</td>
@@ -245,6 +251,7 @@
       <td class="po-val po-right">{{ inr(purchase_order.sgst_amount) }}</td>
     </tr>
     <tr>
+      {% endif %}
       <td class="po-charge-label" colspan="2">ROUND OFF</td>
       <td class="po-val po-right">{{ purchase_order.currency_prefix }}&nbsp;{{ '{:,.2f}'.format(purchase_order.round_off_inr) }}</td>
     </tr>
@@ -253,59 +260,6 @@
       <td class="po-val po-right">{{ inr(purchase_order.order_value_inr) }}</td>
     </tr>
   </table>
-
-  <!-- Packing details: products selected on this PO, with the design
-       breakdown for each pulled from the PO's proforma invoice's own
-       packing list (see _packing_details_rows in routes/purchase_orders.py) -->
-  {% if packing_details_items %}
-  <table class="po-items">
-    <colgroup>
-      <col style="width:5%"><col style="width:30%"><col style="width:8%"><col style="width:19%"><col style="width:9%">
-      <col style="width:10%"><col style="width:9%"><col style="width:10%">
-    </colgroup>
-    <thead>
-      <tr><td colspan="8" style="font-size:10px;">PACKING DETAILS</td></tr>
-      <tr>
-        <td>SR<br>NO</td>
-        <td>DESCRIPTION OF GOODS</td>
-        <td>HSN CODE</td>
-        <td>DESIGN NO OR NAME</td>
-        <td>BOXES</td>
-        <td>QTY</td>
-        <td>NO OF<br>PLTS</td>
-        <td>BOXES PER<br>PALLET</td>
-      </tr>
-    </thead>
-    <tbody>
-      {% set pk = namespace(boxes=0, qty=0, pallets=0) %}
-      {% for item in packing_details_items %}
-      {% set pk.boxes = pk.boxes + (item.quantity_boxes or 0) %}
-      {% set pk.qty = pk.qty + (item.quantity_value or 0) %}
-      {% set pk.pallets = pk.pallets + (item.pallets or 0) %}
-      <tr>
-        <td class="po-center">{{ loop.index }}</td>
-        <td class="po-bottom">{{ item.product_name }}</td>
-        <td class="po-center">{{ item.hsn_code or '' }}</td>
-        <td class="po-center">{{ (item.design_name or '')|upper }}</td>
-        <td class="po-center">{% if item.quantity_boxes %}{{ num(item.quantity_boxes) }} <span class="po-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
-        <td class="po-right">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="po-unit-sm">{{ item.unit }}</span></td>
-        <td class="po-center">{{ num(item.pallets) }}</td>
-        <td class="po-center">{{ num(item.box_per_pallet) }}</td>
-      </tr>
-      {% endfor %}
-      <tr>
-        <td></td>
-        <td class="po-val po-center">TOTAL</td>
-        <td></td>
-        <td></td>
-        <td class="po-val po-center">{{ num(pk.boxes) }}</td>
-        <td class="po-val po-right">{{ '{:,.2f}'.format(pk.qty) }}</td>
-        <td class="po-val po-center">{{ num(pk.pallets) }}</td>
-        <td></td>
-      </tr>
-    </tbody>
-  </table>
-  {% endif %}
 
   <!-- Footnote + signatures -->
   <table>

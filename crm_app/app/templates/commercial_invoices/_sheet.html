@@ -170,23 +170,17 @@
 
   <!-- ============ DECLARATION | SIGNATORY ============ -->
   <table>
-    <colgroup><col style="width:47%"><col style="width:16%"><col style="width:37%"></colgroup>
+    <colgroup><col style="width:40%"><col style="width:30%"><col style="width:30%"></colgroup>
     <tr>
       <td>
         <span class="ci-lbl">Declaration:</span>
         We Declare That This Invoice Shows The Actual Price Of The Goods Described &amp; That All Particulars Are True And Correct
       </td>
-      <td class="ci-c ci-lbl ci-mid">CERTIFY THAT GOODS ARE OF "INDIAN ORIGIN"</td>
-      <td class="ci-r ci-sign">
+      <td class="ci-c ci-lbl ci-mid" style="font-size:1.25em; line-height:1.5;">CERTIFY THAT GOODS ARE OF<br>"INDIAN ORIGIN"</td>
+      <td class="ci-r ci-sign" style="font-size:.75em;">
         <div class="ci-lbl">For {{ company.company_name|upper if company else '' }}</div>
-        <div style="margin-top:26px;">
+        <div style="margin-top:22px;">
           <span class="ci-lbl">Authorised Signatury</span>
-          {%- if invoice.authorised_person_name %}<br>
-            <span class="ci-lbl">
-              {{ invoice.authorised_person_name }}
-              {%- if invoice.authorised_person_designation %} {{ invoice.authorised_person_designation }}{% endif %}
-            </span>
-          {%- endif %}
         </div>
       </td>
     </tr>

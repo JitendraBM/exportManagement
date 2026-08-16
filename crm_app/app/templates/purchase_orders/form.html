@@ -160,6 +160,13 @@
     <button type="button" class="btn btn-ghost btn-sm" id="add-row-btn">+ Add product line</button>
     <p class="hint">Choosing a catalog product prefills its name, HSN code and unit. Qty auto-fills from Boxes × the product's Alternate Quantity when known, but stays editable. Price is the seller's ex-factory rate in the order's currency — per BOX (the usual basis) or per the row's quantity unit. A catalog product also carries the tax rate used below for a Full Tax Purchase.</p>
     <div class="form-row" style="margin-top:14px;">
+      <div class="field" style="max-width:220px;">
+        <label for="tax_as_actual">
+          <input type="checkbox" id="tax_as_actual" name="tax_as_actual" value="1" {{ 'checked' if data and data.tax_as_actual }}>
+          Tax as Actual
+        </label>
+        <p class="hint">When ticked, the printed PO shows "TAX AS ACTUAL" instead of computed tax and the order value is the goods subtotal only.</p>
+      </div>
       <div class="field" style="max-width:260px;">
         <label for="purchase_type">Purchase under<span class="required-mark">*</span></label>
         {% set selected_purchase_type = data.purchase_type | default('full_tax', true) if data else 'full_tax' %}
@@ -338,9 +345,10 @@
       tr.querySelector('.js-total').textContent = total.toFixed(2);
       subtotal += total;
     });
+    const taxAsActual = document.getElementById('tax_as_actual').checked;
     const taxes = currentTaxes();
     renderTaxes(taxes);
-    const gross = subtotal + subtotal * (taxes.igst + taxes.cgst + taxes.sgst) / 100;
+    const gross = taxAsActual ? subtotal : subtotal + subtotal * (taxes.igst + taxes.cgst + taxes.sgst) / 100;
     const orderValue = Math.round(gross);
     document.getElementById('subtotal-display').textContent = subtotal.toFixed(2);
     document.getElementById('roundoff-display').textContent = (orderValue - gross).toFixed(2);
@@ -385,6 +393,7 @@
   // Both of these move the tax rates, so they move the order value too.
   document.getElementById('purchase_type').addEventListener('change', recalcTotals);
   document.getElementById('seller_gstin').addEventListener('input', recalcTotals);
+  document.getElementById('tax_as_actual').addEventListener('change', recalcTotals);
 
   // ---- proforma dropdown prefill (reloads the page with ?proforma_invoice_id=) --------------------------------------------------
   document.getElementById('proforma_select').addEventListener('change', (e) => {

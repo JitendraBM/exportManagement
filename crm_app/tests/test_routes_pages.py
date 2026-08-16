@@ -479,6 +479,28 @@ class TestExportPackingListRoutes:
         assert resp.status_code == 200
         assert b"EXPORT INVOICE" in resp.data
 
+    def test_rate_prints_at_5_decimals_under_cif_terms(self, admin_ctx):
+        # 150 of charges over 144 SQM -> 1.04167/unit at 5dp precision (not
+        # the 1.04 the export invoice's other attachments still round to),
+        # so this sheet alone quotes 6.96167 rather than 6.96 - see
+        # ExportInvoice.printed_items_precise.
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"nature_of_contract": "CIF", "sea_freight": "100", "insurance": "50"})
+        body = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "6.96167" in body
+        assert "6.96" not in body.replace("6.96167", "")
+
+    def test_rate_stays_at_2_decimals_under_fob_terms(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        invoice = self._create_export_invoice(
+            client, container, admin, company_id,
+            extra={"nature_of_contract": "FOB MUNDRA", "sea_freight": "100"})
+        body = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
+        assert "5.92" in body
+        assert "5.92000" not in body
+
     def _set_government_schemes(self, container, admin, text):
         save_company(container, admin, government_schemes=text)
 
@@ -494,12 +516,14 @@ class TestExportPackingListRoutes:
         seg = re.sub(r"<[^>]+>", "", seg)
         return [line.strip() for line in seg.split("\n") if line.strip()]
 
-    def test_export_under_block_is_composed_of_scheme_heading_and_epcg(self, admin_ctx):
+    def test_export_under_block_is_composed_of_scheme_and_heading_only(self, admin_ctx):
         """Export under is no longer typed anywhere: the scheme line always
-        comes from OurCompany.government_schemes, and the EPCG line is
-        resolved from the linked PI's own purchase-order chain at creation
-        time (see ExportInvoiceService._resolve_epcg) - not from a posted
-        field."""
+        comes from OurCompany.government_schemes. EPCG used to print here too
+        (resolved from the linked PI's own purchase-order chain at creation
+        time, see ExportInvoiceService._resolve_epcg) but now prints per-row
+        in the Purchase Details of 0.1% GST block instead - see
+        test_exemption_purchase_locks_tax_mode_and_prints_in_the_0_1_percent_gst_block,
+        which also carries an EPCG number/date through that same chain."""
         client, container, admin, company_id = admin_ctx
         self._set_government_schemes(container, admin, "WE INTEND TO CLAIM REWARDS UNDER RoDTEP & DBK")
         product = container.product_service.create_product(
@@ -527,7 +551,8 @@ class TestExportPackingListRoutes:
         lines = self._export_under_cell(client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True))
         assert lines[0] == "WE INTEND TO CLAIM REWARDS UNDER RODTEP & DBK"
         assert lines[1] == "SUPPLY MEANT FOR EXPORT WITH PAYMENT OF IGST"
-        assert lines[2].startswith("EPCG LICENCE NO : 2431000888")
+        assert len(lines) == 2
+        assert not any("EPCG" in line for line in lines)
 
     def test_exemption_purchase_locks_tax_mode_and_prints_in_the_0_1_percent_gst_block(self, admin_ctx):
         """A purchase invoice under exemption (0.1% GST) forces the export
@@ -559,16 +584,23 @@ class TestExportPackingListRoutes:
             # chain's Purchase Details row (see build_prefill_from_proformas).
             "pd_supplier_gstin[]": "24ABVFA1170D1ZO", "pd_supplier_invoice_no[]": "GSTT/4987",
             "pd_supplier_name[]": "Alive Granito", "pd_purchase_type[]": "exemption",
+            "pd_epcg_number[]": "2431000888", "pd_epcg_date[]": "2021-09-17",
         })
         got = container.export_invoice_service.get(invoice.id, company_id)
         assert got.tax_mode == "lut"
 
         page = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
-        assert "Purchase Details of" in page
-        anchor = page.find("Purchase Details of")
+        assert "Concessional Purchase &amp; EPCG details" in page
+        anchor = page.find("Concessional Purchase &amp; EPCG details")
         block = page[anchor:anchor + 800]
         assert "24ABVFA1170D1ZO" in block
         assert "GSTT/4987" in block
+        # ...and now also its EPCG number/date, right beside the invoice no.
+        assert "2431000888" in block
+        assert "17-09-2021" in block
+        # No longer in the Export Under cell either.
+        lines = self._export_under_cell(page)
+        assert not any("EPCG" in line for line in lines)
 
     def test_full_tax_only_purchase_keeps_the_0_1_percent_gst_block_empty(self, admin_ctx):
         """Same chain, but the purchase invoice is full_tax (not exemption):
@@ -602,7 +634,7 @@ class TestExportPackingListRoutes:
         assert got.tax_mode == "igst"
 
         page = client.get(f"/export-invoices/{invoice.id}").get_data(as_text=True)
-        anchor = page.find("Purchase Details of")
+        anchor = page.find("Concessional Purchase &amp; EPCG details")
         assert anchor != -1
         block = page[anchor:anchor + 800]
         assert "24ABVFA1170D1ZO" not in block
@@ -686,6 +718,22 @@ class TestExportPackingListRoutes:
         packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
         page = client.get(f"/export-packing-lists/{packing_list.id}").get_data(as_text=True)
         assert "LUT123" in page
+
+    def test_the_lut_number_also_prints_in_the_export_under_cell_under_lut(self, admin_ctx):
+        """Under LUT, the Export Under cell's own SUPPLY MEANT FOR EXPORT
+        line now also carries the LUT number, same as the sheet's own top
+        heading - pinned on both the export invoice and the packing list,
+        which print the identical cell."""
+        client, container, admin, company_id = admin_ctx
+        save_company(container, admin)  # seeds the company's LUT ("LUT123")
+        invoice = self._create_export_invoice(client, container, admin, company_id, extra={"tax_mode": "lut"})
+        packing_list = container.export_packing_list_service.get_for_invoice(invoice.id, company_id)
+
+        for path in (f"/export-invoices/{invoice.id}", f"/export-packing-lists/{packing_list.id}"):
+            page = client.get(path).get_data(as_text=True)
+            lines = self._export_under_cell(page)
+            assert any("LUT NO : LUT123" in line for line in lines), path
+            assert any(line.startswith("SUPPLY MEANT FOR EXPORT WITHOUT PAYMENT OF IGST UNDER LUT") for line in lines), path
 
     def test_saving_an_export_invoice_generates_its_packing_list(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -2219,10 +2267,10 @@ class TestCommercialPackingListRoutes:
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
         body = client.get(f"/commercial-packing-lists/{invoice.id}").get_data(as_text=True)
-        assert "COMMERCIAL INVOICE PACKING LIST" in body
+        assert "COMMERCIAL PACKING LIST" in body
         assert "BLJU2253726" in body and "SEGU3227471" in body      # container nos
         assert "UFL331090" in body                                  # line seal
-        assert "WIND02432727" in body                               # RFID seal
+        assert "WIND02432727" not in body                           # RFID seal no longer printed
         assert "1,590.00" in body and "1,620.00" in body
         assert "2,650.00" in body and "2,700.00" in body
         assert "144.00" in body
@@ -2248,7 +2296,7 @@ class TestCommercialPackingListRoutes:
                        'name="item_price_usd[]"', 'name="cd_container_no[]"'):
             assert absent not in body
 
-    def test_the_bill_of_lading_pair_saves_and_prints(self, admin_ctx):
+    def test_the_bill_of_lading_pair_saves_but_no_longer_prints(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(client, container, admin, company_id)
         resp = client.post(f"/commercial-packing-lists/{invoice.id}/edit", data={
@@ -2258,8 +2306,8 @@ class TestCommercialPackingListRoutes:
         assert got.bill_of_lading_no == "MEDUJ1234567"
         assert got.bill_of_lading_date == "2026-04-22"
         body = client.get(f"/commercial-packing-lists/{invoice.id}").get_data(as_text=True)
-        assert "MEDUJ1234567" in body
-        assert "22-04-2026" in body
+        assert "MEDUJ1234567" not in body
+        assert "22-04-2026" not in body
 
     def test_saving_the_export_invoice_does_not_wipe_the_bill_of_lading(self, admin_ctx):
         client, container, admin, company_id = admin_ctx
@@ -2312,30 +2360,34 @@ class TestCustomerInvoiceRoutes:
         assert resp.status_code == 200
         assert b"1000000042" in resp.data
 
-    def test_rate_is_the_cif_rate_under_cif_terms(self, admin_ctx):
-        # 150 of charges over 144 SQM = a 1.04/unit share, so the buyer is
-        # quoted 6.96 all-in rather than the 5.92 that was typed.
+    def test_rate_is_the_typed_fob_rate_even_under_cif_terms(self, admin_ctx):
+        # Unlike the export invoice's own sheet (and the BRC commercial
+        # invoice copy), the customer copy always quotes the plain typed rate
+        # - 5.92, not the 6.96 all-in CIF rate 150 of charges over 144 SQM
+        # would uplift it to - so the goods column foots to FOB Value, not
+        # the CIF value, and the two rows agree.
         client, container, admin, company_id = admin_ctx
         invoice = self._priced(client, container, admin, company_id)
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
-        assert "6.96" in body                        # the CIF rate
-        assert "1,002.48" in body                    # 6.96 x 144, the line total
-        assert "852.48" in body                      # ...and FOB Value still opens the ladder
+        assert "6.96" not in body                    # not the CIF rate
+        assert "5.92" in body                        # the typed FOB rate
+        assert "852.48" in body                       # 5.92 x 144, the line total AND FOB Value
+        assert "1,002.48" not in body                 # not the CIF-priced line total
 
-    def test_both_copies_quote_the_same_cif_rate(self, admin_ctx):
+    def test_customer_copy_quotes_fob_while_the_brc_copy_quotes_cif(self, admin_ctx):
         # 144 SQM typed at 5.92 with a 144.00 sea freight - a clean 1.00/unit
-        # share, so both the customer copy and the BRC copy quote the buyer the
-        # identical all-in 6.92. The two only differ in how the ladder below is
-        # laid out, never in the rate.
+        # share, so the BRC copy's all-in rate is 6.92. The customer copy
+        # deliberately does NOT match it any more - it prints the plain typed
+        # 5.92 instead, the one thing that now differs between the two sheets.
         client, container, admin, company_id = admin_ctx
         invoice = self._create_export_invoice(
             client, container, admin, company_id,
             extra={"nature_of_contract": "CIF", "sea_freight": "144"})
         body = client.get(f"/customer-invoices/{invoice.id}").get_data(as_text=True)
         brc_body = client.get(f"/commercial-invoices/{invoice.id}").get_data(as_text=True)
-        assert "6.92" in body and "6.92" in brc_body   # the CIF rate, both copies
-        assert "996.48" in body and "996.48" in brc_body  # 6.92 x 144 = 852.48 + 144 freight
-        assert "852.48" in body                       # the FOB Value row on the customer copy
+        assert "5.92" in body and "6.92" not in body   # customer copy: the typed FOB rate
+        assert "6.92" in brc_body                      # BRC copy: still the all-in CIF rate
+        assert "852.48" in body                        # 5.92 x 144, the line total AND FOB Value
         assert "FOB Value" in body
 
     def test_rate_is_the_typed_price_under_fob_terms(self, admin_ctx):

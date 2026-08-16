@@ -95,5 +95,6 @@ def view_design(design_id):
     breadcrumb = products_service.breadcrumb(g.user.company_id, design.folder_id)
     stock = container.inventory_service.stock_for_design(g.user.company_id, design_id)
     history = container.inventory_service.purchase_sale_history(g.user.company_id, design_id)
+    stock_history = container.inventory_service.stock_history_summary(g.user.company_id, design_id)
     return render_template("inventory/design_detail.html", design=design, product=product,
-                           breadcrumb=breadcrumb, stock=stock, history=history)
+                           breadcrumb=breadcrumb, stock=stock, history=history, stock_history=stock_history)

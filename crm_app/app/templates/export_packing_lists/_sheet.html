@@ -34,7 +34,10 @@
 
   .epl-lbl { font-weight: bold; }
   .epl-blk { font-weight: bold; }
-  .epl-mid { vertical-align: middle; }
+  /* Higher specificity than .epl-sheet td's own vertical-align: top, which
+     otherwise wins regardless of source order (a bare .epl-mid is only one
+     class - lower specificity than the class+element .epl-sheet td). */
+  .epl-sheet td.epl-mid { vertical-align: middle; }
   .epl-left { text-align: left; }
   .epl-center { text-align: center; }
   .epl-num { text-align: right; white-space: nowrap; }
@@ -215,7 +218,7 @@
     </tbody>
   </table>
 
-  <!-- ============ EXPORT UNDER: the RoDTEP claim and the EPCG licence ============ -->
+  <!-- ============ EXPORT UNDER: the RoDTEP claim ============ -->
   <table>
     <colgroup><col style="width:65%"><col style="width:35%"></colgroup>
     <tr>
@@ -223,14 +226,17 @@
         {# Same derived lines as the export invoice sheet's own Export Under
            cell, read from the same places - the scheme text used to be
            hard-coded RoDTEP wording here, which meant it silently disagreed
-           with whatever the invoice actually printed. No LUT number: it
-           prints in this sheet's SUPPLY MEANT FOR EXPORT heading instead,
-           and the two sheets have to agree. #}
+           with whatever the invoice actually printed. LUT NO is appended
+           when the invoice is under LUT, same as this sheet's own top
+           heading, so the two can't disagree. No EPCG any more either -
+           that now prints per-row in the export invoice's own Concessional
+           Purchase & EPCG details block (each purchase invoice's own EPCG,
+           rather than one figure for the whole export invoice). #}
         {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
         <span class="epl-lbl">Export Under</span><br>
         {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
         SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
-        {% if invoice.epcg_number %}<br>EPCG Licence No : {{ invoice.epcg_number }}{% if invoice.epcg_date %} Dated : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
+        {%- if invoice.tax_mode == 'lut' and lut_no %} - LUT NO : {{ lut_no }}{% endif -%}
       </td>
       <td rowspan="3" class="epl-lbl epl-mid epl-center" style="font-size:11px;">
         CERTIFY THAT GOODS ARE OF<br>"INDIAN ORIGIN"

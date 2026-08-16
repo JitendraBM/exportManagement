@@ -25,7 +25,7 @@
       <select id="buyer_select">
         <option value="">— All buyers —</option>
         {% for b in buyers %}
-        <option value="{{ b.id }}" data-company-key="{{ b.lead_id or ((b.company_name or '') | lower | trim) }}">{{ b.company_name }}</option>
+        <option value="{{ b.id }}" data-company-key="{{ (b.company_name or '') | lower | trim }}">{{ b.company_name }}</option>
         {% endfor %}
       </select>
     </div>
@@ -37,7 +37,7 @@
         {% for pi in proforma_invoices %}
         <label class="js-pi-label" style="display:block;padding:4px 0;cursor:pointer;">
           <input type="checkbox" class="js-pi-check" name="proforma_invoice_ids[]" value="{{ pi.id }}"
-                 data-company-key="{{ pi.lead_id or ((pi.consignee_name or '') | lower | trim) }}"
+                 data-company-key="{{ (pi.consignee_name or '') | lower | trim }}"
                  {{ 'checked' if pi.id | string in selected_str }}>
           <strong>{{ pi.invoice_number }}</strong> — {{ pi.consignee_name }}{% if pi.buyer_order_no %} · <span class="text-soft">Order {{ pi.buyer_order_no }}</span>{% endif %} ({{ pi.invoice_date }})
         </label>
@@ -328,7 +328,8 @@
                   data-stuffing-place-name="{{ p.stuffing_place_name or '' }}"
                   data-place-of-stuffing="{{ p.place_of_stuffing or '' }}"
                   data-date-of-expiry="{{ p.date_of_expiry if not p.is_one_time else '' }}"
-                  data-is-one-time="{{ '1' if p.is_one_time else '0' }}">
+                  data-is-one-time="{{ '1' if p.is_one_time else '0' }}"
+                  {{ 'selected' if data.permission_no and p.permission_number == data.permission_no }}>
             {{ p.permission_number }}{% if p.stuffing_place_name %} — {{ p.stuffing_place_name }}{% endif %}
           </option>
         {% endfor %}
@@ -903,7 +904,7 @@
   }
 
   // Booking no. options carry the buyer's own id (BookingDetail.buyer_id),
-  // so - unlike the PI picker's lead/name-based key above - this narrows by
+  // so - unlike the PI picker's name-based key above - this narrows by
   // a straight id match against whichever buyer is picked. No buyer picked
   // yet means every booking stays visible. The `hidden` attribute on an
   // <option> is unreliable across browsers (Firefox keeps showing it in the
@@ -956,7 +957,12 @@
       // PI's "New export invoice" link) still shows the right buyer picked.
       if (e.target.checked) {
         const opt = buyerOptionForKey(e.target.dataset.companyKey);
-        if (opt && buyerSelect.value !== opt.value) buyerSelect.value = opt.value;
+        // Setting .value in JS doesn't fire 'change', so the booking filter
+        // (wired to buyerSelect's change listener) has to be poked by hand.
+        if (opt && buyerSelect.value !== opt.value) {
+          buyerSelect.value = opt.value;
+          if (bookingSelect) refreshBookingFilter();
+        }
       }
       refreshProformaPickerFilter();
     });

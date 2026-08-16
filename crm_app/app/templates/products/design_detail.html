@@ -7,14 +7,15 @@
     <div class="eyebrow">Catalog · {{ product.product_name }}</div>
     <h1>{{ design.design_name }}</h1>
   </div>
-  {% if current_user.is_admin %}
   <div class="topbar-actions">
+    <a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="btn btn-ghost">Stock History →</a>
+    {% if current_user.is_admin %}
     <a href="{{ url_for('products.edit_design', design_id=design.id) }}" class="btn btn-ghost">Edit</a>
     <form method="POST" action="{{ url_for('products.delete_design', design_id=design.id) }}" onsubmit="return confirm('Delete this design?');">
       <button type="submit" class="btn btn-danger">Delete</button>
     </form>
+    {% endif %}
   </div>
-  {% endif %}
 </div>
 
 <div class="breadcrumb-trail">

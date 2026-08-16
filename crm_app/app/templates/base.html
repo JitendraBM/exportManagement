@@ -47,18 +47,25 @@
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('proforma_invoices.') }}" href="{{ url_for('proforma_invoices.list_proforma_invoices') }}">📄 Proforma Invoices</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('purchase_orders.') }}" href="{{ url_for('purchase_orders.list_purchase_orders') }}">🧾 Purchase Orders</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('purchase_invoices.') }}" href="{{ url_for('purchase_invoices.list_purchase_invoices') }}">🧾 Purchase Invoices</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_invoices.') }}" href="{{ url_for('export_invoices.list_export_invoices') }}">🌐 Export Invoices</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_packing_lists.') }}" href="{{ url_for('export_packing_lists.list_export_packing_lists') }}">🌐 Export Packing Lists</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_annexures.') }}" href="{{ url_for('export_annexures.list_annexures') }}">🌐 Annexure-C</a>
+          {% set export_invoice_doc_prefixes = ['export_invoices.', 'export_packing_lists.', 'export_annexures.', 'bl_drafts.', 'vgm_attachments.', 'vgm_declarations.', 'eseals.', 'eway_bills.'] %}
+          {% set export_invoice_docs_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in export_invoice_doc_prefixes %}
+          <details class="nav-dropdown nav-subdropdown" {{ 'open' if export_invoice_docs_open }}>
+            <summary class="nav-link nav-dropdown-summary {{ 'active' if request.endpoint and request.endpoint.startswith('export_invoices.') }}">🌐 Export Invoices</summary>
+            <div class="nav-dropdown-panel">
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_invoices.') }}" href="{{ url_for('export_invoices.list_export_invoices') }}">🌐 Export Invoices</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_packing_lists.') }}" href="{{ url_for('export_packing_lists.list_export_packing_lists') }}">🌐 Export Packing Lists</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_annexures.') }}" href="{{ url_for('export_annexures.list_annexures') }}">🌐 Annexure-C</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('bl_drafts.') }}" href="{{ url_for('bl_drafts.list_bl_drafts') }}">🚢 BL Drafts</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('vgm_attachments.') }}" href="{{ url_for('vgm_attachments.list_vgm_attachments') }}">⚖ VGM Attachments</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('vgm_declarations.') }}" href="{{ url_for('vgm_declarations.list_vgm_declarations') }}">⚖ VGM Declarations</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('eseals.') }}" href="{{ url_for('eseals.list_eseals') }}">🔒 E-Seal Sheets</a>
+              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('eway_bills.') }}" href="{{ url_for('eway_bills.list_eway_bills') }}">🚚 E-Way Bill Sheets</a>
+            </div>
+          </details>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('tax_invoices.') }}" href="{{ url_for('tax_invoices.list_tax_invoices') }}">🧾 Tax Invoices</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('commercial_invoices.') }}" href="{{ url_for('commercial_invoices.list_commercial_invoices') }}">🧾 Commercial Invoices</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('commercial_packing_lists.') }}" href="{{ url_for('commercial_packing_lists.list_commercial_packing_lists') }}">📦 Commercial Packing Lists</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('customer_invoices.') }}" href="{{ url_for('customer_invoices.list_customer_invoices') }}">🧾 Customer Invoices</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('bl_drafts.') }}" href="{{ url_for('bl_drafts.list_bl_drafts') }}">🚢 BL Drafts</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('vgm_attachments.') }}" href="{{ url_for('vgm_attachments.list_vgm_attachments') }}">⚖ VGM Attachments</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('vgm_declarations.') }}" href="{{ url_for('vgm_declarations.list_vgm_declarations') }}">⚖ VGM Declarations</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('eseals.') }}" href="{{ url_for('eseals.list_eseals') }}">🔒 E-Seal Sheets</a>
-          <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('eway_bills.') }}" href="{{ url_for('eway_bills.list_eway_bills') }}">🚚 E-Way Bill Sheets</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('packing_lists.') }}" href="{{ url_for('packing_lists.list_packing_lists') }}">📦 Packing Lists</a>
         </div>
       </details>

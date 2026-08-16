@@ -1203,6 +1203,8 @@ class PurchaseOrderItem:
     price_inr: float = 0
     price_per: str = "BOX"
     total_inr: float = 0
+    design_id: Optional[int] = None
+    design_name: Optional[str] = None
 
     @staticmethod
     def from_row(row) -> "PurchaseOrderItem":
@@ -1220,6 +1222,8 @@ class PurchaseOrderItem:
             price_inr=row["price_inr"],
             price_per=row["price_per"],
             total_inr=row["total_inr"],
+            design_id=row["design_id"] if "design_id" in row.keys() else None,
+            design_name=row["design_name"] if "design_name" in row.keys() else None,
         )
 
 
@@ -1255,6 +1259,11 @@ class PurchaseOrder:
     cgst_percent: float = 0
     sgst_percent: float = 0
     purchase_type: str = DEFAULT_PURCHASE_TYPE  # key of PURCHASE_TYPES
+    # When set, the printed sheet skips the computed IGST/CGST/SGST rows and
+    # prints a single "TAX AS ACTUAL" line instead - the order value then
+    # equals the goods subtotal with no tax added, since the real tax will
+    # only be known once the supplier's own purchase invoice is raised.
+    tax_as_actual: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
@@ -1292,6 +1301,7 @@ class PurchaseOrder:
             cgst_percent=row["cgst_percent"],
             sgst_percent=row["sgst_percent"],
             purchase_type=(row["purchase_type"] if "purchase_type" in row.keys() else None) or DEFAULT_PURCHASE_TYPE,
+            tax_as_actual=bool(row["tax_as_actual"]) if "tax_as_actual" in row.keys() else False,
             created_by=row["created_by"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -1347,12 +1357,18 @@ class PurchaseOrder:
     @property
     def order_value_inr(self) -> float:
         """The final order value, rounded to the whole rupee (the round-off
-        line on the printed PO bridges the difference)."""
+        line on the printed PO bridges the difference). Under "Tax as
+        actual" no tax is added - the real amount will only be known once
+        the supplier's own purchase invoice is raised."""
+        if self.tax_as_actual:
+            return float(round(self.subtotal_inr))
         return float(round(self.subtotal_inr + self.igst_amount + self.cgst_amount + self.sgst_amount))
 
     @property
     def round_off_inr(self) -> float:
-        gross = self.subtotal_inr + self.igst_amount + self.cgst_amount + self.sgst_amount
+        gross = self.subtotal_inr if self.tax_as_actual else (
+            self.subtotal_inr + self.igst_amount + self.cgst_amount + self.sgst_amount
+        )
         return round(self.order_value_inr - gross, 2)
 
 
@@ -2132,9 +2148,10 @@ class ExportInvoice(CifMoneyLadder):
     vgm_weighing_method: Optional[str] = None
     vgm_cargo_type: Optional[str] = None
     vgm_hazardous_details: Optional[str] = None
-    # The commercial invoice packing list's only two typed cells.
+    # The commercial invoice packing list's typed cells.
     bill_of_lading_no: Optional[str] = None
     bill_of_lading_date: Optional[str] = None
+    bill_of_lading_pdf_path: Optional[str] = None
     issuing_authority: Optional[str] = None
     issuing_authority_address: Optional[str] = None
     permission_no: Optional[str] = None
@@ -2234,6 +2251,7 @@ class ExportInvoice(CifMoneyLadder):
             vgm_hazardous_details=g("vgm_hazardous_details"),
             bill_of_lading_no=g("bill_of_lading_no"),
             bill_of_lading_date=g("bill_of_lading_date"),
+            bill_of_lading_pdf_path=g("bill_of_lading_pdf_path"),
             issuing_authority=g("issuing_authority"),
             issuing_authority_address=g("issuing_authority_address"),
             permission_no=g("permission_no"),
@@ -2353,6 +2371,42 @@ class ExportInvoice(CifMoneyLadder):
         printed = []
         for item in self.items:
             rate = round((item.price_usd or 0) + uplift, 2)
+            printed.append(replace(
+                item, price_usd=rate, total_usd=round(rate * (item.quantity_value or 0), 2),
+            ))
+        leftover = round(self.cif_value_usd - sum(i.total_usd for i in printed), 2)
+        if leftover:
+            last = printed[-1]
+            printed[-1] = replace(last, total_usd=round(last.total_usd + leftover, 2))
+        return printed
+
+    @property
+    def charge_uplift_per_unit_precise(self) -> float:
+        """Same as charge_uplift_per_unit, but rounded to 5 decimal places
+        instead of 2 - only for printed_items_precise below, which feeds
+        the Rate column on the export invoice's own printed sheet under
+        CIF/CFR terms. Every other CIF/CFR-priced sheet (tax invoice, BRC
+        commercial invoice) still reads charge_uplift_per_unit/printed_items
+        at their original 2-decimal precision, deliberately unchanged."""
+        if is_fob_terms(self.nature_of_contract):
+            return 0.0
+        total_qty = sum(item.quantity_value or 0 for item in self.items)
+        return round(self.charges_total / total_qty, 5) if total_qty else 0.0
+
+    @property
+    def printed_items_precise(self) -> List[ExportInvoiceItem]:
+        """Same as printed_items, but the per-line CIF/CFR rate is rounded to
+        5 decimal places rather than 2 (see charge_uplift_per_unit_precise) -
+        used only by the export invoice's own printed sheet. Total_usd still
+        rounds to 2 decimals (it's money), and the leftover-on-the-last-line
+        reconciliation is unchanged, so the goods column still foots exactly
+        to the CIF/CFR value either way."""
+        uplift = self.charge_uplift_per_unit_precise
+        if not uplift:
+            return list(self.items)
+        printed = []
+        for item in self.items:
+            rate = round((item.price_usd or 0) + uplift, 5)
             printed.append(replace(
                 item, price_usd=rate, total_usd=round(rate * (item.quantity_value or 0), 2),
             ))
@@ -2501,6 +2555,41 @@ class ExportInvoice(CifMoneyLadder):
 
 
 @dataclass
+class ExportPackingListItemDesign:
+    """One catalog-design slice of an ExportPackingListItem's boxes, entered
+    on the "Designs Packing List" page (app/routes/export_designs_packing_lists.py).
+    Keyed on (export_packing_list_id, invoice_item_sr_no, container_sr_no) -
+    the container split's own natural key - rather than an FK to the parent
+    ExportPackingListItem's id, because that row's id is NOT stable: it is
+    wholesale deleted and re-inserted every time the parent export invoice is
+    saved (ExportPackingListRepository._replace_items). Per line, every
+    design row's quantity_boxes must sum to exactly that line's own."""
+    id: Optional[int]
+    export_packing_list_id: int
+    invoice_item_sr_no: int
+    container_sr_no: int
+    design_id: Optional[int] = None
+    design_name: Optional[str] = None
+    quantity_boxes: float = 0
+    quantity_value: float = 0
+    unit: Optional[str] = None
+
+    @staticmethod
+    def from_row(row) -> "ExportPackingListItemDesign":
+        return ExportPackingListItemDesign(
+            id=row["id"],
+            export_packing_list_id=row["export_packing_list_id"],
+            invoice_item_sr_no=row["invoice_item_sr_no"],
+            container_sr_no=row["container_sr_no"],
+            design_id=row["design_id"],
+            design_name=row["design_name"],
+            quantity_boxes=row["quantity_boxes"],
+            quantity_value=row["quantity_value"],
+            unit=row["unit"],
+        )
+
+
+@dataclass
 class ExportPackingListItem:
     """One (container x goods line) allocation on an Export Packing List:
     `quantity_boxes` boxes of the export invoice's goods line
@@ -2528,6 +2617,7 @@ class ExportPackingListItem:
     unit: str = "SQM"
     net_weight_kg: Optional[float] = None
     gross_weight_kg: Optional[float] = None
+    designs: List[ExportPackingListItemDesign] = field(default_factory=list)  # attached by the repository, see ExportPackingListRepository._load
 
     @staticmethod
     def from_row(row) -> "ExportPackingListItem":
@@ -2687,6 +2777,98 @@ class ExportPackingList:
                 "net_weight_kg": t.get("net_weight_kg", 0.0),
             })
         return rows
+
+
+@dataclass
+class ExportDesignsPackingList:
+    """The DESIGNS PACKING LIST: the second packing list that ships alongside
+    the regular Export Packing List, restating the same container split with
+    every goods line broken into the catalog designs its boxes actually are.
+
+    Exactly one per export invoice. All it owns is its own number and date,
+    assigned once when it is created and kept through every later edit of the
+    allocation - the paperwork already went out under that number. Every
+    figure it prints comes from `packing_list` (the export packing list, whose
+    items carry the design rows) and from `invoice`, both attached by the
+    repository."""
+    id: Optional[int]
+    company_id: int
+    export_invoice_id: int
+    packing_list_number: str
+    packing_list_date: str
+    created_by: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    invoice: Optional[ExportInvoice] = None
+    packing_list: Optional[ExportPackingList] = None
+    export_invoice_number: Optional[str] = None  # carried by list queries, which don't load the parent
+
+    @staticmethod
+    def from_row(row) -> "ExportDesignsPackingList":
+        keys = row.keys()
+        return ExportDesignsPackingList(
+            id=row["id"],
+            company_id=row["company_id"],
+            export_invoice_id=row["export_invoice_id"],
+            packing_list_number=row["packing_list_number"],
+            packing_list_date=row["packing_list_date"],
+            created_by=row["created_by"],
+            created_at=row["created_at"] if "created_at" in keys else None,
+            updated_at=row["updated_at"] if "updated_at" in keys else None,
+            created_by_name=row["created_by_name"] if "created_by_name" in keys else None,
+            export_invoice_number=row["export_invoice_number"] if "export_invoice_number" in keys else None,
+        )
+
+    @property
+    def printed_containers(self) -> List[dict]:
+        """The sheet's body: one entry per physical container, each listing
+        its goods lines' design rows (design name, boxes, quantity) plus that
+        container's own totals. Lines nobody has allocated designs for yet
+        still appear, with their boxes shown against a blank design, so the
+        sheet never silently drops goods that are physically in the box."""
+        if not self.packing_list:
+            return []
+        containers: List[dict] = []
+        current = None
+        for item in sorted(self.packing_list.items, key=lambda i: (i.container_sr_no, i.sr_no)):
+            if current is None or current["container_sr_no"] != item.container_sr_no:
+                current = {
+                    "container_sr_no": item.container_sr_no, "container_no": item.container_no,
+                    "seal_no": item.seal_no, "rfid_seal_no": item.rfid_seal_no,
+                    "rows": [], "total_boxes": 0.0, "total_quantity": 0.0,
+                }
+                containers.append(current)
+            if item.designs:
+                for d in item.designs:
+                    current["rows"].append({
+                        "product_name": item.product_name, "hsn_code": item.hsn_code,
+                        "design_name": d.design_name, "quantity_boxes": d.quantity_boxes or 0,
+                        "quantity_unit": item.quantity_unit, "quantity_value": d.quantity_value or 0,
+                        "unit": d.unit or item.unit,
+                    })
+                    current["total_boxes"] += d.quantity_boxes or 0
+                    current["total_quantity"] += d.quantity_value or 0
+            else:
+                current["rows"].append({
+                    "product_name": item.product_name, "hsn_code": item.hsn_code,
+                    "design_name": None, "quantity_boxes": item.quantity_boxes or 0,
+                    "quantity_unit": item.quantity_unit, "quantity_value": item.quantity_value or 0,
+                    "unit": item.unit,
+                })
+                current["total_boxes"] += item.quantity_boxes or 0
+                current["total_quantity"] += item.quantity_value or 0
+        for c in containers:
+            c["rowspan"] = len(c["rows"])
+        return containers
+
+    @property
+    def total_boxes(self) -> float:
+        return sum(c["total_boxes"] for c in self.printed_containers)
+
+    @property
+    def total_quantity(self) -> float:
+        return sum(c["total_quantity"] for c in self.printed_containers)
 
 
 @dataclass
