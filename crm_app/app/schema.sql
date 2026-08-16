@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS buyers (
     instagram           TEXT,
     other_social        TEXT,
     address             TEXT,
+    country             TEXT,   -- "Country Name", picked from the Administration -> Miscellaneous country list
     status              TEXT NOT NULL DEFAULT 'proforma_invoice_submission_pending'
                         CHECK (status IN (
                             'proforma_invoice_submission_pending',
@@ -402,6 +403,27 @@ CREATE TABLE IF NOT EXISTS misc_hsn_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_misc_hsn_codes_company ON misc_hsn_codes(company_id);
 
+CREATE TABLE IF NOT EXISTS misc_countries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "Country Name", e.g. UNITED ARAB EMIRATES
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_countries_company ON misc_countries(company_id);
+
+CREATE TABLE IF NOT EXISTS misc_units (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES tenants(id),
+    name         TEXT NOT NULL,   -- "Unit", e.g. SQM
+    meaning      TEXT NOT NULL,   -- "Meaning", e.g. Square Meter
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_misc_units_company ON misc_units(company_id);
+
 -- ============================================================
 -- PERMITS  (the "permissions" a company holds, managed under the "Our
 -- Company" area. Each permit records a stuffing-place name + place of
@@ -528,6 +550,7 @@ CREATE TABLE IF NOT EXISTS product_pallet_types (
     product_id          INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     name                TEXT NOT NULL,
     boxes_per_pallet    REAL NOT NULL,
+    weight_kg           REAL,
     sort_order          INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -651,7 +674,6 @@ CREATE TABLE IF NOT EXISTS proforma_invoices (
     company_id              INTEGER NOT NULL REFERENCES tenants(id),
     invoice_number          TEXT NOT NULL,
     invoice_date            TEXT NOT NULL,
-    lead_id                 INTEGER REFERENCES leads(id),        -- optional, prefill/reference only
     quotation_id            INTEGER REFERENCES quotations(id),   -- optional, "generated from" reference only
     export_ref_no           TEXT,
     buyer_order_no          TEXT,
@@ -750,7 +772,6 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     company_id              INTEGER NOT NULL REFERENCES tenants(id),
     po_number               TEXT NOT NULL,
     po_date                 TEXT NOT NULL,
-    lead_id                 INTEGER REFERENCES leads(id),               -- optional, prefill/reference only
     proforma_invoice_id     INTEGER REFERENCES proforma_invoices(id),   -- optional, "generated from" reference only
     seller_supplier_id      INTEGER REFERENCES suppliers(id),           -- optional, the Supplier picked as seller
     seller_name             TEXT NOT NULL,
@@ -769,6 +790,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     cgst_percent            REAL NOT NULL DEFAULT 0,
     sgst_percent            REAL NOT NULL DEFAULT 0,
     purchase_type           TEXT NOT NULL DEFAULT 'full_tax',   -- 'full_tax' | 'exemption'; drives the three percentages above
+    tax_as_actual           INTEGER NOT NULL DEFAULT 0,   -- when set, the printed sheet skips the computed tax rows and prints "TAX AS ACTUAL" instead
     -- Currency shown on the document, picked from the Administration -> Miscellaneous
     -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
     currency_code           TEXT,
@@ -792,7 +814,9 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
     unit                TEXT NOT NULL DEFAULT 'SQM',
     price_inr           REAL NOT NULL DEFAULT 0,
     price_per           TEXT NOT NULL DEFAULT 'BOX',   -- what price_inr is per: 'BOX' or the row's unit
-    total_inr           REAL NOT NULL DEFAULT 0
+    total_inr           REAL NOT NULL DEFAULT 0,
+    design_id           INTEGER REFERENCES designs(id) ON DELETE SET NULL,   -- optional: which catalog design this line's boxes are for (feeds Inventory's per-design PO Qty)
+    design_name         TEXT   -- snapshot of the chosen design's name at save time
 );
 
 -- ============================================================
@@ -841,6 +865,7 @@ CREATE TABLE IF NOT EXISTS purchase_invoices (
     cgst_amount             REAL NOT NULL DEFAULT 0,
     sgst_amount             REAL NOT NULL DEFAULT 0,
     round_off               REAL NOT NULL DEFAULT 0,
+    purchase_type           TEXT NOT NULL DEFAULT 'full_tax',   -- 'full_tax' | 'exemption', same list as purchase_orders.purchase_type - typed here, not derived
     remarks                 TEXT,
     -- Currency shown on the document, picked from the Administration -> Miscellaneous
     -- list and snapshotted (name + symbol) so editing that list can't rewrite an issued sheet.
@@ -985,9 +1010,10 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     vgm_weighing_method         TEXT,          -- Method-1 / Method-2
     vgm_cargo_type              TEXT,          -- Normal / Reefer / Hazardous / Others
     vgm_hazardous_details       TEXT,          -- UN No, IMDG Class when hazardous
-    -- The commercial invoice packing list's only two typed cells.
+    -- The commercial invoice packing list's typed cells.
     bill_of_lading_no           TEXT,
     bill_of_lading_date         TEXT,
+    bill_of_lading_pdf_path     TEXT,          -- uploaded copy of the actual bill of lading (uploads/export_invoices/...)
     issuing_authority           TEXT,
     issuing_authority_address   TEXT,
     permission_no               TEXT,
@@ -1027,7 +1053,13 @@ CREATE TABLE IF NOT EXISTS export_invoice_items (
     price_usd             REAL NOT NULL DEFAULT 0,   -- always the CIF price: what the sheet prints
     fob_price_usd         REAL,                      -- the price as TYPED under fob_pricing (NULL otherwise)
     total_usd             REAL NOT NULL DEFAULT 0,
-    igst_percent          REAL NOT NULL DEFAULT 0   -- snapshot of the product's IGST %, so tax is per-product and stable
+    igst_percent          REAL NOT NULL DEFAULT 0,  -- snapshot of the product's IGST %, so tax is per-product and stable
+    -- The weight_kg of whichever named pallet type is currently selected on
+    -- this line (product_pallet_types.weight_kg), snapshotted the moment a
+    -- type is picked - NULL for Loose/Manual/no product. Feeds the Export
+    -- Packing List's container-split Gross (KG) = Net (KG) + Plts x this,
+    -- falling back to the product's own per-box gross weight when unset.
+    pallet_weight_kg      REAL
 );
 
 -- The many-to-many between an export invoice and the proforma invoices it
@@ -1092,7 +1124,18 @@ CREATE TABLE IF NOT EXISTS export_invoice_purchase_details (
     sr_no                    INTEGER NOT NULL,
     supplier_gstin           TEXT,
     supplier_invoice_no      TEXT,
-    supplier_name            TEXT
+    supplier_name            TEXT,
+    -- The purchase invoice's own "Purchase under" (full_tax | exemption),
+    -- snapshotted like the rest of the row. Drives the printed sheet's
+    -- "Concessional Purchase & EPCG details" block, which only lists the exemption
+    -- rows and only when the invoice itself is raised under LUT.
+    purchase_type            TEXT NOT NULL DEFAULT 'full_tax',
+    -- That purchase invoice's own EPCG licence no./date (if any), shown
+    -- alongside the row for reference - display only, does not drive the
+    -- export invoice's own EPCG line (ExportInvoiceService._resolve_epcg
+    -- still picks the first match across the whole chain independently).
+    epcg_number               TEXT,
+    epcg_date                 TEXT
 );
 
 -- One row per (goods line's product, purchase order) it was summed from -
@@ -1169,6 +1212,46 @@ CREATE TABLE IF NOT EXISTS export_packing_list_items (
     gross_weight_kg           REAL
 );
 
+-- Splits one (container x goods line) row of the Export Packing List
+-- (export_packing_list_items) further into the catalog designs its boxes
+-- actually are, entered on the "Designs Packing List" page (see
+-- app/routes/export_designs_packing_lists.py). Keyed on the container
+-- split's own natural key (invoice_item_sr_no, container_sr_no) rather than
+-- export_packing_list_items.id, because that table is wholesale deleted and
+-- re-inserted every time the parent export invoice is saved
+-- (ExportPackingListRepository._replace_items) - an FK to its id would lose
+-- every allocation on the next invoice edit. Per line, quantity_boxes across
+-- every design row must sum to exactly that line's own quantity_boxes.
+-- The DESIGNS PACKING LIST document itself: the second packing list that
+-- ships alongside the regular one, restating the same container split with
+-- each line broken into its designs. Exactly one per export invoice, and it
+-- owns nothing but its own number/date - every figure it prints comes from
+-- the export packing list and the design rows below.
+CREATE TABLE IF NOT EXISTS export_designs_packing_lists (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id               INTEGER NOT NULL REFERENCES tenants(id),
+    export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    packing_list_number      TEXT NOT NULL,
+    packing_list_date        TEXT NOT NULL,
+    created_by               INTEGER NOT NULL REFERENCES users(id),
+    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (export_invoice_id),
+    UNIQUE (company_id, packing_list_number)
+);
+
+CREATE TABLE IF NOT EXISTS export_packing_list_item_designs (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_packing_list_id   INTEGER NOT NULL REFERENCES export_packing_lists(id) ON DELETE CASCADE,
+    invoice_item_sr_no       INTEGER NOT NULL,
+    container_sr_no          INTEGER NOT NULL,
+    design_id                INTEGER REFERENCES designs(id) ON DELETE SET NULL,
+    design_name              TEXT,
+    quantity_boxes           REAL NOT NULL DEFAULT 0,
+    quantity_value           REAL NOT NULL DEFAULT 0,
+    unit                     TEXT
+);
+
 -- ============================================================
 -- PACKING LISTS  (header + line items, number generated as
 -- PL{YYYYMMDD}{seq-of-that-day} per company. Normally started from an
@@ -1185,7 +1268,6 @@ CREATE TABLE IF NOT EXISTS packing_lists (
     company_id              INTEGER NOT NULL REFERENCES tenants(id),
     packing_list_number     TEXT NOT NULL,
     packing_list_date       TEXT NOT NULL,
-    lead_id                 INTEGER REFERENCES leads(id),               -- optional, prefill/reference only
     proforma_invoice_id     INTEGER REFERENCES proforma_invoices(id),   -- optional, "generated from" reference only
     quotation_id            INTEGER REFERENCES quotations(id),         -- optional, "generated from" reference only (skips the PI step)
     purchase_order_id       INTEGER REFERENCES purchase_orders(id),    -- optional, "generated from" reference only (the PO's own PL)

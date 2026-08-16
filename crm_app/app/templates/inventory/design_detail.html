@@ -56,12 +56,41 @@
 <div class="card">
   <div class="card-header"><h3>Inventory</h3></div>
   <div class="grid grid-2">
-    <div><div class="text-sm text-soft">Current stock (boxes)</div><div><strong>{{ num(stock.boxes) }}</strong></div></div>
-    <div><div class="text-sm text-soft">Current stock (pieces)</div><div><strong>{{ num(stock.pcs) }}</strong></div></div>
-    <div><div class="text-sm text-soft">Current stock (quantity)</div><div>{{ num(stock.quantity) }}{% if stock.unit %} {{ stock.unit }}{% endif %}</div></div>
-    <div><div class="text-sm text-soft">Quantity unit</div><div>{{ stock.unit or '—' }}</div></div>
+    <div><div class="text-sm text-soft">Current stock (Qty)</div><div><strong>{{ num(stock.net_boxes) }}</strong>{% if stock.qty_unit %} {{ stock.qty_unit }}{% endif %}</div></div>
+    <div><div class="text-sm text-soft">Current stock (Alt Qty1)</div><div>{{ num(stock.net_quantity) }}{% if stock.unit %} {{ stock.unit }}{% endif %}</div></div>
+    <div><div class="text-sm text-soft">Quantity unit</div><div>{{ stock.qty_unit or '—' }}</div></div>
+    <div><div class="text-sm text-soft">Alt Qty1 unit</div><div>{{ stock.unit or '—' }}</div></div>
   </div>
   <div class="text-sm text-soft" style="margin-top:.5rem;">Stock is everything bought in (placed on a purchase order's packing list) less everything sold.</div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Stock History</h3></div>
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>PO Qty</th>
+          <th>Received Qty</th>
+          <th>PO Remain Qty</th>
+          <th>Sale Qty</th>
+          <th>Stock</th>
+          <th>Alt Qty</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="text-sm">{{ num(stock_history.po_boxes) }}{% if stock_history.po_qty_unit %} {{ stock_history.po_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.received_boxes) }}{% if stock_history.received_qty_unit %} {{ stock_history.received_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.po_remain_boxes) }}{% if stock_history.po_qty_unit %} {{ stock_history.po_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.sale_boxes) }}{% if stock_history.sale_qty_unit %} {{ stock_history.sale_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.stock_boxes) }}{% if stock_history.stock_qty_unit %} {{ stock_history.stock_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.stock_alt_qty) }}{% if stock_history.alt_unit %} {{ stock_history.alt_unit }}{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text-sm text-soft" style="margin-top:.5rem;">PO Qty and Sale Qty only count Purchase Order / Export Invoice lines that were tagged with this design when saved.</div>
 </div>
 
 <div class="card">
@@ -71,30 +100,52 @@
     <table class="ledger">
       <thead>
         <tr>
-          <th>Type</th>
-          <th>Date</th>
-          <th>Reference</th>
-          <th>Party</th>
-          <th>Boxes</th>
-          <th>Pieces</th>
-          <th>Quantity</th>
+          <th>Purchase Order</th>
+          <th>PO Qty</th>
+          <th>Purchase Invoice</th>
+          <th>Received Qty</th>
+          <th>PO Remain Qty</th>
+          <th>Export Invoice</th>
+          <th>Sale Qty</th>
         </tr>
       </thead>
       <tbody>
         {% for row in history %}
         <tr>
-          <td>{% if row.kind == 'purchase' %}<span class="badge">Purchased</span>{% else %}<span class="badge">Sold</span>{% endif %}</td>
-          <td class="text-sm">{{ row.po_date or '—' }}</td>
           <td class="text-sm">
             {% if row.purchase_order_id %}
               <a href="{{ url_for('purchase_orders.view_purchase_order', purchase_order_id=row.purchase_order_id) }}">{{ row.po_number }}</a>
-            {% else %}{{ row.po_number or '—' }}{% endif %}
-            {% if row.packing_list_number %}<div class="text-soft">PL {{ row.packing_list_number }}</div>{% endif %}
+              <div class="text-soft">{{ row.po_date or '—' }}</div>
+              {% if row.packing_list_number %}<div class="text-soft">PL {{ row.packing_list_number }}</div>{% endif %}
+            {% else %}—{% endif %}
           </td>
-          <td class="text-sm">{{ row.seller_name or '—' }}</td>
-          <td class="text-sm">{{ num(row.boxes) if row.boxes is not none else '—' }}</td>
-          <td class="text-sm">{{ num(row.pcs) if row.pcs is not none else '—' }}</td>
-          <td class="text-sm">{{ num(row.quantity) if row.quantity is not none else '—' }}{% if row.unit %} {{ row.unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(row.po_qty) if row.po_qty is not none else '—' }}{% if row.qty_unit %} {{ row.qty_unit }}{% endif %}</td>
+          <td class="text-sm">
+            {% if row.purchase_invoices %}
+              {% for pi in row.purchase_invoices %}
+                <div><a href="{{ url_for('purchase_invoices.view_purchase_invoice', purchase_invoice_id=pi.id) }}">{{ pi.purchase_invoice_number }}</a></div>
+                <div class="text-soft">{{ pi.invoice_date or '—' }}</div>
+              {% endfor %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-sm">{{ num(row.received_boxes) if row.received_boxes is not none else '—' }}{% if row.qty_unit %} {{ row.qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(row.po_remain_boxes) if row.po_remain_boxes is not none else '—' }}{% if row.qty_unit %} {{ row.qty_unit }}{% endif %}</td>
+          <td class="text-sm">
+            {% if row.sales %}
+              {% for sale in row.sales %}
+                <div><a href="{{ url_for('export_invoices.view_export_invoice', export_invoice_id=sale.export_invoice_id) }}">{{ sale.export_invoice_number }}</a></div>
+                <div class="text-soft">{{ sale.invoice_date or '—' }}</div>
+                <div class="text-soft">{{ sale.consignee_name or '—' }}</div>
+              {% endfor %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-sm">
+            {% if row.sales %}
+              {% for sale in row.sales %}
+                <div>{{ num(sale.boxes) if sale.boxes is not none else '—' }}{% if sale.qty_unit %} {{ sale.qty_unit }}{% endif %}</div>
+              {% endfor %}
+            {% else %}—{% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

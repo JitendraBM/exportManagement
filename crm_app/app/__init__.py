@@ -23,9 +23,9 @@ from app.repositories import (
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
-    ExportInvoiceRepository, ExportPackingListRepository,
+    ExportInvoiceRepository, ExportPackingListRepository, ExportDesignsPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
-    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository,
+    MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
 )
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
@@ -69,6 +69,9 @@ class ServiceContainer:
         self.purchase_invoice_repo = PurchaseInvoiceRepository(db)
         self.export_invoice_repo = ExportInvoiceRepository(db)
         self.export_packing_list_repo = ExportPackingListRepository(db, self.export_invoice_repo)
+        self.export_designs_packing_list_repo = ExportDesignsPackingListRepository(
+            db, self.export_invoice_repo, self.export_packing_list_repo
+        )
         self.packing_list_repo = PackingListRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
@@ -78,6 +81,8 @@ class ServiceContainer:
         self.misc_port_of_loading_repo = MiscPortOfLoadingRepository(db)
         self.misc_container_type_repo = MiscContainerTypeRepository(db)
         self.misc_hsn_code_repo = MiscHsnCodeRepository(db)
+        self.misc_country_repo = MiscCountryRepository(db)
+        self.misc_unit_repo = MiscUnitRepository(db)
 
         # Services (business logic layer)
         self.auth_service = AuthService(self.user_repo, self.tenant_repo)
@@ -114,14 +119,18 @@ class ServiceContainer:
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
         )
-        self.inventory_service = InventoryService(self.product_service, self.packing_list_repo, self.design_repo)
+        self.inventory_service = InventoryService(
+            self.product_service, self.packing_list_repo, self.design_repo,
+            self.purchase_order_repo, self.export_invoice_repo, self.purchase_invoice_repo,
+        )
         self.permit_service = PermitService(
             self.permit_repo,
             Config.PERMIT_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
         )
         self.misc_list_service = MiscListService(
             self.misc_currency_repo, self.misc_nature_of_contract_repo, self.misc_port_of_loading_repo,
-            self.misc_container_type_repo, self.misc_hsn_code_repo,
+            self.misc_container_type_repo, self.misc_hsn_code_repo, self.misc_country_repo,
+            self.misc_unit_repo,
         )
         self.booking_detail_service = BookingDetailService(self.booking_detail_repo, self.buyer_repo)
         self.document_version_service = DocumentVersionService(self.document_version_repo)
@@ -144,7 +153,7 @@ class ServiceContainer:
         self.purchase_order_service = PurchaseOrderService(
             self.purchase_order_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
             self.document_version_service, self.party_repos, self.supplier_repo, self.company_repo,
-            self.proforma_fulfilment_service, self.misc_list_service,
+            self.proforma_fulfilment_service, self.misc_list_service, self.quotation_repo,
         )
         self.packing_list_service = PackingListService(
             self.packing_list_repo, self.product_repo, self.design_repo,
@@ -162,6 +171,7 @@ class ServiceContainer:
         # every save of its invoice, so it is wired first and handed in.
         self.export_packing_list_service = ExportPackingListService(
             self.export_packing_list_repo, self.export_invoice_repo, self.product_repo, self.category_repo,
+            self.design_repo, self.packing_list_repo, self.export_designs_packing_list_repo,
         )
         self.export_invoice_service = ExportInvoiceService(
             self.export_invoice_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
@@ -230,6 +240,10 @@ def create_app(config_class=Config) -> Flask:
         container_type_options = (
             app.container.misc_list_service.container_type_options(user.company_id) if user else []
         )
+        # ...and for the countries a Buyer's "Country Name" field picks from.
+        country_options = (
+            app.container.misc_list_service.list_countries(user.company_id) if user else []
+        )
         return dict(
             current_user=g.get("user"),
             our_company=our_company,
@@ -237,6 +251,7 @@ def create_app(config_class=Config) -> Flask:
             nature_of_contract_options=nature_of_contract_options,
             port_of_loading_options=port_of_loading_options,
             container_type_options=container_type_options,
+            country_options=country_options,
             LEAD_STATUSES=LEAD_STATUSES,
             CLIENT_STATUSES=CLIENT_STATUSES,
             CLIENT_TYPES=CLIENT_TYPES,
@@ -271,6 +286,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.export_invoices import export_invoices_bp
     from app.routes.export_packing_lists import export_packing_lists_bp
     from app.routes.export_annexures import export_annexures_bp
+    from app.routes.export_designs_packing_lists import export_designs_packing_lists_bp
     from app.routes.tax_invoices import tax_invoices_bp
     from app.routes.bl_drafts import bl_drafts_bp
     from app.routes.vgm_attachments import vgm_attachments_bp
@@ -307,6 +323,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(export_invoices_bp)
     app.register_blueprint(export_packing_lists_bp)
     app.register_blueprint(export_annexures_bp)
+    app.register_blueprint(export_designs_packing_lists_bp)
     app.register_blueprint(tax_invoices_bp)
     app.register_blueprint(bl_drafts_bp)
     app.register_blueprint(vgm_attachments_bp)

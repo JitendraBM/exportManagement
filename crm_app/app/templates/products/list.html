@@ -146,7 +146,14 @@
           <td class="text-sm">{{ product.igst_percent if product.igst_percent is not none else '—' }}</td>
           <td class="text-sm">{{ product.sgst_percent if product.sgst_percent is not none else '—' }}</td>
           <td class="text-sm">{{ product.cgst_percent if product.cgst_percent is not none else '—' }}</td>
-          <td><a href="{{ url_for('products.view_product', product_id=product.id) }}" class="text-sm">Open →</a></td>
+          <td>
+            <a href="{{ url_for('products.view_product', product_id=product.id) }}" class="text-sm">Open →</a>
+            {% if current_user.is_admin %}
+            <form method="POST" action="{{ url_for('products.duplicate_product', product_id=product.id) }}" style="display:inline;">
+              <button type="submit" class="btn-link text-sm">Duplicate</button>
+            </form>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

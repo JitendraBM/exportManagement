@@ -41,13 +41,13 @@
   /* Opt out per-row for the Consigner/Consignee/Buyer labels, which sit
      directly above their address block with no rule between them. */
   .ei-nest table tr.ei-nb td { border-bottom: none; }
-  /* Heavier rule between the two SUPPLIER GSTIN / INVOICE NO pairs in the
-     Purchase Details grid, to set the pairs apart at a glance. */
-  .ei-pd-sep { border-left: 2px solid #000 !important; }
 
   .ei-lbl { font-weight: bold; }
   .ei-blk { font-weight: bold; }          /* consigner / consignee address blocks */
-  .ei-mid { vertical-align: middle; }
+  /* Higher specificity than .ei-sheet td's own vertical-align: top, which
+     otherwise wins regardless of source order (a bare .ei-mid is only one
+     class - lower specificity than the class+element .ei-sheet td). */
+  .ei-sheet td.ei-mid { vertical-align: middle; }
   .ei-c { text-align: center; }
   .ei-r { text-align: right; }
   .ei-num { text-align: right; white-space: nowrap; }
@@ -64,7 +64,11 @@
   .ei-tiv td:last-child, .ei-tiv td:nth-last-child(2) {
     background: #eee; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000;
   }
-  .ei-sign { height: 46px; }
+  .ei-sign { height: 46px; position: relative; }
+  /* Pins the Authorised Signatury block to the bottom of its cell
+     regardless of how tall the name/designation text ends up, rather than
+     the fixed margin-top guess that used to approximate it. */
+  .ei-sign-bottom { position: absolute; left: 4px; right: 4px; bottom: 2px; }
   @media print { .ei-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
 
@@ -179,6 +183,7 @@
             <td>{{ invoice.buyer_order_no or '-' }}{% if invoice.buyer_order_date %} &nbsp; {{ dmy(invoice.buyer_order_date) }}{% endif %}</td>
           </tr>
           <tr><td class="ei-lbl">Currency</td><td>{{ invoice.currency_label }}</td></tr>
+          <tr><td class="ei-lbl">Exchange Rate</td><td>{% if invoice.exchange_rate %}₹&nbsp;{{ '{:,.2f}'.format(invoice.exchange_rate) }}{% else %}-{% endif %}</td></tr>
           <tr><td class="ei-lbl">Pre Carriage By</td><td>{{ (invoice.pre_carriage_by or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Place of Receipt</td><td>{{ (invoice.place_of_receipt or '-')|upper }}</td></tr>
           <tr><td class="ei-lbl">Country of Origin</td><td>{{ (invoice.country_of_origin or 'INDIA')|upper }}</td></tr>
@@ -229,13 +234,17 @@
       </tr>
     </thead>
     <tbody>
-      {# printed_items, not items: the typed rate is the FOB rate, and under
-         CIF/CFR terms what the buyer is quoted per unit is the all-in rate,
-         so the charges are spread over the total ALT QTY and added to every
-         line (see ExportInvoice.printed_items). The goods column therefore
-         foots to the CIF/CFR VALUE row below. Under FOB terms there is no
-         such figure and the stored items print through unchanged. #}
-      {% for item in invoice.printed_items %}
+      {# printed_items_precise, not items: the typed rate is the FOB rate,
+         and under CIF/CFR terms what the buyer is quoted per unit is the
+         all-in rate, so the charges are spread over the total ALT QTY and
+         added to every line (see ExportInvoice.printed_items_precise - the
+         export invoice's own sheet only, at 5-decimal precision; every
+         other CIF/CFR-priced sheet still reads the 2-decimal
+         printed_items). The goods column therefore foots to the CIF/CFR
+         VALUE row below. Under FOB terms there is no such figure and the
+         stored items print through unchanged, at the usual 2 decimals. #}
+      {% set cif_or_cfr = not (invoice.nature_of_contract | is_fob) %}
+      {% for item in invoice.printed_items_precise %}
       <tr class="ei-goods">
         <td class="ei-c">{{ loop.index }}</td>
         <td>
@@ -246,7 +255,7 @@
         <td class="ei-cnum">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
         <td class="ei-cnum">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ei-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ei-cnum">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="ei-unit-sm">{{ item.unit }}</span></td>
-        <td class="ei-cnum">{{ usd(item.price_usd) }}</td>
+        <td class="ei-cnum">{% if cif_or_cfr %}{{ invoice.currency_prefix }}&nbsp;{{ '{:,.5f}'.format(item.price_usd) if item.price_usd else '-' }}{% else %}{{ usd(item.price_usd) }}{% endif %}</td>
         <td class="ei-c">{{ item.unit }}</td>
         <td class="ei-num">{{ usd(item.total_usd) }}</td>
       </tr>
@@ -332,23 +341,23 @@
       <tr class="ei-tot{% if is_total %} ei-tiv{% endif %}">
         {% if loop.first %}
         <td colspan="3" rowspan="{{ money|length }}" style="font-weight:normal;">
-          {# Three stacked lines, every one of them derived - see the same block
-             on the export packing list sheet, which prints the identical
-             structure so the two sheets can't disagree:
+          {# Two stacked lines, both derived - see the same block on the
+             export packing list sheet, which prints the identical structure
+             so the two sheets can't disagree:
                1. the government scheme (this invoice's own export-under text
                   when it was edited, otherwise the company's current one),
                2. the sheet's own SUPPLY MEANT FOR EXPORT heading, repeated
-                  here because the cell is what customs reads,
-               3. the EPCG licence, when the chain's purchase invoices carried
-                  one or it was typed straight onto this invoice.
-             Nothing else belongs in this cell - in particular NOT the LUT
-             number, which prints in the sheet's own SUPPLY MEANT FOR EXPORT
-             heading above and has no place in this cell. #}
+                  here because the cell is what customs reads - LUT NO
+                  appended when the invoice is under LUT, same as the sheet's
+                  own top heading, so the two can't disagree either.
+             NOT the EPCG licence any more, which now prints per-row in the
+             Concessional Purchase & EPCG details block below (each purchase invoice's
+             own EPCG, rather than one figure for the whole export invoice). #}
           {% set scheme = invoice.export_under or (company.government_schemes if company else None) %}
           <span class="ei-lbl">Export Under</span><br>
           {% if scheme %}{{ scheme|upper|replace('\n', '<br>')|safe }}<br>{% endif %}
           SUPPLY MEANT FOR EXPORT {{ invoice.tax_mode_label|upper }}
-          {% if invoice.epcg_number %}<br>EPCG LICENCE NO : {{ invoice.epcg_number }}{% if invoice.epcg_date %} DATED : {{ dmy(invoice.epcg_date) }}{% endif %}{% endif %}
+          {%- if invoice.tax_mode == 'lut' and lut_no %} - LUT NO : {{ lut_no }}{% endif -%}
         </td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.plts) if ns.plts else '' }}</td>
         <td class="ei-cnum">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
@@ -358,11 +367,11 @@
         <td class="ei-c">Qty</td>
         <td class="ei-c">Alt. Qty</td>
         {% elif loop.index0 == 2 %}
-        <td colspan="2" rowspan="{{ net_rows }}" class="ei-mid">Net Weight</td>
-        <td rowspan="{{ net_rows }}" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
+        <td colspan="2" rowspan="{{ net_rows }}" class="ei-c ei-mid">Net Weight</td>
+        <td rowspan="{{ net_rows }}" class="ei-c ei-mid">{{ '{:,.2f}'.format(order_net_weight) if order_net_weight else '-' }}</td>
         {% elif loop.index0 == 2 + net_rows %}
-        <td colspan="2" rowspan="{{ gross_rows }}" class="ei-mid">Gross Weight</td>
-        <td rowspan="{{ gross_rows }}" class="ei-num ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
+        <td colspan="2" rowspan="{{ gross_rows }}" class="ei-c ei-mid">Gross Weight</td>
+        <td rowspan="{{ gross_rows }}" class="ei-c ei-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         {% endif %}
         <td colspan="2" class="ei-r">{{ label }}</td>
         <td class="ei-num">{% if signed %}{{ invoice.currency_prefix }}&nbsp;{{ '{:+,.2f}'.format(value) }}{% else %}{{ usd(value) }}{% endif %}</td>
@@ -380,32 +389,36 @@
     </tr>
   </table>
 
-  <!-- ============ PURCHASE DETAILS (0.1% GST) | INVOICE VALUE & IGST DETAILS ============ -->
-  {% set pd_list = invoice.purchase_details %}
+  <!-- ============ CONCESSIONAL PURCHASE & EPCG DETAILS | INVOICE VALUE & IGST DETAILS ============ -->
+  {# The 0.1% concessional rate only applies to purchases made under
+     exemption, and only means anything on an invoice actually raised
+     without payment of IGST under LUT - so this block lists only the
+     exemption rows, and only prints them at all under that tax_mode.
+     Otherwise the block stays up (paired in the same table as Invoice
+     Value & IGST Details) but empty. #}
+  {% set pd_list = (invoice.purchase_details | selectattr('purchase_type', 'equalto', 'exemption') | list) if invoice.tax_mode == 'lut' else [] %}
   {% set pd_count = pd_list|length %}
-  {% set pd_rows = ((pd_count + 1) // 2) %}
-  {% set pd_rows = pd_rows if pd_rows >= 3 else 3 %}
+  {% set pd_rows = pd_count if pd_count >= 3 else 3 %}
   <table>
     <colgroup><col style="width:58%"><col style="width:42%"></colgroup>
     <tr class="ei-nest">
       <td>
         <table>
-          <colgroup><col style="width:25%"><col style="width:25%"><col style="width:25%"><col style="width:25%"></colgroup>
-          <tr><td colspan="4" class="ei-lbl ei-c">Purchase Details of  0.1% GST</td></tr>
+          <colgroup><col style="width:28%"><col style="width:24%"><col style="width:24%"><col style="width:24%"></colgroup>
+          <tr><td colspan="4" class="ei-lbl ei-c">Concessional Purchase &amp; EPCG details</td></tr>
           <tr>
             <td class="ei-lbl ei-c">SUPPLIER GSTIN</td>
             <td class="ei-lbl ei-c">INVOICE NO</td>
-            <td class="ei-lbl ei-c ei-pd-sep">SUPPLIER GSTIN</td>
-            <td class="ei-lbl ei-c">INVOICE NO</td>
+            <td class="ei-lbl ei-c">EPCG NUMBER</td>
+            <td class="ei-lbl ei-c">EPCG DATE</td>
           </tr>
           {% for i in range(pd_rows) %}
-          {% set pd_l = pd_list[i * 2] if i * 2 < pd_count else None %}
-          {% set pd_r = pd_list[i * 2 + 1] if i * 2 + 1 < pd_count else None %}
+          {% set pd = pd_list[i] if i < pd_count else None %}
           <tr>
-            <td>{{ pd_l.supplier_gstin or '' if pd_l else '' }}</td>
-            <td>{{ pd_l.supplier_invoice_no or '' if pd_l else '' }}</td>
-            <td class="ei-pd-sep">{{ pd_r.supplier_gstin or '' if pd_r else '' }}</td>
-            <td>{{ pd_r.supplier_invoice_no or '' if pd_r else '' }}</td>
+            <td class="ei-c">{{ pd.supplier_gstin or '' if pd else '' }}</td>
+            <td class="ei-c">{{ pd.supplier_invoice_no or '' if pd else '' }}</td>
+            <td class="ei-c">{{ pd.epcg_number or '' if pd else '' }}</td>
+            <td class="ei-c">{{ dmy(pd.epcg_date) if pd and pd.epcg_date else '' }}</td>
           </tr>
           {% endfor %}
         </table>
@@ -431,13 +444,13 @@
      the four-column grid with the signatory spanning both rows on the right,
      exactly as the reference does. #}
   <table>
-    <colgroup><col style="width:13%"><col style="width:34%"><col style="width:16%"><col style="width:37%"></colgroup>
+    <colgroup><col style="width:13%"><col style="width:28%"><col style="width:22%"><col style="width:37%"></colgroup>
     <tr>
       <td class="ei-lbl ei-mid">Self Sealing Declaration</td>
       <td colspan="2">{{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n', '<br>')|safe }}</td>
       <td rowspan="2" class="ei-r ei-sign">
         <div class="ei-lbl">For {{ company.company_name|upper if company else '' }}</div>
-        <div style="margin-top:34px;">
+        <div class="ei-sign-bottom">
           <span class="ei-lbl">Authorised Signatury</span>
           {%- if invoice.authorised_person_name %}<br>
             <span class="ei-lbl">
@@ -454,7 +467,7 @@
         <span class="ei-lbl">Declaration:</span>
         We Declare That This Invoice Shows The Actual Price Of The Goods Described &amp; That All Particulars Are True And Correct
       </td>
-      <td class="ei-c ei-lbl ei-mid">CERTIFY THAT GOODS ARE OF "INDIAN ORIGIN"</td>
+      <td class="ei-c ei-lbl ei-mid">CERTIFY THAT GOODS ARE OF<br>"INDIAN ORIGIN"</td>
     </tr>
   </table>
 </div>

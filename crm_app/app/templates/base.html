@@ -47,21 +47,10 @@
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('proforma_invoices.') }}" href="{{ url_for('proforma_invoices.list_proforma_invoices') }}">📄 Proforma Invoices</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('purchase_orders.') }}" href="{{ url_for('purchase_orders.list_purchase_orders') }}">🧾 Purchase Orders</a>
           <a class="nav-link nav-sublink {{ 'active' if request.endpoint and request.endpoint.startswith('purchase_invoices.') }}" href="{{ url_for('purchase_invoices.list_purchase_invoices') }}">🧾 Purchase Invoices</a>
-          {% set commercial_prefixes = ['commercial_invoices.', 'commercial_packing_lists.', 'customer_invoices.'] %}
-          {% set commercial_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in commercial_prefixes %}
-          <details class="nav-dropdown nav-subdropdown" {{ 'open' if commercial_open }}>
-            <summary class="nav-link nav-sublink nav-dropdown-summary {{ 'active' if commercial_open }}">🧾 Commercial Invoice</summary>
-            <div class="nav-dropdown-panel">
-              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('commercial_invoices.') }}" href="{{ url_for('commercial_invoices.list_commercial_invoices') }}">🧾 Commercial Invoices</a>
-              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('commercial_packing_lists.') }}" href="{{ url_for('commercial_packing_lists.list_commercial_packing_lists') }}">📦 Commercial Packing Lists</a>
-              <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('customer_invoices.') }}" href="{{ url_for('customer_invoices.list_customer_invoices') }}">🧾 Customer Invoices</a>
-            </div>
-          </details>
-
-          {% set export_prefixes = ['export_invoices.', 'export_packing_lists.', 'export_annexures.', 'tax_invoices.', 'bl_drafts.', 'vgm_attachments.', 'vgm_declarations.', 'eseals.', 'eway_bills.'] %}
-          {% set export_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in export_prefixes %}
-          <details class="nav-dropdown nav-subdropdown" {{ 'open' if export_open }}>
-            <summary class="nav-link nav-sublink nav-dropdown-summary {{ 'active' if export_open }}">🌐 Export Invoice</summary>
+          {% set export_invoice_doc_prefixes = ['export_invoices.', 'export_packing_lists.', 'export_annexures.', 'bl_drafts.', 'vgm_attachments.', 'vgm_declarations.', 'eseals.', 'eway_bills.'] %}
+          {% set export_invoice_docs_open = request.endpoint and (request.endpoint.split('.')[0] ~ '.') in export_invoice_doc_prefixes %}
+          <details class="nav-dropdown nav-subdropdown" {{ 'open' if export_invoice_docs_open }}>
+            <summary class="nav-link nav-dropdown-summary {{ 'active' if request.endpoint and request.endpoint.startswith('export_invoices.') }}">🌐 Export Invoices</summary>
             <div class="nav-dropdown-panel">
               <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_invoices.') }}" href="{{ url_for('export_invoices.list_export_invoices') }}">🌐 Export Invoices</a>
               <a class="nav-link nav-subsublink {{ 'active' if request.endpoint and request.endpoint.startswith('export_packing_lists.') }}" href="{{ url_for('export_packing_lists.list_export_packing_lists') }}">🌐 Export Packing Lists</a>
@@ -121,7 +110,13 @@
     function confirmWithPassword(form, message, promptText, fieldName) {
       if (!window.confirm(message)) return false;
       var password = window.prompt(promptText);
-      if (!password) return false;
+      // A cancelled or empty prompt aborts the submit - say so, since
+      // otherwise nothing on the page changes and it looks like the button
+      // itself is broken rather than the password step being skipped.
+      if (!password) {
+        window.alert('No password entered - nothing was deleted.');
+        return false;
+      }
       var input = form.querySelector('input[name="' + fieldName + '"]');
       if (!input) {
         input = document.createElement('input');

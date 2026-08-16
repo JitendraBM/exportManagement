@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import country_select %}
 {% block title %}New {{ type_label }}{% endblock %}
 {% block content %}
 
@@ -30,6 +31,7 @@
       <textarea id="address" name="address" rows="3">{{ form_data.address if form_data else '' }}</textarea>
       <div class="hint">Used to prefill the buyer address when this {{ type_label.lower() }} is selected on a quotation.</div>
     </div>
+    {{ country_select(form_data.country if form_data else '', country_options, can_add=current_user.is_admin) }}
 
     <fieldset>
       <legend>Contact person(s) <span class="text-soft text-sm">— optional, can also be added later from the {{ type_label.lower() }}'s page</span></legend>

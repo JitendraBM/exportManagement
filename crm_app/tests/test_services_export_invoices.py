@@ -359,7 +359,7 @@ class TestExportChainImport:
             seed.admin,
             {"seller_name": "Alive Granito", "invoice_number": "GSTT/4987", "invoice_date": "2026-01-15",
              "seller_gstin": "24ABVFA1170D1ZO", "purchase_order_id": str(po.id),
-             "epcg_number": "2431000888", "epcg_date": "2021-09-17"},
+             "epcg_number": "2431000888", "epcg_date": "2021-09-17", "purchase_type": purchase_type},
             [{"product_name": "Tiles", "quantity_value": "100", "price_inr": "500", "price_per": "BOX",
               "quantity_boxes": "10"}], [])
         return pi, po, pinv
@@ -399,6 +399,9 @@ class TestExportChainImport:
         assert len(pd) == 1
         assert pd[0]["supplier_gstin"] == "24ABVFA1170D1ZO"
         assert pd[0]["supplier_invoice_no"] == "GSTT/4987"
+        assert pd[0]["purchase_type"] == "exemption"
+        assert pd[0]["epcg_number"] == "2431000888"
+        assert pd[0]["epcg_date"] == "2021-09-17"
 
     def test_full_tax_purchase_also_contributes_a_purchase_detail_row(self, container, seed):
         pi, po, pinv = self._chain(container, seed, purchase_type="full_tax")
@@ -407,6 +410,39 @@ class TestExportChainImport:
         assert len(pd) == 1
         assert pd[0]["supplier_gstin"] == "24ABVFA1170D1ZO"
         assert pd[0]["supplier_invoice_no"] == "GSTT/4987"
+
+    def test_purchase_detail_row_carries_the_purchase_invoices_own_purchase_type(self, container, seed):
+        pi, po, pinv = self._chain(container, seed, purchase_type="exemption")
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert built["purchase_details"][0]["purchase_type"] == "exemption"
+
+    def test_prefill_forces_lut_and_locks_it_when_any_purchase_is_under_exemption(self, container, seed):
+        pi, po, pinv = self._chain(container, seed, purchase_type="exemption")
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert built["fields"]["tax_mode"] == "lut"
+        assert built["fields"]["tax_mode_locked"] is True
+
+    def test_prefill_leaves_tax_mode_untouched_when_every_purchase_is_full_tax(self, container, seed):
+        pi, po, pinv = self._chain(container, seed, purchase_type="full_tax")
+        built = container.export_invoice_service.build_prefill_from_proformas([pi.id], seed.company_id)
+        assert "tax_mode" not in built["fields"]
+        assert built["fields"]["tax_mode_locked"] is False
+
+    def test_creating_under_an_exemption_purchase_forces_lut_even_if_igst_was_posted(self, container, seed):
+        """Mirrors the EPCG/export_under treatment above: the posted
+        tax_mode is ignored (even a tampered 'igst') the moment any linked
+        purchase invoice is under exemption - recomputed fresh from the
+        purchase chain at save time, not trusted from the form."""
+        pi, po, pinv = self._chain(container, seed, purchase_type="exemption")
+        inv = make_export(container, seed, proforma_ids=[pi.id], tax_mode="igst")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.tax_mode == "lut"
+
+    def test_creating_with_only_full_tax_purchases_keeps_the_posted_tax_mode(self, container, seed):
+        pi, po, pinv = self._chain(container, seed, purchase_type="full_tax")
+        inv = make_export(container, seed, proforma_ids=[pi.id], tax_mode="igst")
+        got = container.export_invoice_service.get(inv.id, seed.company_id)
+        assert got.tax_mode == "igst"
 
     def test_same_product_bought_against_two_purchase_orders_is_summed_into_one_line(self, container, seed):
         """Reproduces EXP/25-26/025: one purchase invoice can cover several
@@ -599,9 +635,14 @@ class TestExportChildLists:
 
     def test_purchase_details_round_trip(self, container, seed):
         inv = make_export(container, seed, purchase_details=[
-            {"supplier_gstin": "24ABVFA1170D1ZO", "supplier_invoice_no": "GSTT/4987"}])
+            {"supplier_gstin": "24ABVFA1170D1ZO", "supplier_invoice_no": "GSTT/4987",
+             "purchase_type": "exemption", "epcg_number": "2431000888", "epcg_date": "2021-09-17"}])
         got = container.export_invoice_service.get(inv.id, seed.company_id)
-        assert got.purchase_details[0]["supplier_invoice_no"] == "GSTT/4987"
+        pd = got.purchase_details[0]
+        assert pd["supplier_invoice_no"] == "GSTT/4987"
+        assert pd["purchase_type"] == "exemption"
+        assert pd["epcg_number"] == "2431000888"
+        assert pd["epcg_date"] == "2021-09-17"
 
     def test_11b_row_round_trip_without_dropped_fields(self, container, seed):
         # excise_seal_no/plts/boxes were dropped in v37 - anything still

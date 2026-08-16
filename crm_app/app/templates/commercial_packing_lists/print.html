@@ -21,6 +21,9 @@
       <a href="{{ url_for('commercial_invoices.view_commercial_invoice', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">🧾 Commercial invoice</a>
     </div>
     <div class="flex gap-8">
+      {% if invoice.bill_of_lading_pdf_path %}
+      <a href="{{ url_for('static', filename=invoice.bill_of_lading_pdf_path) }}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">📄 Bill of lading PDF</a>
+      {% endif %}
       <a href="{{ url_for('commercial_packing_lists.edit_commercial_packing_list', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Edit</a>
       <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / PDF</button>
     </div>
@@ -30,8 +33,8 @@
     This packing list is generated from export invoice
     <strong>{{ invoice.export_invoice_number }}</strong> — its header from that invoice and its rows from
     that invoice's export packing list split. The only fields it owns are the
-    <strong>bill of lading number and date</strong>
-    {%- if not invoice.bill_of_lading_no and not invoice.bill_of_lading_date %}, which are not set yet
+    <strong>bill of lading number and date</strong>, plus an optional uploaded bill of lading PDF
+    {%- if not invoice.bill_of_lading_no and not invoice.bill_of_lading_date %}, none of which are set yet
     {%- endif %}; use <strong>Edit</strong> for those. Everything else follows the export invoice.
   </div>
 

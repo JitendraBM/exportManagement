@@ -38,8 +38,13 @@ def _pallet_type_rows(form) -> list:
     panels on the document forms) simply yield an empty list."""
     names = form.getlist("pallet_type_name[]")
     boxes = form.getlist("pallet_type_boxes[]")
+    weights = form.getlist("pallet_type_weight[]")
     return [
-        {"name": names[i], "boxes_per_pallet": boxes[i] if i < len(boxes) else ""}
+        {
+            "name": names[i],
+            "boxes_per_pallet": boxes[i] if i < len(boxes) else "",
+            "weight_kg": weights[i] if i < len(weights) else "",
+        }
         for i in range(len(names))
     ]
 
@@ -168,6 +173,7 @@ def new_product():
     container = current_app.container
     categories_tree = container.product_service.list_categories_tree(g.user.company_id)
     hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
+    unit_options = container.misc_list_service.list_units(g.user.company_id)
     preselected_category_id = _int_or_none(request.args.get("category_id"))
     if request.method == "POST":
         try:
@@ -179,9 +185,11 @@ def new_product():
             return render_template("products/product_form.html", product=None, form_data=request.form,
                                     pallet_rows=_pallet_type_rows(request.form),
                                     categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                                    unit_options=unit_options,
                                     preselected_category_id=preselected_category_id), 400
     return render_template("products/product_form.html", product=None, form_data=None, pallet_rows=[],
                             categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                            unit_options=unit_options,
                             preselected_category_id=preselected_category_id)
 
 
@@ -218,6 +226,7 @@ def edit_product(product_id):
         abort(404)
     categories_tree = container.product_service.list_categories_tree(g.user.company_id)
     hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
+    unit_options = container.misc_list_service.list_units(g.user.company_id)
 
     if request.method == "POST":
         try:
@@ -231,15 +240,32 @@ def edit_product(product_id):
             return render_template("products/product_form.html", product=product, form_data=request.form,
                                     pallet_rows=_pallet_type_rows(request.form),
                                     categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                                    unit_options=unit_options,
                                     preselected_category_id=product.category_id), 400
 
     pallet_rows = [
-        {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet}
+        {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet, "weight_kg": pt.weight_kg}
         for pt in container.product_service.pallet_types_for_product(product_id)
     ]
     return render_template("products/product_form.html", product=product, form_data=None, pallet_rows=pallet_rows,
                             categories_tree=categories_tree, hsn_code_options=hsn_code_options,
+                            unit_options=unit_options,
                             preselected_category_id=product.category_id)
+
+
+@products_bp.route("/<int:product_id>/duplicate", methods=["POST"])
+@admin_required
+def duplicate_product(product_id):
+    container = current_app.container
+    try:
+        copy = container.product_service.duplicate_product(g.user, product_id)
+        flash(f"Product duplicated as '{copy.product_name}'.", "success")
+        return redirect(url_for("products.view_product", product_id=copy.id))
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("products.list_products"))
 
 
 @products_bp.route("/<int:product_id>/delete", methods=["POST"])
@@ -442,7 +468,7 @@ def _product_json(p, pallet_types=None, category_names=None) -> dict:
         "pallet_types": [
             {
                 "id": pt.id, "name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
-                "alt_qty_per_pallet": pallet_alt_quantity(pt, p),
+                "alt_qty_per_pallet": pallet_alt_quantity(pt, p), "weight_kg": pt.weight_kg,
             }
             for pt in (pallet_types or [])
         ],

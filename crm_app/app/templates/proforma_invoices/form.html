@@ -25,18 +25,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="field">
-        <label for="lead_select">Prefill from an existing lead <span class="text-soft text-sm">(optional)</span></label>
-        <select id="lead_select">
-          <option value="">— Select a lead to prefill —</option>
-          {% for l in leads %}
-            <option value="{{ l.id }}" data-name="{{ l.company_name }}">{{ l.company_name }}</option>
-          {% endfor %}
-        </select>
-      </div>
     </div>
     <p class="hint">Choosing a quotation reloads this page and copies its buyer/product/bank data in as a starting point — the proforma invoice is then its own independent record.</p>
-    <input type="hidden" name="lead_id" id="lead_id" value="{{ data.lead_id | default('', true) }}">
     <input type="hidden" name="quotation_id" id="quotation_id" value="{{ data.quotation_id | default('', true) }}">
   </div>
 
@@ -118,7 +108,7 @@
     {% set currency_locked_by_quotation = (data.quotation_id | default('', true)) | string | trim %}
     <div class="form-row">
       {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed invoice; amounts are typed in this currency.',
-                          locked=currency_locked_by_quotation, locked_hint='Locked to the linked quotation\'s currency.') }}
+                          locked=currency_locked_by_quotation, locked_hint='Locked to the linked quotation\'s currency.', can_add=current_user.is_admin) }}
       <div class="field"><label for="packing_details">Packing</label><input type="text" id="packing_details" name="packing_details" placeholder="e.g. PALLATE" value="{{ data.packing_details | default('', true) }}"></div>
       <div class="field">
         {# Options come from Administration -> Miscellaneous (nature_of_contract_options). #}
@@ -614,15 +604,6 @@
     const id = e.target.value;
     if (!id) return;
     window.location = '{{ url_for("proforma_invoices.new_proforma_invoice") }}?quotation_id=' + encodeURIComponent(id);
-  });
-
-  // ---- lead dropdown prefill --------------------------------------------------
-  document.getElementById('lead_select').addEventListener('change', (e) => {
-    const opt = e.target.selectedOptions[0];
-    if (!opt.value) { document.getElementById('lead_id').value = ''; return; }
-    document.getElementById('lead_id').value = opt.value;
-    document.getElementById('consignee_name').value = opt.dataset.name || '';
-    syncNotifyWithConsignee();
   });
 
   // ---- "buyer is same as consignee" toggle --------------------------------------------------

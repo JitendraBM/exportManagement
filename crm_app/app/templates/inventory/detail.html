@@ -76,8 +76,8 @@
             {% endif %}
           </td>
           <td><strong>{{ design.design_name }}</strong></td>
-          <td class="text-sm">{{ num(stock.boxes) if stock else '0' }}</td>
-          <td class="text-sm">{% if stock %}{{ num(stock.quantity) }}{% if stock.unit %} {{ stock.unit }}{% endif %}{% else %}0{% endif %}</td>
+          <td class="text-sm">{{ num(stock.net_boxes) if stock else '0' }}</td>
+          <td class="text-sm">{% if stock %}{{ num(stock.net_quantity) }}{% if stock.unit %} {{ stock.unit }}{% endif %}{% else %}0{% endif %}</td>
           <td><a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="text-sm">Open →</a></td>
         </tr>
         {% endfor %}

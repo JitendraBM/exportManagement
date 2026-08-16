@@ -65,6 +65,7 @@ def _extract_items(form) -> list:
     hsn_codes = form.getlist("item_hsn_code[]")
     surfaces = form.getlist("item_surface[]")
     pallets = form.getlist("item_pallets[]")
+    pallet_weights = form.getlist("item_pallet_weight_kg[]")
     boxes = form.getlist("item_quantity_boxes[]")
     values = form.getlist("item_quantity_value[]")
     units = form.getlist("item_unit[]")
@@ -77,6 +78,7 @@ def _extract_items(form) -> list:
             "hsn_code": hsn_codes[i] if i < len(hsn_codes) else "",
             "surface": surfaces[i] if i < len(surfaces) else "",
             "pallets": pallets[i] if i < len(pallets) else "",
+            "pallet_weight_kg": pallet_weights[i] if i < len(pallet_weights) else "",
             "quantity_boxes": boxes[i] if i < len(boxes) else "",
             "quantity_value": values[i] if i < len(values) else "",
             "unit": units[i] if i < len(units) else "SQM",
@@ -134,13 +136,19 @@ def _extract_purchase_details(form) -> list:
     gstins = form.getlist("pd_supplier_gstin[]")
     inv_nos = form.getlist("pd_supplier_invoice_no[]")
     names = form.getlist("pd_supplier_name[]")
-    n = max(len(gstins), len(inv_nos), len(names))
+    types = form.getlist("pd_purchase_type[]")
+    epcg_numbers = form.getlist("pd_epcg_number[]")
+    epcg_dates = form.getlist("pd_epcg_date[]")
+    n = max(len(gstins), len(inv_nos), len(names), len(types), len(epcg_numbers), len(epcg_dates))
     rows = []
     for i in range(n):
         rows.append({
             "supplier_gstin": gstins[i] if i < len(gstins) else "",
             "supplier_invoice_no": inv_nos[i] if i < len(inv_nos) else "",
             "supplier_name": names[i] if i < len(names) else "",
+            "purchase_type": types[i] if i < len(types) else "",
+            "epcg_number": epcg_numbers[i] if i < len(epcg_numbers) else "",
+            "epcg_date": epcg_dates[i] if i < len(epcg_dates) else "",
         })
     return rows
 
@@ -224,7 +232,7 @@ def _product_maps(items) -> tuple:
             continue
         pallet_types_map[product_id] = [
             {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
-             "alt_qty_per_pallet": pallet_alt_quantity(pt, product)}
+             "alt_qty_per_pallet": pallet_alt_quantity(pt, product), "weight_kg": pt.weight_kg}
             for pt in container.product_service.pallet_types_for_product(product_id)
         ]
         meta_map[product_id] = {

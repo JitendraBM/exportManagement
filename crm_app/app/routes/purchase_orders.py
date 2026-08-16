@@ -21,10 +21,10 @@ from app.utils import login_required, admin_required, verify_delete_password
 purchase_orders_bp = Blueprint("purchase_orders", __name__, url_prefix="/purchase-orders")
 
 _HEADER_FIELDS = [
-    "po_date", "lead_id", "proforma_invoice_id", "seller_supplier_id",
+    "po_date", "proforma_invoice_id", "seller_supplier_id",
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "delivery_time", "advance_percent", "payment_terms", "remarks",
-    "purchase_type",
+    "purchase_type", "tax_as_actual",
     "currency_code",
 ]
 
@@ -58,13 +58,12 @@ def _extract_items(form) -> list:
 
 
 def _form_context():
-    """(leads, proforma invoices, suppliers) for the form's Start-from
-    and Seller pickers."""
+    """(proforma invoices, suppliers) for the form's Start-from and Seller
+    pickers."""
     container = current_app.container
-    leads = container.lead_service.list_for_dashboard(g.user)
     invoices = container.proforma_invoice_service.list_all(g.user.company_id)
     suppliers = container.supplier_service.list_all(g.user.company_id)
-    return leads, invoices, suppliers
+    return invoices, suppliers
 
 
 def _flash_if_over_ordered(container, purchase_order) -> None:
@@ -162,19 +161,18 @@ def new_purchase_order():
             return redirect(url_for("purchase_orders.view_purchase_order", purchase_order_id=purchase_order.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, invoices, suppliers = _form_context()
+            invoices, suppliers = _form_context()
             items = _extract_items(request.form)
             return render_template(
-                "purchase_orders/form.html", purchase_order=None, leads=leads, invoices=invoices,
+                "purchase_orders/form.html", purchase_order=None, invoices=invoices,
                 suppliers=suppliers, form_data=request.form, form_items=items,
                 product_meta_map=_product_meta_map(items), today=date.today().isoformat(),
             ), 400
 
-    leads, invoices, suppliers = _form_context()
+    invoices, suppliers = _form_context()
     prefill = None
     form_items = None
     proforma_invoice_id = request.args.get("proforma_invoice_id")
-    lead_id = request.args.get("lead_id")
     if proforma_invoice_id:
         try:
             invoice = container.proforma_invoice_service.get(int(proforma_invoice_id), g.user.company_id)
@@ -184,14 +182,8 @@ def new_purchase_order():
             form_items = built["items"]
         except (NotFoundError, ValueError):
             pass
-    elif lead_id:
-        try:
-            lead = container.lead_service.get(int(lead_id), g.user.company_id)
-            prefill = {"lead_id": lead.id, "po_date": date.today().isoformat()}
-        except (NotFoundError, ValueError):
-            pass
     return render_template(
-        "purchase_orders/form.html", purchase_order=None, leads=leads, invoices=invoices,
+        "purchase_orders/form.html", purchase_order=None, invoices=invoices,
         suppliers=suppliers, form_data=prefill, form_items=form_items,
         product_meta_map=_product_meta_map(form_items) if form_items else {},
         today=date.today().isoformat(),
@@ -214,9 +206,15 @@ def view_purchase_order(purchase_order_id):
         if purchase_order.proforma_invoice_id else []
     )
     packing_details_items = _packing_details_rows(purchase_order, pi_packing_lists)
+    proforma_invoice = None
+    if purchase_order.proforma_invoice_id:
+        try:
+            proforma_invoice = container.proforma_invoice_service.get(purchase_order.proforma_invoice_id, g.user.company_id)
+        except NotFoundError:
+            pass
     return render_template("purchase_orders/print.html", purchase_order=purchase_order, company=company,
                            packing_lists=packing_lists, purchase_invoices=purchase_invoices,
-                           packing_details_items=packing_details_items)
+                           packing_details_items=packing_details_items, proforma_invoice=proforma_invoice)
 
 
 @purchase_orders_bp.route("/<int:purchase_order_id>/combined")
@@ -264,17 +262,17 @@ def edit_purchase_order(purchase_order_id):
             return redirect(url_for("purchase_orders.view_purchase_order", purchase_order_id=purchase_order_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, invoices, suppliers = _form_context()
+            invoices, suppliers = _form_context()
             items = _extract_items(request.form)
             return render_template(
-                "purchase_orders/form.html", purchase_order=purchase_order, leads=leads, invoices=invoices,
+                "purchase_orders/form.html", purchase_order=purchase_order, invoices=invoices,
                 suppliers=suppliers, form_data=request.form, form_items=items,
                 product_meta_map=_product_meta_map(items), today=date.today().isoformat(),
             ), 400
 
-    leads, invoices, suppliers = _form_context()
+    invoices, suppliers = _form_context()
     return render_template(
-        "purchase_orders/form.html", purchase_order=purchase_order, leads=leads, invoices=invoices,
+        "purchase_orders/form.html", purchase_order=purchase_order, invoices=invoices,
         suppliers=suppliers, form_data=None, form_items=None,
         product_meta_map=_product_meta_map(purchase_order.items), today=date.today().isoformat(),
     )
