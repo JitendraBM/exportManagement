@@ -79,7 +79,10 @@ def _form_context():
     company = container.company_service.get(g.user.company_id)
     bank_options = company.bank_details if company else []
     container_types = [ct.name for ct in container.misc_list_service.container_type_options(g.user.company_id)]
-    return leads, buyers, bank_options, container_types
+    categories_tree = container.product_service.list_categories_tree(g.user.company_id)
+    hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
+    unit_options = container.misc_list_service.list_units(g.user.company_id)
+    return leads, buyers, bank_options, container_types, categories_tree, hsn_code_options, unit_options
 
 
 def _alt_qty_map(items) -> dict:
@@ -159,17 +162,17 @@ def new_quotation():
             return redirect(url_for("quotations.view_quotation", quotation_id=quotation.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, buyers, bank_options, container_types = _form_context()
+            leads, buyers, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "quotations/form.html", quotation=None, leads=leads, buyers=buyers, bank_options=bank_options,
-                container_types=container_types,
+                container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
                 form_data=request.form, form_items=items, alt_qty_map=_alt_qty_map(items),
                 pallet_types_map=_pallet_types_map(items), form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, buyers, bank_options, container_types = _form_context()
+    leads, buyers, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
     prefill = None
     lead_id = request.args.get("lead_id")
     if lead_id:
@@ -183,7 +186,7 @@ def new_quotation():
             pass
     return render_template(
         "quotations/form.html", quotation=None, leads=leads, buyers=buyers, bank_options=bank_options,
-        container_types=container_types,
+        container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
         form_data=prefill, form_items=None, alt_qty_map={}, pallet_types_map={}, form_containers=None,
         today=date.today().isoformat(),
     )
@@ -244,20 +247,20 @@ def edit_quotation(quotation_id):
             return redirect(url_for("quotations.view_quotation", quotation_id=quotation_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, buyers, bank_options, container_types = _form_context()
+            leads, buyers, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "quotations/form.html", quotation=quotation, leads=leads, buyers=buyers, bank_options=bank_options,
-                container_types=container_types,
+                container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
                 form_data=request.form, form_items=items, alt_qty_map=_alt_qty_map(items),
                 pallet_types_map=_pallet_types_map(items), form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    leads, buyers, bank_options, container_types = _form_context()
+    leads, buyers, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
     return render_template(
         "quotations/form.html", quotation=quotation, leads=leads, buyers=buyers, bank_options=bank_options,
-        container_types=container_types,
+        container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
         form_data=None, form_items=None, alt_qty_map=_alt_qty_map(quotation.items),
         pallet_types_map=_pallet_types_map(quotation.items), form_containers=None, today=date.today().isoformat(),
     )

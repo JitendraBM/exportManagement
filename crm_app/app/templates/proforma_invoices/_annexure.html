@@ -38,8 +38,8 @@
 
     <table class="pi-items">
       <colgroup>
-        <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:9%">
-        <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:15%">
+        <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:9%"><col style="width:11%">
+        <col style="width:11%"><col style="width:9%"><col style="width:17%">
       </colgroup>
       <thead>
         <tr>
@@ -50,23 +50,21 @@
           <td>Qty</td>
           <td>Alt. Qty</td>
           <td>Rate</td>
-          <td>Unit</td>
           <td>Total Amount</td>
         </tr>
       </thead>
       <tbody>
         {{ goods.rows(annex_items, pi_mode, annex_sr_start, invoice.currency_prefix) }}
         <tr class="pi-filler js-page-filler">
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
         </tr>
         <tr>
           <td></td>
           <td class="pi-val pi-center">TOTAL</td>
           <td></td>
-          <td class="pi-val pi-center">{{ '{:,.2f}'.format(axns.pallets) if axns.pallets else '' }}</td>
+          <td class="pi-val pi-center">{{ '{:,.0f}'.format(axns.pallets) if axns.pallets else '' }}</td>
           <td class="pi-val pi-right">{{ '{:,.0f}'.format(axns.boxes) if axns.boxes else '' }}</td>
           <td class="pi-val pi-right">{{ '{:,.2f}'.format(axns.qty) }}</td>
-          <td></td>
           <td></td>
           <td class="pi-val pi-right">{{ ax_usd(axns.amount) }}</td>
         </tr>

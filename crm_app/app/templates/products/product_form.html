@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit product' if product else 'New product' }}{% endblock %}
+{% from "_macros.html" import searchable_select %}
 {% block content %}
 
 <div class="topbar">
@@ -26,20 +27,75 @@
          pairs each code with its GST slab - choosing one fills IGST % below
          from that slab (see the script) so the two can't disagree. A product
          can hold a code since removed from that list, so the stored value
-         stays selectable rather than silently blanking. #}
+         stays selectable rather than silently blanking.
+
+         For an admin (the list itself is admin-only) the dropdown also
+         carries an "+ Add a new HSN code" entry that adds one to that list
+         in place, so a missing code doesn't cost a detour to Miscellaneous
+         and a half-typed product. Mirrors the currency / port of loading
+         quick-adds in _macros.html; the panel's inputs likewise have NO name
+         attribute so they never post with the product form.
+
+         A native <select> cannot hold a search box, so this is a small custom
+         dropdown: a button that opens a panel whose first row is the search
+         field, with the codes listed under it (filtered by code and by the
+         "related to products" note each carries). The value itself lives in
+         the hidden hsn_code input, so what posts is exactly what the plain
+         <select> posted before. #}
+      {% set can_add_hsn = current_user.is_admin %}
+      {% set chosen_hsn = data.hsn_code | default('', true) %}
       <div class="field" style="max-width:280px;">
-        <label for="hsn_code">HSN code</label>
-        {% set chosen_hsn = data.hsn_code | default('', true) %}
-        <select id="hsn_code" name="hsn_code">
-          <option value="">&mdash; none &mdash;</option>
-          {% if chosen_hsn and chosen_hsn not in hsn_code_options | map(attribute='name') | list %}
-          <option value="{{ chosen_hsn }}" selected>{{ chosen_hsn }}</option>
-          {% endif %}
-          {% for hsn in hsn_code_options %}
-          <option value="{{ hsn.name }}" data-gst-slab="{{ hsn.gst_slab }}" {{ 'selected' if hsn.name == chosen_hsn }}>{{ hsn.name }}</option>
-          {% endfor %}
-        </select>
+        <label for="hsn-toggle">HSN code</label>
+        <div class="combo" id="hsn-combo">
+          <input type="hidden" id="hsn_code" name="hsn_code" value="{{ chosen_hsn }}">
+          <button type="button" class="combo-toggle" id="hsn-toggle" aria-haspopup="listbox" aria-expanded="false"
+                  data-placeholder="— none —">
+            <span class="combo-toggle-label">{{ chosen_hsn if chosen_hsn else '— none —' }}</span>
+            <span class="combo-caret" aria-hidden="true">&#9662;</span>
+          </button>
+          <div class="combo-panel" id="hsn-panel" hidden>
+            <input type="text" class="combo-search" id="hsn-search" placeholder="Search code or product&hellip;" autocomplete="off">
+            <div class="combo-list" id="hsn-list" role="listbox">
+              <div class="combo-option" role="option" data-value="" data-slab="">&mdash; none &mdash;</div>
+              {# A product can hold a code since removed from the list; it is
+                 listed too, so the stored value stays selectable. #}
+              {% if chosen_hsn and chosen_hsn not in hsn_code_options | map(attribute='name') | list %}
+              <div class="combo-option" role="option" data-value="{{ chosen_hsn }}" data-slab="">{{ chosen_hsn }}</div>
+              {% endif %}
+              {% for hsn in hsn_code_options %}
+              {# data-search: matched by the search box on top of the code
+                 itself, so a code can be found by what it is used for. #}
+              <div class="combo-option" role="option" data-value="{{ hsn.name }}" data-slab="{{ hsn.gst_slab }}" data-search="{{ hsn.related_products | default('', true) }}">
+                <span class="combo-option-main">{{ hsn.name }}</span>
+                <span class="combo-option-note">{{ hsn.related_products or '' }}{% if hsn.gst_slab %} &middot; GST {{ hsn.gst_slab }}{% endif %}</span>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="combo-empty" id="hsn-empty" hidden>No matching HSN code.</div>
+            {% if can_add_hsn %}
+            <button type="button" class="combo-add" id="hsn-add-open">+ Add a new HSN code&hellip;</button>
+            {% endif %}
+          </div>
+        </div>
         <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; HSN Code.</div>
+        {% if can_add_hsn %}
+        <div id="hsn-add-panel" hidden style="margin-top:8px;">
+          <div class="field">
+            <label for="hsn-add-name">HSN Code<span class="required-mark">*</span></label>
+            <input type="text" id="hsn-add-name" placeholder="e.g. 69072100">
+          </div>
+          <div class="field">
+            <label for="hsn-add-slab">GST Slab<span class="required-mark">*</span></label>
+            <input type="text" id="hsn-add-slab" placeholder="e.g. 18">
+          </div>
+          <div class="field">
+            <label for="hsn-add-related">Related to Products</label>
+            <input type="text" id="hsn-add-related" placeholder="e.g. GLAZED VITRIFIED TILES">
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="hsn-add-save">Add HSN code</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="hsn-add-cancel">Cancel</button>
+        </div>
+        {% endif %}
       </div>
       <div class="field">
         <label for="category_id">Category</label>
@@ -61,38 +117,21 @@
     <div class="hint">IGST is set automatically from the chosen HSN code's GST slab. SGST and CGST are calculated automatically as half of IGST.</div>
 
     <div class="form-row">
-      <div class="field" style="max-width:160px;">
-        <label for="quantity_unit">Unit</label>
-        {% set chosen_unit = data.quantity_unit | default('PCS', true) %}
-        <select id="quantity_unit" name="quantity_unit">
-          {% if chosen_unit and chosen_unit not in unit_options | map(attribute='name') | list %}
-          <option value="{{ chosen_unit }}" selected>{{ chosen_unit }}</option>
-          {% endif %}
-          {% for unit in unit_options %}
-          <option value="{{ unit.name }}" {{ 'selected' if unit.name == chosen_unit }}>{{ unit.name }}</option>
-          {% endfor %}
-        </select>
-        <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit.</div>
-      </div>
+      {% set chosen_unit = data.quantity_unit | default('PCS', true) %}
+      {{ searchable_select('quantity_unit', 'quantity_unit', chosen_unit, unit_options, label='Unit',
+                           hint='Managed under Administration → Miscellaneous → Unit.',
+                           search_placeholder='Search units…', field_style='max-width:160px;') }}
       <div class="field">
         <label for="quantity">Quantity Per Unit</label>
         <input type="text" id="quantity" name="quantity" value="{{ data.quantity | default('', true) }}">
       </div>
     </div>
     <div class="form-row">
-      <div class="field" style="max-width:160px;">
-        <label for="alternate_quantity_unit">Alt Qty Per Unit</label>
-        {% set chosen_alt_unit = data.alternate_quantity_unit | default('SQM', true) %}
-        <select id="alternate_quantity_unit" name="alternate_quantity_unit">
-          {% if chosen_alt_unit and chosen_alt_unit not in unit_options | map(attribute='name') | list %}
-          <option value="{{ chosen_alt_unit }}" selected>{{ chosen_alt_unit }}</option>
-          {% endif %}
-          {% for unit in unit_options %}
-          <option value="{{ unit.name }}" {{ 'selected' if unit.name == chosen_alt_unit }}>{{ unit.name }}</option>
-          {% endfor %}
-        </select>
-        <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit. Prefills the Unit column on every document.</div>
-      </div>
+      {% set chosen_alt_unit = data.alternate_quantity_unit | default('SQM', true) %}
+      {{ searchable_select('alternate_quantity_unit', 'alternate_quantity_unit', chosen_alt_unit, unit_options,
+                           label='Alt Qty Per Unit',
+                           hint='Managed under Administration → Miscellaneous → Unit. Prefills the Unit column on every document.',
+                           search_placeholder='Search units…', field_style='max-width:160px;') }}
       <div class="field">
         <label for="alternate_quantity">Quantity Per Alt Qty Unit</label>
         <input type="text" id="alternate_quantity" name="alternate_quantity" value="{{ data.alternate_quantity | default('', true) }}">
@@ -162,21 +201,96 @@
   igst.addEventListener('input', recalc);
   recalc();
 
-  // Picking an HSN code fills IGST % from that code's GST slab (the pair the
-  // Miscellaneous list keeps together), then re-derives SGST/CGST from it.
-  // Only fires on an actual pick, so a rate typed by hand - or one carried by
-  // a product whose code has since left the list - is never overwritten on
-  // load. A code with no slab (the blank "none" option, or an off-list value)
-  // leaves the rate alone: there is nothing to take it from.
-  const hsn = document.getElementById('hsn_code');
-  if (hsn) {
-    hsn.addEventListener('change', function () {
-      const slab = hsn.options[hsn.selectedIndex].dataset.gstSlab;
-      if (slab !== undefined && slab !== '') {
+  // ---- HSN code dropdown (searchable) -------------------------------------
+  // A custom dropdown, because the search box has to sit INSIDE the open
+  // list and a native <select> cannot hold one. The value lives in the hidden
+  // hsn_code input; picking an option writes it, updates the button label and
+  // fills IGST % from that code's GST slab (the pair the Miscellaneous list
+  // keeps together), which then re-derives SGST/CGST. A code with no slab
+  // (the blank "none" entry, or a code since removed from the list) leaves
+  // the rate alone: there is nothing to take it from. Nothing runs on load,
+  // so a rate typed by hand is never overwritten.
+  // Shared behaviour (search, keyboard, click-away) lives in
+  // static/js/combo.js - the same component drives the Unit dropdowns; only
+  // the GST slab hand-off is specific to this field.
+  const hsnList = document.getElementById('hsn-list');
+  const hsnCombo = initCombo('hsn-combo', {
+    onChange: function (option) {
+      const slab = option.dataset.slab;
+      if (slab) {
         igst.value = slab;
         recalc();
       }
+    },
+    onClose: function () {
+      const addPanel = document.getElementById('hsn-add-panel');
+      if (addPanel) addPanel.hidden = true;
+    },
+  });
+
+  // ---- HSN code quick-add --------------------------------------------------
+  // Admin-only (the panel is only rendered for one): adds a code to the
+  // Miscellaneous HSN list without leaving a half-typed product, then selects
+  // it here so its GST slab flows into IGST like any other pick. The panel's
+  // inputs have NO name attribute, so they never post with the product form.
+  const hsnAddPanel = document.getElementById('hsn-add-panel');
+  const hsnAddOpen = document.getElementById('hsn-add-open');
+  if (hsnAddPanel && hsnAddOpen) {
+    const hsnName = document.getElementById('hsn-add-name');
+    const hsnSlab = document.getElementById('hsn-add-slab');
+    const hsnRelated = document.getElementById('hsn-add-related');
+
+    function closeAddForm() {
+      hsnAddPanel.hidden = true;
+      hsnName.value = '';
+      hsnSlab.value = '';
+      hsnRelated.value = '';
+    }
+
+    hsnAddOpen.addEventListener('click', () => {
+      hsnCombo.close();
+      hsnAddPanel.hidden = false;
+      hsnName.focus();
     });
+
+    document.getElementById('hsn-add-cancel').addEventListener('click', closeAddForm);
+
+    // Enter inside these inputs adds the code - it must never submit the
+    // product form they are nested in.
+    [hsnName, hsnSlab, hsnRelated].forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addHsnCode(); }
+    }));
+
+    document.getElementById('hsn-add-save').addEventListener('click', addHsnCode);
+
+    function addHsnCode() {
+      const body = new FormData();
+      body.append('name', hsnName.value);
+      body.append('gst_slab', hsnSlab.value);
+      body.append('related_products', hsnRelated.value);
+      fetch('/misc/api/hsn-codes', { method: 'POST', body: body })
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) { alert(data.error || 'Could not add the HSN code.'); return; }
+          const option = document.createElement('div');
+          option.className = 'combo-option';
+          option.setAttribute('role', 'option');
+          option.dataset.value = data.name;
+          option.dataset.slab = data.gst_slab || '';
+          option.dataset.search = data.related_products || '';
+          const main = document.createElement('span');
+          main.className = 'combo-option-main';
+          main.textContent = data.name;
+          const note = document.createElement('span');
+          note.className = 'combo-option-note';
+          note.textContent = (data.related_products || '') + (data.gst_slab ? ' · GST ' + data.gst_slab : '');
+          option.append(main, note);
+          hsnList.appendChild(option);
+          closeAddForm();
+          hsnCombo.choose(option);
+        })
+        .catch(() => alert('Something went wrong adding the HSN code.'));
+    }
   }
 
   // ---- pallet types list editor --------------------------------------------------

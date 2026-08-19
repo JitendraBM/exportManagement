@@ -82,7 +82,10 @@ def _form_context():
     company = container.company_service.get(g.user.company_id)
     bank_options = company.bank_details if company else []
     container_types = [ct.name for ct in container.misc_list_service.container_type_options(g.user.company_id)]
-    return buyers, quotations, bank_options, container_types
+    categories_tree = container.product_service.list_categories_tree(g.user.company_id)
+    hsn_code_options = container.misc_list_service.list_hsn_codes(g.user.company_id)
+    unit_options = container.misc_list_service.list_units(g.user.company_id)
+    return buyers, quotations, bank_options, container_types, categories_tree, hsn_code_options, unit_options
 
 
 def _alt_qty_map(items) -> dict:
@@ -165,18 +168,18 @@ def new_proforma_invoice():
             return redirect(url_for("proforma_invoices.view_proforma_invoice", proforma_invoice_id=invoice.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            buyers, quotations, bank_options, container_types = _form_context()
+            buyers, quotations, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "proforma_invoices/form.html", invoice=None, buyers=buyers, quotations=quotations,
-                bank_options=bank_options, container_types=container_types,
+                bank_options=bank_options, container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
                 form_data=request.form, form_items=items,
                 alt_qty_map=_alt_qty_map(items), pallet_types_map=_pallet_types_map(items),
                 form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    buyers, quotations, bank_options, container_types = _form_context()
+    buyers, quotations, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
     prefill = None
     form_items = None
     form_containers = None
@@ -193,7 +196,7 @@ def new_proforma_invoice():
             pass
     return render_template(
         "proforma_invoices/form.html", invoice=None, buyers=buyers, quotations=quotations,
-        bank_options=bank_options, container_types=container_types,
+        bank_options=bank_options, container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
         form_data=prefill, form_items=form_items,
         alt_qty_map=_alt_qty_map(form_items) if form_items else {},
         pallet_types_map=_pallet_types_map(form_items) if form_items else {},
@@ -219,9 +222,12 @@ def view_proforma_invoice(proforma_invoice_id):
     purchase_invoices = container.purchase_invoice_service.list_for_proforma(purchase_orders, g.user.company_id)
     design_status = container.proforma_fulfilment_service.design_status(g.user.company_id, proforma_invoice_id)
     export_invoices = container.export_invoice_service.list_for_proforma(proforma_invoice_id, g.user.company_id)
+    # An invoice's goods can be sent out to be worked on more than once, so
+    # job works are a list on this page too, same as its purchase orders.
+    job_works = container.job_work_service.list_for_proforma(proforma_invoice_id, g.user.company_id)
     return render_template("proforma_invoices/print.html", invoice=invoice, company=company,
                            packing_lists=packing_lists, purchase_orders=purchase_orders,
-                           purchase_invoices=purchase_invoices,
+                           purchase_invoices=purchase_invoices, job_works=job_works,
                            design_status=design_status, export_invoices=export_invoices)
 
 
@@ -269,21 +275,21 @@ def edit_proforma_invoice(proforma_invoice_id):
             return redirect(url_for("proforma_invoices.view_proforma_invoice", proforma_invoice_id=proforma_invoice_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            buyers, quotations, bank_options, container_types = _form_context()
+            buyers, quotations, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "proforma_invoices/form.html", invoice=invoice, buyers=buyers, quotations=quotations,
-                bank_options=bank_options, container_types=container_types,
+                bank_options=bank_options, container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
                 form_data=request.form, form_items=items,
                 alt_qty_map=_alt_qty_map(items), pallet_types_map=_pallet_types_map(items),
                 form_containers=_extract_containers(request.form),
                 today=date.today().isoformat(),
             ), 400
 
-    buyers, quotations, bank_options, container_types = _form_context()
+    buyers, quotations, bank_options, container_types, categories_tree, hsn_code_options, unit_options = _form_context()
     return render_template(
         "proforma_invoices/form.html", invoice=invoice, buyers=buyers, quotations=quotations,
-        bank_options=bank_options, container_types=container_types,
+        bank_options=bank_options, container_types=container_types, categories_tree=categories_tree, hsn_code_options=hsn_code_options, unit_options=unit_options,
         form_data=None, form_items=None,
         alt_qty_map=_alt_qty_map(invoice.items), pallet_types_map=_pallet_types_map(invoice.items),
         form_containers=None,
@@ -370,5 +376,6 @@ def view_proforma_invoice_version(proforma_invoice_id, version_number):
     company = container.company_service.get(g.user.company_id)
     return render_template(
         "proforma_invoices/print.html", invoice=historical_invoice, company=company,
-        packing_lists=[], purchase_orders=[], design_status=None, export_invoices=[], historical_version=version,
+        packing_lists=[], purchase_orders=[], job_works=[], design_status=None, export_invoices=[],
+        historical_version=version,
     )

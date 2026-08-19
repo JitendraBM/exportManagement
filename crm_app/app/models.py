@@ -1373,6 +1373,235 @@ class PurchaseOrder:
 
 
 @dataclass
+class JobWorkItem:
+    """One DESIGN line of a job work - a chain of figures computed
+    server-side and persisted (same treatment PurchaseOrderItem.total_inr
+    gets), so a printed sheet never disagrees with what was actually saved:
+
+        source_quantity     this design's quantity_boxes off the proforma
+                             invoice's packing list under `product_id`,
+                             matched by design name (0 with no match)
+        conversion_value     typed; must be > 0
+        extra_percent        typed; may be 0
+        converted_quantity  = source_quantity / conversion_value
+        extra_quantity       = converted_quantity * extra_percent / 100
+        job_quantity          = converted_quantity + extra_quantity - the
+                              document's one final figure per design
+
+    product_id/product_name name the SOURCE proforma invoice product - kept
+    only to look up source_quantity, not shown as "the" product on the
+    printed sheet. to_product_id/to_product_name name what the job work
+    converts the design INTO, which is what the sheet actually describes as
+    the goods (its HSN is what hsn_code snapshots), and design_id/design_name
+    is one of to_product's own catalog designs."""
+    id: Optional[int]
+    job_work_id: Optional[int]
+    sr_no: int
+    product_name: str
+    product_id: Optional[int] = None
+    to_product_id: Optional[int] = None
+    to_product_name: Optional[str] = None
+    hsn_code: Optional[str] = None
+    design_id: Optional[int] = None
+    design_name: Optional[str] = None
+    # What every quantity below is counted in: the product's QTY unit
+    # (BOX/PCS), taken from to_product - not its alternate-quantity unit,
+    # since job work is counted, not measured by area.
+    unit: str = "PCS"
+    source_quantity: float = 0
+    conversion_value: float = 1
+    extra_percent: float = 0
+    converted_quantity: float = 0
+    extra_quantity: float = 0
+    job_quantity: float = 0
+
+    @staticmethod
+    def from_row(row) -> "JobWorkItem":
+        return JobWorkItem(
+            id=row["id"],
+            job_work_id=row["job_work_id"],
+            sr_no=row["sr_no"],
+            product_id=row["product_id"],
+            product_name=row["product_name"],
+            to_product_id=row["to_product_id"],
+            to_product_name=row["to_product_name"],
+            hsn_code=row["hsn_code"],
+            design_id=row["design_id"],
+            design_name=row["design_name"],
+            unit=row["unit"],
+            source_quantity=row["source_quantity"],
+            conversion_value=row["conversion_value"],
+            extra_percent=row["extra_percent"],
+            converted_quantity=row["converted_quantity"],
+            extra_quantity=row["extra_quantity"],
+            job_quantity=row["job_quantity"],
+        )
+
+
+@dataclass
+class JobWorkProduct:
+    """One row of a job work's Products card - a plain copy of
+    PurchaseOrderItem's shape (product/HSN/boxes/qty/unit/price/total),
+    picked from the Job Manufacturer -> Product dropdown (the invoice's own
+    products), NOT "To Product" (the design lines' conversion target).
+    Purely a costing/reference line: never printed, never feeds
+    JobWorkItem's derived chain."""
+    id: Optional[int]
+    job_work_id: Optional[int]
+    sr_no: int
+    product_name: str
+    product_id: Optional[int] = None
+    hsn_code: Optional[str] = None
+    quantity_boxes: Optional[float] = None
+    quantity_unit: str = "PCS"
+    quantity_value: float = 0
+    unit: str = "SQM"
+    price_inr: float = 0
+    price_per: str = "BOX"
+    total_inr: float = 0
+
+    @staticmethod
+    def from_row(row) -> "JobWorkProduct":
+        return JobWorkProduct(
+            id=row["id"],
+            job_work_id=row["job_work_id"],
+            sr_no=row["sr_no"],
+            product_id=row["product_id"],
+            product_name=row["product_name"],
+            hsn_code=row["hsn_code"],
+            quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
+            quantity_value=row["quantity_value"],
+            unit=row["unit"],
+            price_inr=row["price_inr"],
+            price_per=row["price_per"],
+            total_inr=row["total_inr"],
+        )
+
+
+@dataclass
+class JobWork:
+    """The JOB WORK document: a proforma invoice's goods handed on to be
+    worked on. Two parties sit on the one sheet - the FROM SELLER whose goods
+    go out and the JOB MANUFACTURER who does the work, both Suppliers - and
+    the lines are DESIGNS rather than products, since that is the granularity
+    job work is actually sent out at. proforma_invoice_id is a
+    "generated from" reference only, the same pattern as
+    PurchaseOrder.proforma_invoice_id."""
+    id: Optional[int]
+    company_id: int
+    job_work_number: str
+    job_work_date: str
+    seller_name: str
+    created_by: int
+    proforma_invoice_id: Optional[int] = None
+    seller_supplier_id: Optional[int] = None
+    seller_address: Optional[str] = None
+    seller_pan: Optional[str] = None
+    seller_gstin: Optional[str] = None
+    manufacturer_supplier_id: Optional[int] = None
+    manufacturer_name: Optional[str] = None
+    manufacturer_address: Optional[str] = None
+    manufacturer_pan: Optional[str] = None
+    manufacturer_gstin: Optional[str] = None
+    seller_ref_no: Optional[str] = None
+    delivery_time: Optional[str] = None
+    advance_percent: Optional[str] = None
+    payment_terms: Optional[str] = None
+    remarks: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    proforma_invoice_number: Optional[str] = None  # populated by joined queries only
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
+    # Products card (a copy of PurchaseOrder's own tax block): the rate
+    # follows purchase_type, split into IGST or CGST+SGST against
+    # manufacturer_gstin - see JobWorkService._tax_percentages. Never
+    # printed, never derived into job_quantity above.
+    igst_percent: float = 0
+    cgst_percent: float = 0
+    sgst_percent: float = 0
+    purchase_type: str = DEFAULT_PURCHASE_TYPE  # key of PURCHASE_TYPES
+    tax_as_actual: bool = False
+    items: List[JobWorkItem] = field(default_factory=list)
+    products: List[JobWorkProduct] = field(default_factory=list)
+    # Precomputed by list queries, which deliberately don't load items.
+    computed_job_quantity: Optional[float] = None
+
+    @staticmethod
+    def from_row(row) -> "JobWork":
+        return JobWork(
+            id=row["id"],
+            company_id=row["company_id"],
+            job_work_number=row["job_work_number"],
+            job_work_date=row["job_work_date"],
+            proforma_invoice_id=row["proforma_invoice_id"],
+            seller_supplier_id=row["seller_supplier_id"],
+            seller_name=row["seller_name"],
+            seller_address=row["seller_address"],
+            seller_pan=row["seller_pan"],
+            seller_gstin=row["seller_gstin"],
+            manufacturer_supplier_id=row["manufacturer_supplier_id"],
+            manufacturer_name=row["manufacturer_name"],
+            manufacturer_address=row["manufacturer_address"],
+            manufacturer_pan=row["manufacturer_pan"],
+            manufacturer_gstin=row["manufacturer_gstin"],
+            seller_ref_no=row["seller_ref_no"],
+            delivery_time=row["delivery_time"],
+            advance_percent=row["advance_percent"],
+            payment_terms=row["payment_terms"],
+            remarks=row["remarks"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
+            proforma_invoice_number=(
+                row["proforma_invoice_number"] if "proforma_invoice_number" in row.keys() else None
+            ),
+            currency_code=row["currency_code"],
+            currency_symbol=row["currency_symbol"],
+            igst_percent=(row["igst_percent"] if "igst_percent" in row.keys() else None) or 0,
+            cgst_percent=(row["cgst_percent"] if "cgst_percent" in row.keys() else None) or 0,
+            sgst_percent=(row["sgst_percent"] if "sgst_percent" in row.keys() else None) or 0,
+            purchase_type=(row["purchase_type"] if "purchase_type" in row.keys() else None) or DEFAULT_PURCHASE_TYPE,
+            tax_as_actual=bool(row["tax_as_actual"]) if "tax_as_actual" in row.keys() else False,
+            computed_job_quantity=row["items_job_quantity"] if "items_job_quantity" in row.keys() else None,
+        )
+
+    @property
+    def currency_name(self) -> str:
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[0]
+
+    @property
+    def currency_prefix(self) -> str:
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[1]
+
+    @property
+    def currency_label(self) -> str:
+        return currency_display(self.currency_code, self.currency_symbol, "INR", "₹")[2]
+
+    @property
+    def total_job_quantity(self) -> float:
+        if self.computed_job_quantity is not None and not self.items:
+            return self.computed_job_quantity
+        return sum(item.job_quantity or 0 for item in self.items)
+
+    @property
+    def total_source_quantity(self) -> float:
+        return sum(item.source_quantity or 0 for item in self.items)
+
+    @property
+    def total_converted_quantity(self) -> float:
+        return sum(item.converted_quantity or 0 for item in self.items)
+
+    @property
+    def total_extra_quantity(self) -> float:
+        return sum(item.extra_quantity or 0 for item in self.items)
+
+
+
+@dataclass
 class PurchaseInvoiceItem:
     """One product line of a purchase invoice - same shape as
     PurchaseOrderItem, copied in from the linked purchase order at creation

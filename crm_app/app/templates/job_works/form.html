@@ -1,0 +1,1004 @@
+{% extends "base.html" %}
+{% from "_macros.html" import currency_select %}
+{% block title %}{{ 'Edit job work' if job_work else 'New job work' }}{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>{{ 'Edit ' + job_work.job_work_number if job_work else 'New job work' }}</h1>
+    {% if not job_work %}<div class="text-sm text-soft">Job work number is generated automatically on save.</div>{% endif %}
+  </div>
+</div>
+
+{# The lines already on this job work, handed to the script as its starting
+   state: the saved document when editing, and whatever was typed when a save
+   came back rejected. Both shapes are read the same way - Jinja falls back to
+   item access, so `row.design_id` works for a JobWorkItem and for one of
+   _extract_items' plain dicts alike. Jobed Qty/Converted Qty/Extra Qty/Job
+   Quantity are NOT seeded here - the script recomputes them live from
+   INVOICE_QUANTITIES + the typed conversion_value/extra_percent, the same
+   chain the server runs authoritatively on save (see JobWorkItem's own
+   docstring), so editing an old line always shows figures consistent with
+   what's actually on the invoice right now. #}
+{% set existing_rows = form_items if form_items is not none else (job_work.items if job_work else []) %}
+{% set seed_lines = [] %}
+{% for row in existing_rows %}
+  {% set _ = seed_lines.append({
+      'to_product_id': row.to_product_id or '', 'to_product_name': row.to_product_name or '',
+      'product_id': row.product_id or '', 'product_name': row.product_name or '',
+      'design_id': row.design_id or '', 'design_name': row.design_name or '',
+      'conversion_value': row.conversion_value or '', 'extra_percent': row.extra_percent or ''
+  }) %}
+{% endfor %}
+
+{# Plain {id, name, unit} triples for the "To Product" picker - the WHOLE
+   catalog, since job work's target size is rarely on the invoice at all. #}
+{% set to_products = [] %}
+{% for p in products %}
+  {% set _ = to_products.append({'id': p.id, 'name': p.product_name, 'unit': p.quantity_unit or 'PCS'}) %}
+{% endfor %}
+
+<form method="POST" id="job-work-form">
+  {% set data = form_data if form_data else job_work %}
+  <div class="card">
+    <div class="card-header"><h3>Start from</h3></div>
+    <div class="form-row">
+      <div class="field">
+        <label for="proforma_invoice_select">Prefill from an existing proforma invoice <span class="text-soft text-sm">(optional)</span></label>
+        <select id="proforma_invoice_select">
+          <option value="">— Select a proforma invoice —</option>
+          {% for pi in invoices %}
+            <option value="{{ pi.id }}" {{ 'selected' if data and data.proforma_invoice_id | string == pi.id | string }}>{{ pi.invoice_number }} — {{ pi.consignee_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <p class="hint">Choosing a proforma invoice reloads this page, copies its details and its consignee in as a starting point, and lets the Job Manufacturer card fetch quantities off it — the job work is then its own independent record.</p>
+    <input type="hidden" name="proforma_invoice_id" id="proforma_invoice_id" value="{{ data.proforma_invoice_id | default('', true) }}">
+  </div>
+
+  {% set chosen_currency = data.currency_code | default('INR', true) %}
+  <div class="card">
+    <div class="card-header"><h3>Order details</h3></div>
+    <div class="form-row">
+      {{ currency_select(chosen_currency, currency_options, hint='Shown on the printed job work.', can_add=current_user.is_admin) }}
+      <div class="field"><label for="job_work_date">Date<span class="required-mark">*</span></label><input type="date" id="job_work_date" name="job_work_date" required value="{{ data.job_work_date | default(today, true) }}"></div>
+      <div class="field"><label for="seller_ref_no">Seller ref. no.</label><input type="text" id="seller_ref_no" name="seller_ref_no" value="{{ data.seller_ref_no | default('', true) }}"></div>
+      <div class="field"><label for="delivery_time">Delivery time</label><input type="text" id="delivery_time" name="delivery_time" placeholder="e.g. 20 DAY FROM JOB WORK DATE" value="{{ data.delivery_time | default('', true) }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="max-width:220px;"><label for="advance_percent">Advance</label><input type="text" id="advance_percent" name="advance_percent" placeholder="e.g. 0%" value="{{ data.advance_percent | default('', true) }}"></div>
+      <div class="field"><label for="payment_terms">Payment terms</label><input type="text" id="payment_terms" name="payment_terms" placeholder="e.g. 40 DAYS AGAINST INVOICE DATE 100%" value="{{ data.payment_terms | default('', true) }}"></div>
+    </div>
+  </div>
+
+  <!-- ============ FROM SELLER ============ -->
+  <div class="card">
+    <div class="card-header"><h3>From Seller</h3></div>
+
+    <div class="field">
+      <label for="seller_select">Prefill from an existing supplier <span class="text-soft text-sm">(optional)</span></label>
+      <select id="seller_select" class="js-party-select" data-prefix="seller">
+        <option value="">— Select a supplier —</option>
+        {% for s in suppliers %}
+          <option value="{{ s.id }}" data-name="{{ s.company_name }}" data-address="{{ s.address or '' }}"
+                  data-pan="{{ s.pan_no or '' }}" data-gstin="{{ s.gstin or '' }}"
+                  {{ 'selected' if data and data.seller_supplier_id | string == s.id | string }}>
+            {{ s.company_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="seller_supplier_id" id="seller_supplier_id" value="{{ data.seller_supplier_id | default('', true) }}">
+    <div class="field"><label for="seller_name">Seller name<span class="required-mark">*</span></label><input type="text" id="seller_name" name="seller_name" required value="{{ data.seller_name | default('', true) }}"></div>
+    <div class="field"><label for="seller_address">Seller address</label><textarea id="seller_address" name="seller_address" rows="3">{{ data.seller_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="seller_pan">Seller PAN no.</label><input type="text" id="seller_pan" name="seller_pan" value="{{ data.seller_pan | default('', true) }}"></div>
+      <div class="field"><label for="seller_gstin">Seller GSTIN</label><input type="text" id="seller_gstin" name="seller_gstin" value="{{ data.seller_gstin | default('', true) }}"></div>
+    </div>
+  </div>
+
+  <!-- ============ JOB MANUFACTURER ============ -->
+  <div class="card">
+    <div class="card-header"><h3>Job Manufacturer</h3></div>
+
+    <div class="field">
+      <label for="manufacturer_select">Prefill from an existing supplier <span class="text-soft text-sm">(optional)</span></label>
+      <select id="manufacturer_select" class="js-party-select" data-prefix="manufacturer">
+        <option value="">— Select a supplier —</option>
+        {% for s in suppliers %}
+          <option value="{{ s.id }}" data-name="{{ s.company_name }}" data-address="{{ s.address or '' }}"
+                  data-pan="{{ s.pan_no or '' }}" data-gstin="{{ s.gstin or '' }}"
+                  {{ 'selected' if data and data.manufacturer_supplier_id | string == s.id | string }}>
+            {{ s.company_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="manufacturer_supplier_id" id="manufacturer_supplier_id" value="{{ data.manufacturer_supplier_id | default('', true) }}">
+    <div class="field"><label for="manufacturer_name">Manufacturer name<span class="required-mark">*</span></label><input type="text" id="manufacturer_name" name="manufacturer_name" required value="{{ data.manufacturer_name | default('', true) }}"></div>
+    <div class="field"><label for="manufacturer_address">Manufacturer address</label><textarea id="manufacturer_address" name="manufacturer_address" rows="3">{{ data.manufacturer_address | default('', true) }}</textarea></div>
+    <div class="form-row">
+      <div class="field"><label for="manufacturer_pan">Manufacturer PAN no.</label><input type="text" id="manufacturer_pan" name="manufacturer_pan" value="{{ data.manufacturer_pan | default('', true) }}"></div>
+      <div class="field"><label for="manufacturer_gstin">Manufacturer GSTIN</label><input type="text" id="manufacturer_gstin" name="manufacturer_gstin" value="{{ data.manufacturer_gstin | default('', true) }}"></div>
+    </div>
+
+    <hr class="divider">
+    <h4>Products &amp; designs to send out</h4>
+    <div class="form-row">
+      {# Picked FIRST: the whole catalog. Its own QTY unit is what every
+         quantity on the row is counted in, and - once it matches one of the
+         invoice's own products - it's what the Design column below and
+         Jobed Qty are both driven from (see designsForToProduct() /
+         chainOf() in this page's own script). #}
+      <div class="field">
+        <label for="mfr_to_product_select">To Product</label>
+        <select id="mfr_to_product_select">
+          <option value="">— Select a product to convert into —</option>
+          {% for p in to_products %}
+            <option value="{{ p.id }}" data-name="{{ p.name }}" data-unit="{{ p.unit }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="text-sm text-soft">Design list and Jobed Qty come from the proforma invoice's packing list under whichever of its own products this matches — empty if To Product isn't one of them.</div>
+      </div>
+      {% if invoice_products %}
+      {# Picked SECOND: only the invoice's own products - tags each line's
+         product_id/product_name for the Products card's Boxes total below
+         (see plBoxesForProduct() in this page's own script); no longer
+         drives Jobed Qty, that's To Product's job now. #}
+      <div class="field">
+        <label for="mfr_product_select">Product</label>
+        <select id="mfr_product_select">
+          <option value="">— Select a product from the proforma invoice —</option>
+          {% for p in invoice_products %}
+            <option value="{{ p.product_id or '' }}" data-name="{{ p.product_name }}" data-hsn="{{ p.hsn_code or '' }}">{{ p.product_name }}</option>
+          {% endfor %}
+        </select>
+        <div class="text-sm text-soft">Tags each design line's Product, which the Products card's Boxes total below uses — not shown on the printed sheet.</div>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if invoice_products %}
+    <div id="mfr-designs-wrap" hidden>
+      <div class="table-wrap">
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th>Sr</th>
+              <th style="min-width:220px;">Design</th>
+              <th>Jobed Qty</th>
+              <th style="min-width:130px;">Conversion Value</th>
+              <th>Converted Qty</th>
+              <th style="min-width:110px;">Extra Qty %</th>
+              <th>Extra Qty</th>
+              <th>Job Quantity</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="mfr-designs-body"></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="add-design-btn" style="margin-top:10px;">+ Add design</button>
+      <button type="button" class="btn btn-primary btn-sm" id="add-to-job-work" style="margin-top:10px;">+ Add to Job Work</button>
+      <p class="hint">Jobed Qty is fetched from the proforma invoice's packing list for whichever design was picked under To Product and can't be typed. Converted Qty = Jobed Qty ÷ Conversion Value; Extra Qty = Converted Qty × Extra Qty %; Job Quantity = Converted Qty + Extra Qty.</p>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      {% if data and data.proforma_invoice_id %}
+        This proforma invoice has no product lines yet.
+      {% else %}
+        Pick a proforma invoice above first — its products are what the Product picker (and Jobed Qty) draws from.
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ============ PRODUCTS (a copy of the Purchase Order form's own
+       Products card) — one row per product, prefilled from the Job
+       Manufacturer -> "Product" picker (the invoice's own products), NOT
+       "To Product" (the design lines' conversion target). Costing/reference
+       only: never printed, never feeds the design lines' Job Quantity. ============ -->
+  {% set chosen_currency = data.currency_code | default('INR', true) %}
+  <div class="card">
+    <div class="card-header"><h3>Products</h3></div>
+    <div class="table-wrap">
+      <table class="ledger" id="pl-items-table">
+        <thead>
+          <tr>
+            <th>Sr</th>
+            <th style="min-width:220px;">Product</th>
+            <th>HSN code</th>
+            <th>Boxes</th>
+            <th>Qty (SQM/LM)</th>
+            <th>Unit</th>
+            <th>Price ({{ chosen_currency }})</th>
+            <th>Per</th>
+            <th class="num">Total ({{ chosen_currency }})</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="pl-items-body">
+          {% for row in form_products %}
+          {% set meta = product_meta_map.get(row.product_id | int, {}) if row.product_id else {} %}
+          <tr class="pl-item-row" data-alt-qty="{{ meta.get('alt_qty', '') }}" data-igst="{{ meta.get('igst', '') }}">
+            <td class="js-sr">{{ loop.index }}</td>
+            <td>
+              <input type="hidden" name="pl_product_id[]" class="js-pl-product-id" value="{{ row.product_id or '' }}">
+              <textarea name="pl_product_name[]" class="js-pl-product-name" rows="2" required>{{ row.product_name }}</textarea>
+              <button type="button" class="btn btn-ghost btn-sm js-pl-choose-product">📦 Choose product</button>
+            </td>
+            <td><input type="text" name="pl_hsn_code[]" class="js-pl-hsn" value="{{ row.hsn_code or '' }}" readonly tabindex="-1"></td>
+            <td><input type="number" step="0.01" name="pl_quantity_boxes[]" class="js-pl-boxes" value="{{ row.quantity_boxes or '' }}"></td>
+            <td><input type="number" step="0.01" name="pl_quantity_value[]" class="js-pl-qty" required value="{{ row.quantity_value or '' }}"></td>
+            <td>
+              <select name="pl_unit[]" class="js-pl-unit">
+                {% for u in PRODUCT_UNITS %}
+                  <option value="{{ u }}" {{ 'selected' if row.unit == u }}>{{ u }}</option>
+                {% endfor %}
+                {% if row.unit and row.unit not in PRODUCT_UNITS %}<option value="{{ row.unit }}" selected>{{ row.unit }}</option>{% endif %}
+              </select>
+            </td>
+            <td><input type="number" step="0.01" name="pl_price_inr[]" class="js-pl-price" required value="{{ row.price_inr or '' }}"></td>
+            <td>
+              <select name="pl_price_per[]" class="js-pl-price-per">
+                <option value="BOX" {{ 'selected' if (row.price_per or 'BOX') == 'BOX' }}>BOX</option>
+                <option value="UNIT" {{ 'selected' if row.price_per and row.price_per != 'BOX' }}>Unit</option>
+              </select>
+            </td>
+            <td class="num js-pl-total">0.00</td>
+            <td><button type="button" class="btn-link-danger js-pl-remove-row">Remove</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="pl-add-row-btn">+ Add product line</button>
+    <p class="hint">A product line's Product prefills from the Job Manufacturer card's "Product" picker (not "To Product") whenever "+ Add to Job Work" is used - HSN code and unit come from the catalog product, boxes/qty/price stay editable. This card is a costing reference: it isn't printed and doesn't drive the design lines' Job Quantity above.</p>
+    <div class="form-row" style="margin-top:14px;">
+      <div class="field" style="max-width:220px;">
+        <label for="pl_tax_as_actual">
+          <input type="checkbox" id="pl_tax_as_actual" name="tax_as_actual" value="1" {{ 'checked' if data and data.tax_as_actual }}>
+          Tax as Actual
+        </label>
+        <p class="hint">When ticked, the Order value below is the goods subtotal only, with no computed tax added. Reference only - nothing on this card is printed.</p>
+      </div>
+      <div class="field" style="max-width:260px;">
+        <label for="pl_purchase_type">Purchase under<span class="required-mark">*</span></label>
+        {% set selected_purchase_type = data.purchase_type | default('full_tax', true) if data else 'full_tax' %}
+        <select id="pl_purchase_type" name="purchase_type">
+          {% for key, label in PURCHASE_TYPES.items() %}
+            <option value="{{ key }}" {{ 'selected' if selected_purchase_type == key }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Taxes applied</label>
+        <div class="text-sm" style="padding-top:8px;">
+          <strong>IGST:</strong> <span id="pl-igst-display">0.00</span>%
+          &nbsp;·&nbsp; <strong>CGST:</strong> <span id="pl-cgst-display">0.00</span>%
+          &nbsp;·&nbsp; <strong>SGST:</strong> <span id="pl-sgst-display">0.00</span>%
+        </div>
+        <div class="hint" id="pl-tax-basis-hint"></div>
+      </div>
+    </div>
+    <div class="flex-between" style="margin-top:14px;">
+      <div></div>
+      <div class="text-sm">
+        <strong>Total amount:</strong> {{ chosen_currency }} <span id="pl-subtotal-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Round off:</strong> {{ chosen_currency }} <span id="pl-roundoff-display">0.00</span>
+        &nbsp;·&nbsp; <strong>Order value:</strong> {{ chosen_currency }} <span id="pl-order-value-display">0.00</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product picker modal for the Products card (same flat, searchable
+       product list as the Purchase Order form's own picker). -->
+  <div id="pl-product-picker-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Choose a product</h3>
+        <button type="button" class="btn-link-danger" id="pl-picker-close">✕ Close</button>
+      </div>
+      <div class="field">
+        <input type="text" id="pl-picker-search" placeholder="Search products…" autocomplete="off">
+      </div>
+      <div id="pl-picker-products" class="table-wrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ THE JOB WORK LINES (what actually posts) ============ -->
+  <div class="card">
+    <div class="card-header"><h3>Job work lines</h3></div>
+    <div class="table-wrap">
+      <table class="ledger" id="lines-table">
+        <thead>
+          <tr>
+            <th>Sr</th>
+            <th style="min-width:160px;">To Product</th>
+            <th style="min-width:140px;">Product</th>
+            <th style="min-width:160px;">Design</th>
+            <th>Jobed Qty</th>
+            <th>Conversion Value</th>
+            <th>Converted Qty</th>
+            <th>Extra Qty %</th>
+            <th>Extra Qty</th>
+            <th>Job Quantity</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="lines-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-state" id="lines-empty">Nothing added yet.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Remarks</h3></div>
+    <div class="field">
+      <textarea name="remarks" rows="4" placeholder="One remark per line">{{ data.remarks | default('', true) }}</textarea>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-primary">{{ 'Save changes' if job_work else 'Create job work' }}</button>
+  <a href="{{ url_for('job_works.view_job_work', job_work_id=job_work.id) if job_work else url_for('job_works.list_job_works') }}" class="btn btn-ghost">Cancel</a>
+</form>
+
+<script>
+(function () {
+  const TO_PRODUCTS = {{ to_products | tojson }};
+  const INVOICE_PRODUCTS = {{ invoice_products | tojson }};
+  // (product_key||NORMALIZED DESIGN NAME) -> {design_name, quantity_boxes, quantity_unit},
+  // built server-side from the invoice's own packing lists (see
+  // JobWorkService.invoice_quantities). The single source of truth for
+  // Jobed Qty - never typed, only looked up here and, authoritatively, again
+  // by the server on save.
+  const INVOICE_QUANTITIES = {{ invoice_quantities | tojson }};
+  // NORMALIZED DESIGN NAME -> same shape, summed across every product the
+  // design appears under on the invoice - the fallback used when no
+  // "Product" is picked (or it doesn't match), since one invoice essentially
+  // never repeats a design name under two different products.
+  const INVOICE_QUANTITIES_BY_DESIGN = {{ invoice_quantities_by_design | tojson }};
+  let lines = {{ seed_lines | tojson }};
+
+  const num = (v) => {
+    const n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  };
+  const show = (v) => {
+    const n = parseFloat(v);
+    if (isNaN(n)) return '0';
+    return n % 1 === 0 ? String(n) : n.toFixed(2);
+  };
+  // Same collapsing/uppercasing _normalize_name applies server-side, so a
+  // hand-typed name matches the same way on both sides.
+  const normalizeName = (v) => (v || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  const sourceKey = (id, name) => (id ? String(id) : normalizeName(name));
+  const toProductOf = (id) => TO_PRODUCTS.find((p) => String(p.id) === String(id));
+  const unitOf = (line) => {
+    const p = toProductOf(line.to_product_id);
+    return p ? p.unit : '';
+  };
+
+  // ---- the derived chain: source_quantity -> converted -> extra -> job_quantity --------------------------------------------------
+  // Jobed Qty is the chosen design's quantity off the proforma invoice's own
+  // packing list, matched against whichever "To Product" the row was added
+  // under (not the "Product" dropdown) - same key designsForToProduct()
+  // below uses to build the Design picker's own options, and the same key
+  // the server re-derives authoritatively on save (see
+  // JobWorkService._build_items).
+  function chainOf(line) {
+    const designKey = normalizeName(line.design_name);
+    const lookupKey = sourceKey(line.to_product_id, line.to_product_name) + '||' + designKey;
+    const entry = INVOICE_QUANTITIES[lookupKey] || INVOICE_QUANTITIES_BY_DESIGN[designKey];
+    const sourceQuantity = entry ? entry.quantity_boxes : 0;
+    const conversionValue = num(line.conversion_value);
+    const convertedQuantity = conversionValue > 0 ? sourceQuantity / conversionValue : 0;
+    const extraPercent = num(line.extra_percent);
+    const extraQuantity = convertedQuantity * extraPercent / 100;
+    const jobQuantity = convertedQuantity + extraQuantity;
+    return { sourceQuantity, convertedQuantity, extraQuantity, jobQuantity };
+  }
+
+  // ---- design list for the chosen To Product: NOT the catalog (there is no
+  // more fetch to /job-works/api/products/<id>/designs) - the proforma
+  // invoice's own packing list, filtered to whichever lines were recorded
+  // under a product matching "To Product" (by id, falling back to name).
+  // Empty whenever To Product isn't itself one of the invoice's own
+  // products - job work is normally a size conversion, so that's the usual
+  // case, and it's this design list (not "Product") that now drives Jobed
+  // Qty above. --------------------------------------------------
+  function designsForToProduct(toProductId, toProductName) {
+    if (!toProductId) return [];
+    const key = sourceKey(toProductId, toProductName);
+    const seen = new Set();
+    const result = [];
+    Object.keys(INVOICE_QUANTITIES).forEach((compositeKey) => {
+      const sep = compositeKey.indexOf('||');
+      if (sep === -1 || compositeKey.slice(0, sep) !== key) return;
+      const entry = INVOICE_QUANTITIES[compositeKey];
+      const designKey = normalizeName(entry.design_name);
+      if (seen.has(designKey)) return;
+      seen.add(designKey);
+      result.push({ name: entry.design_name });
+    });
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ---- Job Manufacturer: design lines for the chosen To Product --------------------------------------------------
+  const toProductSelect = document.getElementById('mfr_to_product_select');
+  const productSelect = document.getElementById('mfr_product_select');
+  const mfrWrap = document.getElementById('mfr-designs-wrap');
+  const mfrBody = document.getElementById('mfr-designs-body');
+
+  function toProductSelectedName() {
+    return (toProductSelect.selectedOptions[0] || {}).text || '';
+  }
+
+  // Matched by NAME, not a catalog design id - designsForToProduct() above
+  // has no catalog id to offer (it reads the invoice's packing list, not the
+  // catalog), so a design is never posted with a design_id any more (which
+  // JobWorkItem already treats as optional).
+  function designOptions(available, selectedName) {
+    const opts = ['<option value="">— Select a design —</option>'];
+    const selectedKey = normalizeName(selectedName);
+    available.forEach((d) => {
+      const label = (d.name || '—').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+      opts.push(`<option value="${label}"${normalizeName(d.name) === selectedKey ? ' selected' : ''}>${label}</option>`);
+    });
+    return opts.join('');
+  }
+
+  // Each row remembers its OWN source Product on the row itself (dataset),
+  // rather than always reading whatever "Product" happens to be selected
+  // right now - re-showing an already-added line (a different To Product
+  // picked and back, or the edit form reopening) must keep resolving Jobed
+  // Qty against the product it was actually added under, not whatever the
+  // dropdown was last left on (often blank, which read as 0).
+  function addDesignRow(availableDesigns, designId, designName, conversionValue, extraPercent, productId, productName) {
+    const tr = document.createElement('tr');
+    tr.className = 'js-mfr-design';
+    tr.dataset.designName = designName || '';
+    tr.dataset.productId = productId !== undefined ? (productId || '') : (productSelect ? productSelect.value : '');
+    tr.dataset.productName = productName !== undefined ? (productName || '') : productSelectName();
+    tr.innerHTML = `
+      <td class="js-sr"></td>
+      <td><select class="js-design-pick">${designOptions(availableDesigns, designName || '')}</select></td>
+      <td class="text-sm js-jobed-qty"></td>
+      <td><input type="number" step="0.0001" min="0.0001" class="js-conversion-value" style="max-width:110px;" value="${conversionValue || ''}"></td>
+      <td class="text-sm js-converted-qty"></td>
+      <td><input type="number" step="0.01" min="0" class="js-extra-percent" style="max-width:90px;" value="${extraPercent || ''}"></td>
+      <td class="text-sm js-extra-qty"></td>
+      <td class="text-sm js-job-quantity"><strong></strong></td>
+      <td><button type="button" class="btn-link-danger js-remove-design">Remove</button></td>`;
+    mfrBody.appendChild(tr);
+    updateDesignRow(tr);
+    renumberDesignRows();
+    return tr;
+  }
+
+  function productSelectName() {
+    return productSelect && productSelect.selectedOptions[0] ? (productSelect.selectedOptions[0].dataset.name || '') : '';
+  }
+
+  function rowLine(tr) {
+    const opt = tr.querySelector('.js-design-pick').selectedOptions[0];
+    return {
+      to_product_id: toProductSelect.value, to_product_name: (toProductSelect.selectedOptions[0] || {}).text || '',
+      product_id: tr.dataset.productId || '',
+      product_name: tr.dataset.productName || '',
+      // No catalog design id - the Design picker's options come from the
+      // invoice's own packing list (designsForToProduct), not the catalog.
+      design_id: '',
+      design_name: opt && opt.value ? opt.textContent : '',
+      conversion_value: tr.querySelector('.js-conversion-value').value,
+      extra_percent: tr.querySelector('.js-extra-percent').value,
+    };
+  }
+
+  function updateDesignRow(tr) {
+    const line = rowLine(tr);
+    const chain = chainOf(line);
+    const unit = unitOf(line);
+    tr.querySelector('.js-jobed-qty').textContent = show(chain.sourceQuantity) + (unit ? ' ' + unit : '');
+    tr.querySelector('.js-converted-qty').textContent = show(chain.convertedQuantity) + (unit ? ' ' + unit : '');
+    tr.querySelector('.js-extra-qty').textContent = show(chain.extraQuantity) + (unit ? ' ' + unit : '');
+    tr.querySelector('.js-job-quantity strong').textContent = show(chain.jobQuantity) + (unit ? ' ' + unit : '');
+  }
+
+  function renumberDesignRows() {
+    mfrBody.querySelectorAll('.js-mfr-design').forEach((tr, i) => {
+      tr.querySelector('.js-sr').textContent = i + 1;
+    });
+  }
+
+  function renderDesignsForToProduct() {
+    mfrBody.innerHTML = '';
+    const toProductId = toProductSelect.value;
+    if (!toProductId) {
+      mfrWrap.hidden = true;
+      return;
+    }
+    mfrWrap.hidden = false;
+    const available = designsForToProduct(toProductId, toProductSelectedName());
+    const already = lines.filter((l) => String(l.to_product_id) === String(toProductId));
+    if (already.length) {
+      // The "Product" dropdown itself is also set back to match, when the
+      // whole batch agrees on one - same treatment "To Product" got in the
+      // previous layout - so a freshly-added row alongside these (via
+      // "+ Add design") picks up the same source by default too.
+      if (productSelect) {
+        const sources = new Set(already.map((l) => String(l.product_id || '')));
+        if (sources.size === 1) {
+          const only = [...sources][0];
+          if (Array.from(productSelect.options).some((o) => o.value === only)) productSelect.value = only;
+        }
+      }
+      already.forEach((l) => addDesignRow(available, l.design_id, l.design_name, l.conversion_value, l.extra_percent,
+                                            l.product_id, l.product_name));
+    } else {
+      addDesignRow(available);
+    }
+  }
+
+  toProductSelect.addEventListener('change', renderDesignsForToProduct);
+  if (productSelect) {
+    // Picking a Product is a deliberate "resolve every visible row against
+    // THIS source" action, so it overwrites each row's own remembered
+    // product rather than only the ones that had none.
+    productSelect.addEventListener('change', () => {
+      const name = productSelectName();
+      mfrBody.querySelectorAll('.js-mfr-design').forEach((tr) => {
+        tr.dataset.productId = productSelect.value;
+        tr.dataset.productName = name;
+        updateDesignRow(tr);
+      });
+    });
+  }
+
+  const addDesignBtn = document.getElementById('add-design-btn');
+  if (addDesignBtn) {
+    addDesignBtn.addEventListener('click', () => {
+      addDesignRow(designsForToProduct(toProductSelect.value, toProductSelectedName()));
+    });
+  }
+
+  mfrBody.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('js-remove-design')) return;
+    e.target.closest('tr').remove();
+    renumberDesignRows();
+  });
+  mfrBody.addEventListener('change', (e) => {
+    if (e.target.classList.contains('js-design-pick')) updateDesignRow(e.target.closest('tr'));
+  });
+  mfrBody.addEventListener('input', (e) => {
+    if (e.target.classList.contains('js-conversion-value') || e.target.classList.contains('js-extra-percent')) {
+      updateDesignRow(e.target.closest('tr'));
+    }
+  });
+
+  const addBtn = document.getElementById('add-to-job-work');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      const toProductId = toProductSelect.value;
+      if (!toProductId) {
+        alert('Pick a To Product first.');
+        return;
+      }
+      // Every design line of THIS To Product is rebuilt from what the rows
+      // now say, so removing a row (or clearing its design) takes it back
+      // off the job work - undone the same way it was made.
+      const kept = [];
+      const seenDesigns = new Set();
+      let duplicate = null;
+      let incomplete = false;
+      mfrBody.querySelectorAll('.js-mfr-design').forEach((tr) => {
+        const line = rowLine(tr);
+        if (!line.design_name) return;  // an untouched extra row - simply skipped
+        if (!line.conversion_value || num(line.conversion_value) <= 0) {
+          incomplete = true;
+          return;
+        }
+        const designKey = normalizeName(line.design_name);
+        if (seenDesigns.has(designKey)) {
+          duplicate = line.design_name;
+          return;
+        }
+        seenDesigns.add(designKey);
+        kept.push(line);
+      });
+      if (duplicate) {
+        alert('"' + duplicate + '" is on more than one line — put it on a single line.');
+        return;
+      }
+      if (incomplete) {
+        alert('Every design line needs a Conversion Value greater than zero.');
+        return;
+      }
+      if (!kept.length) {
+        alert('Pick at least one design and its Conversion Value first.');
+        return;
+      }
+      lines = lines.filter((l) => String(l.to_product_id) !== String(toProductId)).concat(kept);
+      render();
+      plAddProductFromManufacturerPick();
+    });
+  }
+
+  // ---- Products card: a copy of the Purchase Order form's own script, working
+  // off its own #pl-items-body rows rather than `lines` - see the card's own
+  // markup comment for why (costing reference, not derived from the design
+  // lines). --------------------------------------------------
+  function plSetUnitValue(sel, u) {
+    if (!u) return;
+    if (!Array.from(sel.options).some((o) => o.value === u)) sel.appendChild(new Option(u, u));
+    sel.value = u;
+  }
+
+  const plItemsBody = document.getElementById('pl-items-body');
+  const plAddRowBtn = document.getElementById('pl-add-row-btn');
+
+  const plRowTemplate = () => {
+    const tr = document.createElement('tr');
+    tr.className = 'pl-item-row';
+    tr.innerHTML = `
+      <td class="js-sr"></td>
+      <td>
+        <input type="hidden" name="pl_product_id[]" class="js-pl-product-id">
+        <textarea name="pl_product_name[]" class="js-pl-product-name" rows="2" required></textarea>
+        <button type="button" class="btn btn-ghost btn-sm js-pl-choose-product">📦 Choose product</button>
+      </td>
+      <td><input type="text" name="pl_hsn_code[]" class="js-pl-hsn" readonly tabindex="-1"></td>
+      <td><input type="number" step="0.01" name="pl_quantity_boxes[]" class="js-pl-boxes"></td>
+      <td><input type="number" step="0.01" name="pl_quantity_value[]" class="js-pl-qty" required></td>
+      <td>
+        <select name="pl_unit[]" class="js-pl-unit">
+          {% for u in PRODUCT_UNITS %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
+        </select>
+      </td>
+      <td><input type="number" step="0.01" name="pl_price_inr[]" class="js-pl-price" required></td>
+      <td>
+        <select name="pl_price_per[]" class="js-pl-price-per">
+          <option value="BOX">BOX</option>
+          <option value="UNIT">Unit</option>
+        </select>
+      </td>
+      <td class="num js-pl-total">0.00</td>
+      <td><button type="button" class="btn-link-danger js-pl-remove-row">Remove</button></td>`;
+    return tr;
+  };
+
+  function plRenumber() {
+    plItemsBody.querySelectorAll('.pl-item-row').forEach((tr, i) => {
+      tr.querySelector('.js-sr').textContent = i + 1;
+    });
+  }
+
+  function plRowTotal(tr) {
+    const boxes = parseFloat(tr.querySelector('.js-pl-boxes').value) || 0;
+    const qty = parseFloat(tr.querySelector('.js-pl-qty').value) || 0;
+    const price = parseFloat(tr.querySelector('.js-pl-price').value) || 0;
+    const perBox = tr.querySelector('.js-pl-price-per').value === 'BOX';
+    return (perBox ? boxes : qty) * price;
+  }
+
+  // ---- taxes (derived, never typed) - same PurchaseOrderService._tax_percentages
+  // logic, run against the Job Manufacturer's own GSTIN rather than a seller's. --------------------------------------------------
+  const PL_OUR_GSTIN = {{ (our_company.gstin if our_company else '') | default('', true) | tojson }};
+  const PL_EXEMPTION_IGST_PERCENT = {{ EXEMPTION_IGST_PERCENT }};
+
+  function plStateCode(gstin) { return (gstin || '').trim().slice(0, 2); }
+  function plIsIntraState(a, b) {
+    const x = plStateCode(a);
+    return /^\d{2}$/.test(x) && x === plStateCode(b);
+  }
+
+  function plCurrentTaxes() {
+    const purchaseType = document.getElementById('pl_purchase_type').value;
+    let rate = 0;
+    if (purchaseType === 'exemption') {
+      rate = PL_EXEMPTION_IGST_PERCENT;
+    } else {
+      plItemsBody.querySelectorAll('.pl-item-row').forEach((tr) => {
+        const productRate = parseFloat(tr.dataset.igst);
+        if (productRate) rate = Math.max(rate, productRate);
+      });
+    }
+    const manufacturerGstin = document.getElementById('manufacturer_gstin').value;
+    const intra = plIsIntraState(PL_OUR_GSTIN, manufacturerGstin);
+    const half = Math.round((rate / 2) * 10000) / 10000;
+    return intra
+      ? { igst: 0, cgst: half, sgst: half, intra: intra, rate: rate }
+      : { igst: rate, cgst: 0, sgst: 0, intra: intra, rate: rate };
+  }
+
+  function plRenderTaxes(taxes) {
+    document.getElementById('pl-igst-display').textContent = taxes.igst.toFixed(2);
+    document.getElementById('pl-cgst-display').textContent = taxes.cgst.toFixed(2);
+    document.getElementById('pl-sgst-display').textContent = taxes.sgst.toFixed(2);
+    const parts = [];
+    const manufacturerGstin = document.getElementById('manufacturer_gstin').value;
+    if (!PL_OUR_GSTIN) {
+      parts.push('Our company has no GSTIN on file, so this is treated as an inter-state purchase (IGST).');
+    } else if (!plStateCode(manufacturerGstin)) {
+      parts.push('No Job Manufacturer GSTIN yet — treated as an inter-state purchase (IGST).');
+    } else {
+      parts.push(taxes.intra
+        ? 'Job Manufacturer GSTIN is in our own state (' + plStateCode(PL_OUR_GSTIN) + ') — CGST + SGST apply.'
+        : 'Job Manufacturer GSTIN is in another state — IGST applies.');
+    }
+    if (document.getElementById('pl_purchase_type').value === 'full_tax' && !taxes.rate) {
+      parts.push('No catalog product on these lines carries an IGST %, so the rate is 0.');
+    }
+    document.getElementById('pl-tax-basis-hint').textContent = parts.join(' ');
+  }
+
+  function plRecalcTotals() {
+    let subtotal = 0;
+    plItemsBody.querySelectorAll('.pl-item-row').forEach((tr) => {
+      const total = plRowTotal(tr);
+      tr.querySelector('.js-pl-total').textContent = total.toFixed(2);
+      subtotal += total;
+    });
+    const taxAsActual = document.getElementById('pl_tax_as_actual').checked;
+    const taxes = plCurrentTaxes();
+    plRenderTaxes(taxes);
+    const gross = taxAsActual ? subtotal : subtotal + subtotal * (taxes.igst + taxes.cgst + taxes.sgst) / 100;
+    const orderValue = Math.round(gross);
+    document.getElementById('pl-subtotal-display').textContent = subtotal.toFixed(2);
+    document.getElementById('pl-roundoff-display').textContent = (orderValue - gross).toFixed(2);
+    document.getElementById('pl-order-value-display').textContent = orderValue.toFixed(2);
+  }
+
+  function plRecalcRowQty(tr) {
+    const altQty = parseFloat(tr.dataset.altQty);
+    if (!altQty) return;
+    const boxes = parseFloat(tr.querySelector('.js-pl-boxes').value) || 0;
+    if (boxes) tr.querySelector('.js-pl-qty').value = (boxes * altQty).toFixed(2);
+  }
+
+  plAddRowBtn.addEventListener('click', () => {
+    plItemsBody.appendChild(plRowTemplate());
+    plRenumber();
+  });
+
+  plItemsBody.addEventListener('click', (e) => {
+    if (e.target.classList.contains('js-pl-remove-row')) {
+      e.target.closest('tr').remove();
+      plRenumber();
+      plRecalcTotals();
+    } else if (e.target.classList.contains('js-pl-choose-product')) {
+      plOpenPicker(e.target.closest('tr'));
+    }
+  });
+
+  plItemsBody.addEventListener('input', (e) => {
+    if (e.target.classList.contains('js-pl-boxes')) {
+      plRecalcRowQty(e.target.closest('tr'));
+      plRecalcTotals();
+    } else if (e.target.classList.contains('js-pl-qty') || e.target.classList.contains('js-pl-price')) {
+      plRecalcTotals();
+    }
+  });
+  plItemsBody.addEventListener('change', (e) => {
+    if (e.target.classList.contains('js-pl-price-per')) plRecalcTotals();
+  });
+  document.getElementById('pl_purchase_type').addEventListener('change', plRecalcTotals);
+  document.getElementById('manufacturer_gstin').addEventListener('input', plRecalcTotals);
+  document.getElementById('pl_tax_as_actual').addEventListener('change', plRecalcTotals);
+
+  // ---- product picker modal for the Products card (flat searchable product list) --------------------------------------------------
+  const plOverlay = document.getElementById('pl-product-picker-overlay');
+  const plProductsEl = document.getElementById('pl-picker-products');
+  const plSearchEl = document.getElementById('pl-picker-search');
+  let plActiveRow = null;
+  let plAllProducts = [];
+
+  function plOpenPicker(row) {
+    plActiveRow = row;
+    plOverlay.hidden = false;
+    plSearchEl.value = '';
+    fetch('/products/api/list').then(r => r.json()).then(data => {
+      plAllProducts = data.products;
+      plRenderProducts();
+    });
+  }
+
+  document.getElementById('pl-picker-close').addEventListener('click', () => { plOverlay.hidden = true; });
+  plOverlay.addEventListener('click', (e) => { if (e.target === plOverlay) plOverlay.hidden = true; });
+  plSearchEl.addEventListener('input', () => plRenderProducts());
+
+  function plRenderProducts() {
+    const term = plSearchEl.value.trim().toLowerCase();
+    const filtered = term
+      ? plAllProducts.filter(p => (p.name || '').toLowerCase().includes(term) || (p.hsn_code || '').toLowerCase().includes(term))
+      : plAllProducts;
+    if (filtered.length === 0) {
+      plProductsEl.innerHTML = '<div class="empty-state">No matching products.</div>';
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'ledger';
+    table.innerHTML = '<thead><tr><th>Product</th><th>HSN code</th><th>Alt qty / Unit</th><th></th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    filtered.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong></strong></td>
+        <td class="text-sm">${p.hsn_code || '—'}</td>
+        <td class="text-sm">${p.alternate_quantity ? `${p.alternate_quantity} ${p.alt_quantity_unit || ''}` : '—'}</td>
+        <td><button type="button" class="btn btn-primary btn-sm">Select</button></td>`;
+      tr.querySelector('strong').textContent = p.name;
+      tr.querySelector('button').addEventListener('click', () => plSelectProduct(p));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    plProductsEl.innerHTML = '';
+    plProductsEl.appendChild(table);
+  }
+
+  function plSelectProduct(p) {
+    if (!plActiveRow) return;
+    plActiveRow.querySelector('.js-pl-product-id').value = p.id;
+    plActiveRow.querySelector('.js-pl-product-name').value = p.name;
+    plActiveRow.querySelector('.js-pl-hsn').value = p.hsn_code || '';
+    plSetUnitValue(plActiveRow.querySelector('.js-pl-unit'), p.alt_quantity_unit);
+    plActiveRow.dataset.altQty = parseFloat(p.alternate_quantity) || '';
+    plActiveRow.dataset.igst = parseFloat(p.igst_percent) || '';
+    plRecalcRowQty(plActiveRow);
+    plRecalcTotals();
+    plOverlay.hidden = true;
+  }
+
+  // ---- auto-add a product line from the Job Manufacturer card's "Product"
+  // picker (NOT "To Product") whenever "+ Add to Job Work" is used - see the
+  // card's own markup comment. A no-op when no Product is picked, or that
+  // product already has a line. --------------------------------------------------
+  function plAddProductFromManufacturerPick() {
+    if (!productSelect || !productSelect.value) return;
+    const id = productSelect.value;
+    const opt = productSelect.selectedOptions[0];
+    const name = opt ? (opt.dataset.name || opt.textContent || '') : '';
+    const hsn = opt ? (opt.dataset.hsn || '') : '';
+    const already = Array.from(plItemsBody.querySelectorAll('.pl-item-row')).some(
+      (tr) => tr.querySelector('.js-pl-product-id').value === id
+    );
+    if (!already) {
+      const tr = plRowTemplate();
+      plItemsBody.appendChild(tr);
+      tr.querySelector('.js-pl-product-id').value = id;
+      tr.querySelector('.js-pl-product-name').value = name;
+      tr.querySelector('.js-pl-hsn').value = hsn;
+      plRenumber();
+    }
+    plSyncBoxesFromLines();
+  }
+
+  // Boxes = the total Job Quantity of every design line (from the Job
+  // Manufacturer card, once "Add to Job Work"ed) whose own source Product
+  // matches this row's Product - fetched, not typed, same treatment Jobed
+  // Qty gets above. Only rows tied to a Product that actually has design
+  // lines get this (and go read-only); a manually added/picked row with no
+  // match keeps its typed value editable.
+  function plBoxesForProduct(id, name) {
+    const key = sourceKey(id, name);
+    let total = 0;
+    let matched = false;
+    lines.forEach((line) => {
+      if (sourceKey(line.product_id, line.product_name) === key) {
+        matched = true;
+        total += chainOf(line).jobQuantity;
+      }
+    });
+    return matched ? total : null;
+  }
+
+  function plSyncBoxesFromLines() {
+    plItemsBody.querySelectorAll('.pl-item-row').forEach((tr) => {
+      const id = tr.querySelector('.js-pl-product-id').value;
+      const name = tr.querySelector('.js-pl-product-name').value;
+      if (!id && !name) return;
+      const total = plBoxesForProduct(id, name);
+      const boxesInput = tr.querySelector('.js-pl-boxes');
+      if (total === null) {
+        boxesInput.readOnly = false;
+        return;
+      }
+      boxesInput.value = total ? show(total) : '';
+      boxesInput.readOnly = true;
+      plRecalcRowQty(tr);
+    });
+    plRecalcTotals();
+  }
+
+  plRenumber();
+  plSyncBoxesFromLines();
+
+  // ---- the lines table: the only thing that actually posts --------------------------------------------------
+  const linesBody = document.getElementById('lines-body');
+  const linesEmpty = document.getElementById('lines-empty');
+
+  const HIDDEN_FIELDS = [
+    ['item_to_product_id[]', 'to_product_id'], ['item_to_product_name[]', 'to_product_name'],
+    ['item_product_id[]', 'product_id'], ['item_product_name[]', 'product_name'],
+    ['item_design_id[]', 'design_id'], ['item_design_name[]', 'design_name'],
+    ['item_conversion_value[]', 'conversion_value'], ['item_extra_percent[]', 'extra_percent'],
+    // Jobed Qty/Converted Qty/Extra Qty/Job Quantity are NOT posted - every
+    // one of them is derived, and the server derives them itself
+    // authoritatively on save (see JobWorkService._build_items).
+  ];
+
+  function renderLinesTable() {
+    linesBody.innerHTML = '';
+    lines.forEach((line, i) => {
+      const chain = chainOf(line);
+      const unit = unitOf(line);
+      const withUnit = (v) => show(v) + (unit ? ' ' + unit : '');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${i + 1}</td>
+        <td class="text-sm js-to-product"></td>
+        <td class="text-sm js-product"></td>
+        <td class="text-sm js-design"></td>
+        <td class="text-sm">${withUnit(chain.sourceQuantity)}</td>
+        <td class="text-sm">${show(line.conversion_value)}</td>
+        <td class="text-sm">${withUnit(chain.convertedQuantity)}</td>
+        <td class="text-sm">${show(line.extra_percent)}%</td>
+        <td class="text-sm">${withUnit(chain.extraQuantity)}</td>
+        <td class="text-sm"><strong>${withUnit(chain.jobQuantity)}</strong></td>
+        <td><button type="button" class="btn-link-danger js-remove-line" data-index="${i}">Remove</button></td>`;
+      tr.querySelector('.js-to-product').textContent = line.to_product_name || '—';
+      tr.querySelector('.js-product').textContent = line.product_name || '—';
+      tr.querySelector('.js-design').textContent = line.design_name || '—';
+      HIDDEN_FIELDS.forEach(([name, prop]) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        const value = line[prop];
+        input.value = (value === null || value === undefined) ? '' : value;
+        tr.querySelector('td').appendChild(input);
+      });
+      linesBody.appendChild(tr);
+    });
+    linesEmpty.hidden = lines.length > 0;
+  }
+
+  linesBody.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('js-remove-line')) return;
+    lines.splice(parseInt(e.target.dataset.index, 10), 1);
+    render();
+  });
+
+  function render() {
+    renderLinesTable();
+    renderDesignsForToProduct();
+    plSyncBoxesFromLines();
+  }
+
+  // ---- supplier dropdown prefill (both party cards, same wiring) --------------------------------------------------
+  document.querySelectorAll('.js-party-select').forEach((select) => {
+    select.addEventListener('change', (e) => {
+      const prefix = e.target.dataset.prefix;
+      const opt = e.target.selectedOptions[0];
+      const values = opt && opt.value
+        ? [opt.value, opt.dataset.name, opt.dataset.address, opt.dataset.pan, opt.dataset.gstin]
+        : ['', '', '', '', ''];
+      ['supplier_id', 'name', 'address', 'pan', 'gstin'].forEach((field, i) => {
+        document.getElementById(prefix + '_' + field).value = values[i] || '';
+      });
+    });
+  });
+
+  // ---- proforma invoice dropdown prefill (reloads with ?proforma_invoice_id=) --------------------------------------------------
+  document.getElementById('proforma_invoice_select').addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (!id) return;
+    window.location = '{{ url_for("job_works.new_job_work") }}?proforma_invoice_id=' + encodeURIComponent(id);
+  });
+
+  render();
+})();
+</script>
+
+{% endblock %}

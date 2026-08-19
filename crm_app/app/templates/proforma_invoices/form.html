@@ -157,7 +157,7 @@
             <th style="min-width:220px;">Product</th>
             <th>HSN code</th>
             <th>Boxes</th>
-            <th style="min-width:150px;">Pallet type</th>
+            <th style="min-width:150px;">Packing</th>
             <th>Plts</th>
             <th>Qty (SQM/LM)</th>
             <th>Unit</th>
@@ -279,28 +279,109 @@
     <div id="picker-add-new-panel" class="card" hidden style="margin-bottom:14px;">
       <div class="card-header"><h3>Add new product</h3></div>
       <form id="picker-add-new-form">
-        <div class="form-row">
-          <div class="field"><label>Product name<span class="required-mark">*</span></label><input type="text" name="product_name" required></div>
-          <div class="field"><label>HSN code</label><input type="text" name="hsn_code"></div>
+        <div class="field">
+          <label>Product name<span class="required-mark">*</span></label>
+          <input type="text" name="product_name" required>
+        </div>
+        <div class="field">
+          <label>Description</label>
+          <textarea name="description" rows="3"></textarea>
         </div>
         <div class="form-row">
-          <div class="field"><label>IGST %</label><input type="number" step="0.01" min="0" max="100" name="igst_percent"></div>
-        </div>
-        <div class="hint">SGST and CGST are calculated automatically as half of IGST.</div>
-        <div class="form-row">
-          <div class="field" style="max-width:120px;">
-            <label>Quantity unit</label>
-            <input type="text" name="quantity_unit" value="PCS">
+          <div class="field" style="max-width:280px;">
+            <label>HSN code</label>
+            <select name="hsn_code" id="picker-add-hsn">
+              <option value="">&mdash; none &mdash;</option>
+              {% for hsn in hsn_code_options %}
+              <option value="{{ hsn.name }}" data-gst-slab="{{ hsn.gst_slab }}">{{ hsn.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; HSN Code.</div>
           </div>
-          <div class="field"><label>Quantity (per box)</label><input type="text" name="quantity"></div>
+          <div class="field">
+            <label>Category</label>
+            <select name="category_id">
+              <option value="">— None (catalog root) —</option>
+              {% for category, depth in categories_tree %}
+              <option value="{{ category.id }}">{{ '　' * depth }}{{ '↳ ' if depth else '' }}{{ category.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
         </div>
         <div class="form-row">
-          <div class="field" style="max-width:120px;">
-            <label>Alt quantity unit</label>
-            <input type="text" name="alternate_quantity_unit" value="SQM">
-          </div>
-          <div class="field"><label>Alt quantity (per box)</label><input type="text" name="alternate_quantity"></div>
+          <div class="field"><label>IGST % (auto)</label><input type="number" step="0.01" min="0" max="100" name="igst_percent" id="picker-add-igst" readonly tabindex="-1"></div>
+          <div class="field"><label>SGST % (auto)</label><input type="number" id="picker-add-sgst" readonly tabindex="-1"></div>
+          <div class="field"><label>CGST % (auto)</label><input type="number" id="picker-add-cgst" readonly tabindex="-1"></div>
         </div>
+        <div class="hint">IGST is set automatically from the chosen HSN code's GST slab. SGST and CGST are calculated automatically as half of IGST.</div>
+
+        <div class="form-row">
+          <div class="field" style="max-width:160px;">
+            <label>Unit</label>
+            <select name="quantity_unit" id="picker-add-unit">
+              {% for unit in unit_options %}
+              <option value="{{ unit.name }}" {{ 'selected' if unit.name == 'PCS' }}>{{ unit.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit.</div>
+          </div>
+          <div class="field">
+            <label>Quantity Per Unit</label>
+            <input type="text" name="quantity">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field" style="max-width:160px;">
+            <label>Alt Qty Per Unit</label>
+            <select name="alternate_quantity_unit" id="picker-add-alt-unit">
+              {% for unit in unit_options %}
+              <option value="{{ unit.name }}" {{ 'selected' if unit.name == 'SQM' }}>{{ unit.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="hint">Managed under Administration &rarr; Miscellaneous &rarr; Unit. Prefills the Unit column on every document.</div>
+          </div>
+          <div class="field">
+            <label>Quantity Per Alt Qty Unit</label>
+            <input type="text" name="alternate_quantity" id="picker-add-alt-qty">
+            <div class="hint">Drives the Boxes × Alt Quantity auto-calc on quotations, proforma invoices and packing lists.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Packing Details</label>
+          <div class="table-wrap">
+            <table class="ledger" id="picker-add-pallet-table">
+              <thead>
+                <tr>
+                  <th style="min-width:160px;">Packing Type</th>
+                  <th style="max-width:120px;">Weight</th>
+                  <th style="max-width:140px;">Unit Per Packing</th>
+                  <th>Alt Qty per Packing</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="picker-add-pallet-body">
+                <tr>
+                  <td class="text-soft">Loose (built-in)</td>
+                  <td class="text-soft">—</td>
+                  <td class="text-soft">1</td>
+                  <td class="text-soft">Goods sold unpalletised — zero pallets</td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="picker-add-pallet-type-btn">+ Add Packing Type</button>
+          <div class="hint">Named pallet storage options for this product. The Alt qty per pallet is worked out automatically as Boxes per pallet × Alternate quantity per box.</div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Net Weight per Unit (KG)</label>
+            <input type="number" step="0.001" min="0" name="net_weight_kg">
+          </div>
+        </div>
+
         <div class="hint">Folders and designs can be added later from the product's page in the catalog.</div>
         <button type="submit" class="btn btn-primary btn-sm">Save &amp; select</button>
         <button type="button" class="btn btn-ghost btn-sm" id="picker-add-new-cancel">Cancel</button>
@@ -672,6 +753,8 @@
     if (!addNewPanel) return;
     addNewPanel.hidden = true;
     addNewForm.reset();
+    const palletBody = document.getElementById('picker-add-pallet-body');
+    if (palletBody) palletBody.querySelectorAll('.pallet-type-row').forEach((tr) => tr.remove());
   }
 
   function openPicker(row) {
@@ -689,6 +772,64 @@
   if (addNewToggle) {
     addNewToggle.addEventListener('click', () => { addNewPanel.hidden = !addNewPanel.hidden; });
     document.getElementById('picker-add-new-cancel').addEventListener('click', closeAddNewPanel);
+    // Picking an HSN code fills IGST % from that code's GST slab, same as
+    // the full product form; SGST/CGST are always half of IGST.
+    const addHsn = document.getElementById('picker-add-hsn');
+    const addIgst = document.getElementById('picker-add-igst');
+    const addSgst = document.getElementById('picker-add-sgst');
+    const addCgst = document.getElementById('picker-add-cgst');
+    if (addHsn) {
+      addHsn.addEventListener('change', () => {
+        const slab = addHsn.options[addHsn.selectedIndex].dataset.gstSlab;
+        if (slab !== undefined && slab !== '') {
+          addIgst.value = slab;
+          const half = Math.round(parseFloat(slab) * 50) / 100;
+          addSgst.value = half;
+          addCgst.value = half;
+        }
+      });
+    }
+
+    // ---- packing types list, same idiom as the full product form's
+    // pallet-types editor: Alt qty per pallet is display-only, recomputed
+    // live from Boxes per pallet x the Alt quantity (per box) typed above.
+    const addPalletBody = document.getElementById('picker-add-pallet-body');
+    const addAltQtyInput = document.getElementById('picker-add-alt-qty');
+    const addAltUnitInput = document.getElementById('picker-add-alt-unit');
+
+    function addPalletRowTemplate() {
+      const tr = document.createElement('tr');
+      tr.className = 'pallet-type-row';
+      tr.innerHTML = `
+        <td><input type="text" name="pallet_type_name[]" class="js-pallet-name" placeholder="e.g. pine pallet"></td>
+        <td><input type="number" step="0.01" min="0" name="pallet_type_weight[]" class="js-pallet-weight"></td>
+        <td><input type="number" step="0.01" min="0" name="pallet_type_boxes[]" class="js-pallet-boxes"></td>
+        <td class="js-pallet-alt text-sm text-soft">—</td>
+        <td><button type="button" class="btn-link-danger js-remove-pallet-type">Remove</button></td>`;
+      return tr;
+    }
+
+    function recalcAddPalletAltQty() {
+      const perBox = parseFloat(addAltQtyInput.value) || 0;
+      addPalletBody.querySelectorAll('.pallet-type-row').forEach((tr) => {
+        const boxes = parseFloat(tr.querySelector('.js-pallet-boxes').value) || 0;
+        tr.querySelector('.js-pallet-alt').textContent =
+          (boxes && perBox) ? (boxes * perBox).toFixed(2) + ' ' + addAltUnitInput.value : '—';
+      });
+    }
+
+    document.getElementById('picker-add-pallet-type-btn').addEventListener('click', () => {
+      addPalletBody.appendChild(addPalletRowTemplate());
+    });
+    addPalletBody.addEventListener('click', (e) => {
+      if (e.target.classList.contains('js-remove-pallet-type')) e.target.closest('tr').remove();
+    });
+    addPalletBody.addEventListener('input', (e) => {
+      if (e.target.classList.contains('js-pallet-boxes')) recalcAddPalletAltQty();
+    });
+    addAltQtyInput.addEventListener('input', recalcAddPalletAltQty);
+    addAltUnitInput.addEventListener('input', recalcAddPalletAltQty);
+
     addNewForm.addEventListener('submit', (e) => {
       e.preventDefault();
       const formData = new FormData(addNewForm);

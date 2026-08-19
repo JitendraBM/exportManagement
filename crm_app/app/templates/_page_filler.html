@@ -20,9 +20,10 @@
 </style>
 <script>
 (function () {
-  /* A4 portrait 297mm less the 6mm @page margins top and bottom. Sheets are
-     laid out at their print size on screen too, so one number serves both. */
-  var PAGE_MM = 285;
+  /* A4 portrait 297mm less the 8mm @page margins top and bottom (see each
+     print.html's @page rule). Sheets are laid out at their print size on
+     screen too, so one number serves both. */
+  var PAGE_MM = 281;
   var MIN_PX = 30;
 
   function mmToPx(mm) {

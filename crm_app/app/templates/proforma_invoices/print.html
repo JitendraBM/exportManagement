@@ -51,6 +51,23 @@
         </div>
       </details>
       <a href="{{ url_for('purchase_orders.new_purchase_order', proforma_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">＋ New purchase order</a>
+      {# Job work is raised against the invoice too, and an invoice's goods
+         can be sent out to be worked on more than once - so the same
+         list-plus-new pair the purchase orders get. #}
+      <details class="toolbar-menu">
+        <summary class="btn btn-ghost btn-sm">🛠️ Job works ({{ job_works | length }}) ▾</summary>
+        <div class="toolbar-menu-panel">
+          {% for jw in job_works %}
+          <a href="{{ url_for('job_works.view_job_work', job_work_id=jw.id) }}" class="toolbar-menu-item">
+            <span class="mono">{{ jw.job_work_number }}</span>
+            <span class="meta">{{ jw.manufacturer_name or '—' }} · {{ jw.job_work_date }}</span>
+          </a>
+          {% else %}
+          <div class="toolbar-menu-empty">No job work raised against this invoice yet.</div>
+          {% endfor %}
+        </div>
+      </details>
+      <a href="{{ url_for('job_works.new_job_work', proforma_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">＋ New job work</a>
       {% if purchase_invoices %}
       <details class="toolbar-menu">
         <summary class="btn btn-ghost btn-sm">📥 Purchase invoices ({{ purchase_invoices | length }}) ▾</summary>

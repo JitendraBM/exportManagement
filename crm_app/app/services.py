@@ -33,7 +33,8 @@ from app.models import (
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
-    PurchaseOrder, PurchaseOrderItem, PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
+    PurchaseOrder, PurchaseOrderItem, JobWork, JobWorkItem, JobWorkProduct,
+    PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
     DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
     ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_LUT,
@@ -45,7 +46,8 @@ from app.repositories import (
     TransporterRepositoryBase,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
-    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
+    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, JobWorkRepository,
+    PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
@@ -1660,7 +1662,8 @@ class ProductService:
     def __init__(self, category_repo: CategoryRepository, product_repo: ProductRepository,
                  folder_repo: ProductFolderRepository, design_repo: DesignRepository,
                  pallet_type_repo: ProductPalletTypeRepository,
-                 upload_folder: str, allowed_extensions: set):
+                 upload_folder: str, allowed_extensions: set,
+                 job_work_repo: Optional["JobWorkRepository"] = None):
         self.category_repo = category_repo
         self.product_repo = product_repo
         self.folder_repo = folder_repo
@@ -1668,6 +1671,7 @@ class ProductService:
         self.pallet_type_repo = pallet_type_repo
         self.upload_folder = upload_folder
         self.allowed_extensions = allowed_extensions
+        self.job_work_repo = job_work_repo
 
     # ---- categories (nestable folders at the catalog root) -------------------
     def list_categories(self, company_id: int) -> List[Category]:
@@ -1821,6 +1825,13 @@ class ProductService:
 
     def pallet_types_for_product(self, product_id: int) -> List[ProductPalletType]:
         return self.pallet_type_repo.list_for_product(product_id)
+
+    def total_job_quantity_for_product(self, product_id: int) -> float:
+        """Sum of Job Quantity across every job-work line that produced this
+        product, for the read-only total on the Products catalog page."""
+        if not self.job_work_repo:
+            return 0.0
+        return self.job_work_repo.sum_job_quantity_for_product(product_id)
 
     def pallet_types_by_product(self, company_id: int) -> dict:
         """product_id -> [ProductPalletType, ...] for the whole company in
@@ -2313,6 +2324,7 @@ _VERSIONED_TYPES = {
     "quotation": (Quotation, QuotationItem, "quotation_number"),
     "proforma_invoice": (ProformaInvoice, ProformaInvoiceItem, "invoice_number"),
     "purchase_order": (PurchaseOrder, PurchaseOrderItem, "po_number"),
+    "job_work": (JobWork, JobWorkItem, "job_work_number"),
     "purchase_invoice": (PurchaseInvoice, PurchaseInvoiceItem, "purchase_invoice_number"),
     "export_invoice": (ExportInvoice, ExportInvoiceItem, "export_invoice_number"),
     "packing_list": (PackingList, PackingListItem, "packing_list_number"),
@@ -3339,6 +3351,509 @@ class PurchaseOrderService:
             return None
         quotation = self.quotation_repo.get_by_id(invoice.quotation_id)
         return quotation.lead_id if quotation else None
+
+
+# ============================================================
+# JOB WORK SERVICE
+# ============================================================
+class JobWorkService:
+    """The JOB WORK document: a proforma invoice's goods handed on to be
+    worked on, normally as a size CONVERSION. Mirrors PurchaseOrderService
+    layer for layer, with the differences that follow from what job work
+    actually is:
+
+      * its lines are DESIGNS, not products, picked in the Job Manufacturer
+        card - "To Product" first (the WHOLE catalog; its own designs are
+        what the Design column offers) and "Product" second (the proforma
+        invoice's own products, kept only to look up each design's
+        source_quantity - see _invoice_quantities);
+      * it carries two parties, the FROM SELLER whose goods go out and the
+        JOB MANUFACTURER who does the work - both Suppliers;
+      * no money at all: Job Quantity is the document's one figure per
+        design, and it is entirely DERIVED (see JobWorkItem's own docstring
+        for the source_quantity -> conversion_value/extra_percent ->
+        job_quantity chain) - nothing here is typed in directly."""
+
+    def __init__(self, job_work_repo: JobWorkRepository, proforma_invoice_repo: ProformaInvoiceRepository,
+                 packing_list_repo: PackingListRepository, product_repo: ProductRepository,
+                 version_service: "DocumentVersionService",
+                 supplier_repo: Optional[SupplierRepositoryBase] = None,
+                 misc_list_service: Optional["MiscListService"] = None,
+                 company_repo: Optional[CompanyRepository] = None):
+        self.job_work_repo = job_work_repo
+        self.proforma_invoice_repo = proforma_invoice_repo
+        # An invoice sells by product; its designs live on a packing list.
+        self.packing_list_repo = packing_list_repo
+        self.product_repo = product_repo
+        self.version_service = version_service
+        # Validates that both parties - the From Seller and the Job
+        # Manufacturer, each a Supplier - belong to this company.
+        self.supplier_repo = supplier_repo
+        self.misc_list_service = misc_list_service
+        # Our own GSTIN, for the Products card's intra/inter-state tax split
+        # against the Job Manufacturer's GSTIN - same use PurchaseOrderService
+        # makes of it against the seller's.
+        self.company_repo = company_repo
+
+    # ---- reads --------------------------------------------------
+    def get(self, job_work_id: int, company_id: int) -> JobWork:
+        job_work = self.job_work_repo.get_by_id(job_work_id)
+        if not job_work or job_work.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's job work exists.
+            raise NotFoundError(f"Job work #{job_work_id} not found.")
+        return job_work
+
+    def list_all(self, company_id: int) -> List[JobWork]:
+        return self.job_work_repo.list_all(company_id)
+
+    def list_for_proforma(self, proforma_invoice_id: Optional[int], company_id: int) -> List[JobWork]:
+        """Every job work raised against this proforma invoice, newest first.
+        company_id is re-checked here because the caller passes an id taken
+        straight off an invoice."""
+        if not proforma_invoice_id:
+            return []
+        return [jw for jw in self.job_work_repo.list_for_proforma(proforma_invoice_id)
+                if jw.company_id == company_id]
+
+    def count_map_by_proforma(self, company_id: int) -> dict:
+        """proforma_invoice_id -> number of job works raised against it, for
+        the proforma invoice list page's Job work column."""
+        return self.job_work_repo.count_map_by_proforma(company_id)
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, job_work: JobWork, current_user: User):
+        if current_user.is_admin:
+            return
+        if job_work.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage job works you created yourself.")
+
+    # ---- number generation --------------------------------------------------
+    def _generate_number(self, company_id: int, job_work_date: str) -> str:
+        """JW{YYYYMMDD}{seq} where seq is that day's job work count + 1 for
+        this company, zero-padded to 3 digits (e.g. JW20260817001)."""
+        date_part = (job_work_date or "")[:10].replace("-", "")
+        prefix = f"JW{date_part}"
+        seq = self.job_work_repo.count_for_date_prefix(company_id, prefix) + 1
+        return f"{prefix}{seq:03d}"
+
+    # ---- the proforma invoice's own products (the "Product" picker) --------
+    def invoice_products(self, invoice: ProformaInvoice) -> list:
+        """The invoice's own product lines, as plain dicts:
+        {product_id, product_name, hsn_code} - the "Product" dropdown's
+        options (the SOURCE side, second in the Job Manufacturer card), kept
+        only so a design's source_quantity can be looked up against it. Not
+        the design picker - that comes from whichever "To Product" is chosen,
+        the WHOLE catalog's own designs, not the invoice's."""
+        seen: dict = {}
+        for item in invoice.items:
+            key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+            if key not in seen:
+                seen[key] = {
+                    "product_id": item.product_id, "product_name": item.product_name,
+                    "hsn_code": item.hsn_code,
+                }
+        return sorted(seen.values(), key=lambda r: (r["product_name"] or "").upper())
+
+    # ---- source_quantity lookup (fetched from the invoice, not typed) ------
+    def invoice_quantities(self, company_id: int, invoice: ProformaInvoice) -> tuple:
+        """Two lookups for source_quantity, built off the same pass over the
+        invoice's own packing lists (restricted to the products the invoice
+        actually carries), each summing quantity_boxes across however many
+        packing lists a (product, design) is split over:
+
+          by_product_and_design  (product_key, normalized design name) ->
+                                  {design_name, quantity_boxes, quantity_unit}
+                                  - exact, for when a "Product" has been
+                                  picked to disambiguate.
+          by_design_only         normalized design name -> same shape, but
+                                  ONLY for a design name that appears under
+                                  exactly ONE product on this invoice - the
+                                  fallback used when no "Product" is picked
+                                  (or it doesn't match). A design shared
+                                  across several products (a common case in
+                                  this catalog: the same finish sold in more
+                                  than one size, e.g. "CELESTE BLUE" on both
+                                  a 600X1200 and a 96X1200 product) is
+                                  deliberately left OUT of this map rather
+                                  than summed across them - summing would
+                                  silently manufacture a wrong total (960 +
+                                  200 read as 1160 for either one alone), so
+                                  an ambiguous design name simply falls
+                                  through to requiring the exact match.
+
+        Matched by design NAME rather than design_id in both cases - the
+        same design carries a different catalog id under the "To Product"
+        it's being converted to, since that is a different product's own
+        design list entirely."""
+        invoice_keys = {_product_key({"product_id": item.product_id, "product_name": item.product_name})
+                        for item in invoice.items}
+        packing_lists = [pl for pl in self.packing_list_repo.list_for_proforma(invoice.id)
+                         if pl.company_id == company_id]
+
+        by_product_and_design: dict = {}
+        for packing_list in packing_lists:
+            for item in packing_list.items:
+                key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+                if key not in invoice_keys:
+                    continue
+                design_name = (item.design_name or "").strip()
+                if not design_name:
+                    continue  # nothing to send out for job work without a named design
+                design_key = _normalize_name(design_name)
+
+                pd_entry = by_product_and_design.setdefault((key, design_key), {
+                    "design_name": design_name, "quantity_boxes": 0.0,
+                    "quantity_unit": item.quantity_unit or "PCS",
+                })
+                pd_entry["quantity_boxes"] += item.quantity_boxes or 0
+        for entry in by_product_and_design.values():
+            entry["quantity_boxes"] = round(entry["quantity_boxes"], 2)
+
+        # A design name's products on this invoice, so the fallback map can
+        # skip any design that isn't unique to one of them.
+        products_by_design: dict = {}
+        for product_key, design_key in by_product_and_design:
+            products_by_design.setdefault(design_key, set()).add(product_key)
+        by_design_only = {
+            design_key: by_product_and_design[(next(iter(product_keys)), design_key)]
+            for design_key, product_keys in products_by_design.items()
+            if len(product_keys) == 1
+        }
+        return by_product_and_design, by_design_only
+
+    # ---- prefill from an existing proforma invoice --------------------------------------------------
+    def build_prefill_from_proforma(self, invoice: ProformaInvoice) -> dict:
+        """Caller must have already loaded `invoice` via
+        ProformaInvoiceService.get(id, current_user.company_id), so cross-
+        company ownership is verified before we get here. The invoice's own
+        consignee carries over as the FROM SELLER's name and address, as a
+        starting point for whoever the goods are actually going out from -
+        the supplier dropdown is right there to correct it. The Job
+        Manufacturer is deliberately left blank: nothing on the invoice knows
+        who that is.
+
+        No lines are prefilled. Which designs go out for job work, and in what
+        quantity, is the whole point of the form - so the designs are offered
+        (via invoice_products + invoice_quantities) and added deliberately."""
+        return {
+            "proforma_invoice_id": invoice.id,
+            "job_work_date": invoice.invoice_date,
+            "seller_name": invoice.consignee_name,
+            "seller_address": invoice.consignee_address,
+            "payment_terms": invoice.payment_terms,
+            "remarks": invoice.remarks,
+            "currency_code": invoice.currency_code,
+        }
+
+    # ---- validation --------------------------------------------------
+    def _build_items(self, company_id: int, raw_items: list,
+                     invoice_quantities: dict, invoice_quantities_by_design: dict) -> List[JobWorkItem]:
+        """`invoice_quantities`/`invoice_quantities_by_design` are the two
+        maps invoice_quantities() builds for whichever proforma invoice this
+        job work is linked to ({} for both when there isn't one) - the
+        single source of truth for source_quantity, looked up fresh here
+        rather than trusted from the posted value, since it is meant to be
+        fetched, not typed."""
+        items = []
+        for i, raw in enumerate(raw_items, start=1):
+            design_name = (raw.get("design_name") or "").strip()
+            to_product_name_raw = (raw.get("to_product_name") or "").strip()
+            if not design_name and not to_product_name_raw:
+                continue
+            label = f"{to_product_name_raw} / {design_name}".strip(" /")
+
+            # The TARGET: what the job work converts the design into. Same
+            # trust boundary as PurchaseOrderService._build_items - only keep
+            # a product reference from this same company - and both the NAME
+            # and hsn_code are taken from the catalog rather than the form,
+            # so a crafted post can't label one product as another.
+            to_product_id = int(raw["to_product_id"]) if raw.get("to_product_id") else None
+            to_product_name = to_product_name_raw or None
+            hsn_code = None
+            unit = "PCS"
+            if to_product_id:
+                to_product = self.product_repo.get_by_id(to_product_id)
+                if not to_product or to_product.company_id != company_id:
+                    to_product_id, to_product_name = None, None
+                else:
+                    to_product_name = to_product.product_name
+                    hsn_code = to_product.hsn_code
+                    unit = to_product.quantity_unit or "PCS"  # counted, not measured by area
+            if not to_product_id:
+                raise ValidationError(f"Row {i} ('{label}'): To Product is compulsory.")
+
+            # The design: one of to_product's own catalog designs. Kept even
+            # when it no longer resolves (a design since deleted), same as
+            # every other design reference in this app.
+            design_id = int(raw["design_id"]) if raw.get("design_id") else None
+            if not design_name:
+                raise ValidationError(f"Row {i} ('{label}'): a design is compulsory.")
+
+            # The SOURCE: the invoice's own product, kept only to look up
+            # source_quantity below. Same trust boundary as to_product.
+            product_id = int(raw["product_id"]) if raw.get("product_id") else None
+            product_name = (raw.get("product_name") or "").strip()
+            if product_id:
+                product = self.product_repo.get_by_id(product_id)
+                if not product or product.company_id != company_id:
+                    product_id = None
+
+            try:
+                conversion_value = float(raw.get("conversion_value") or 0)
+                extra_percent = float(raw.get("extra_percent") or 0)
+            except ValueError:
+                raise ValidationError(f"Row {i} ('{label}'): conversion value and extra qty % must be numbers.")
+            if conversion_value <= 0:
+                raise ValidationError(f"Row {i} ('{label}'): conversion value is compulsory and must be greater than zero.")
+            if extra_percent < 0:
+                raise ValidationError(f"Row {i} ('{label}'): extra qty % can't be negative.")
+
+            # Fetched, not typed: this design's quantity off the invoice's
+            # own packing list. Tried first under the chosen TO PRODUCT
+            # (exact) - not "Product", the source-side field kept only for
+            # the Products card below - since Jobed Qty is now read straight
+            # off whichever design list the To Product itself offered
+            # (JobWorkService.invoice_quantities filtered client-side by the
+            # same key in designsForToProduct()). Empty whenever To Product
+            # isn't itself one of the invoice's own products, which falls
+            # back to whatever this design name adds up to across the WHOLE
+            # invoice (one invoice essentially never repeats the same design
+            # under two different products).
+            source_quantity = 0.0
+            design_key = _normalize_name(design_name)
+            entry = None
+            if to_product_id or to_product_name:
+                lookup_key = (_product_key({"product_id": to_product_id, "product_name": to_product_name}), design_key)
+                entry = invoice_quantities.get(lookup_key)
+            if not entry:
+                entry = invoice_quantities_by_design.get(design_key)
+            if entry:
+                source_quantity = entry["quantity_boxes"]
+
+            converted_quantity = round(source_quantity / conversion_value, 2)
+            extra_quantity = round(converted_quantity * extra_percent / 100, 2)
+            job_quantity = round(converted_quantity + extra_quantity, 2)
+            if job_quantity <= 0:
+                raise ValidationError(
+                    f"Row {i} ('{label}'): job quantity works out to zero - check that To Product's design "
+                    f"list picks up this design's quantity from the proforma invoice."
+                )
+
+            items.append(JobWorkItem(
+                id=None, job_work_id=None, sr_no=i,
+                product_id=product_id, product_name=product_name or to_product_name,
+                to_product_id=to_product_id, to_product_name=to_product_name,
+                hsn_code=hsn_code, design_id=design_id, design_name=design_name,
+                unit=unit, source_quantity=source_quantity,
+                conversion_value=conversion_value, extra_percent=extra_percent,
+                converted_quantity=converted_quantity, extra_quantity=extra_quantity,
+                job_quantity=job_quantity,
+            ))
+        if not items:
+            raise ValidationError(
+                "At least one design line is compulsory - pick a To Product, add a design "
+                "and use \"Add to Job Work\"."
+            )
+        return items
+
+    # ---- Products card (a copy of PurchaseOrderService's own Products lines) --------------------------------------------------
+    def _build_products(self, company_id: int, raw_products: list) -> List[JobWorkProduct]:
+        """One row per product on the Products card - a plain copy of
+        PurchaseOrderService._build_items, minus design tagging (not
+        relevant here; the design lines above already carry that). Optional:
+        an empty list is fine, this card is a costing reference, not a
+        requirement for saving a job work."""
+        products = []
+        for i, raw in enumerate(raw_products, start=1):
+            product_name = (raw.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            try:
+                quantity_value = float(raw.get("quantity_value") or 0)
+                price_inr = float(raw.get("price_inr") or 0)
+                quantity_boxes = float(raw["quantity_boxes"]) if raw.get("quantity_boxes") else None
+            except ValueError:
+                raise ValidationError(f"Products row {i}: quantity and price must be numbers.")
+            product_id = int(raw["product_id"]) if raw.get("product_id") else None
+            quantity_unit = "PCS"
+
+            if product_id:
+                product = self.product_repo.get_by_id(product_id)
+                if not product or product.company_id != company_id:
+                    product_id = None
+                else:
+                    quantity_unit = product.quantity_unit or "PCS"
+                    if quantity_boxes and product.alternate_quantity:
+                        try:
+                            quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                        except ValueError:
+                            pass
+            if quantity_value <= 0:
+                raise ValidationError(f"Products row {i} ('{product_name}'): quantity is compulsory and must be greater than zero.")
+            if price_inr < 0:
+                raise ValidationError(f"Products row {i} ('{product_name}'): price can't be negative.")
+
+            unit = (raw.get("unit") or "SQM").strip() or "SQM"
+            price_per = "BOX" if (raw.get("price_per") or "BOX").strip().upper() == "BOX" else unit
+            if price_per == "BOX":
+                if not quantity_boxes:
+                    raise ValidationError(f"Products row {i} ('{product_name}'): boxes is compulsory when the price is per box.")
+                total_inr = round(quantity_boxes * price_inr, 2)
+            else:
+                total_inr = round(quantity_value * price_inr, 2)
+
+            products.append(JobWorkProduct(
+                id=None, job_work_id=None, sr_no=i, product_id=product_id, product_name=product_name,
+                hsn_code=(raw.get("hsn_code") or "").strip() or None,
+                quantity_boxes=quantity_boxes, quantity_unit=quantity_unit, quantity_value=quantity_value, unit=unit,
+                price_inr=price_inr, price_per=price_per, total_inr=total_inr,
+            ))
+        return products
+
+    # ---- Products card tax derivation (mirrors PurchaseOrderService) --------------------------------------------------
+    def base_igst_percent(self, company_id: int, purchase_type: str, products: List[JobWorkProduct]) -> float:
+        if purchase_type == "exemption":
+            return EXEMPTION_IGST_PERCENT
+        rate = 0.0
+        for product in products:
+            if not product.product_id:
+                continue
+            catalog_product = self.product_repo.get_by_id(product.product_id)
+            if catalog_product and catalog_product.company_id == company_id and catalog_product.igst_percent:
+                rate = max(rate, float(catalog_product.igst_percent))
+        return rate
+
+    def _tax_percentages(self, company_id: int, purchase_type: str, manufacturer_gstin: Optional[str],
+                         products: List[JobWorkProduct]) -> tuple:
+        """(igst, cgst, sgst) for the Products card - same state-code split
+        PurchaseOrderService._tax_percentages runs, against the Job
+        Manufacturer's own GSTIN rather than a seller's."""
+        rate = self.base_igst_percent(company_id, purchase_type, products)
+        our_company = self.company_repo.get(company_id) if self.company_repo else None
+        if is_intra_state(our_company.gstin if our_company else None, manufacturer_gstin):
+            half = round(rate / 2, 4)
+            return 0.0, half, half
+        return rate, 0.0, 0.0
+
+    def _supplier_id(self, raw, company_id: int) -> Optional[int]:
+        """Only trust a supplier from this same company - same reasoning as
+        PurchaseOrderService._build_header applies to seller_supplier_id.
+        Used for both parties on the sheet, the From Seller and the Job
+        Manufacturer."""
+        supplier_id = int(raw) if raw else None
+        if supplier_id is None or self.supplier_repo is None:
+            return supplier_id
+        supplier = self.supplier_repo.get_by_id(supplier_id)
+        if not supplier or supplier.company_id != company_id:
+            return None
+        return supplier_id
+
+    def _resolve_invoice(self, current_user: User, fields: dict) -> Optional[ProformaInvoice]:
+        """Only trust a proforma invoice from this same company - called once
+        per save and the result threaded through both _build_items (for its
+        invoice_quantities) and _build_header (for proforma_invoice_id),
+        rather than resolving it twice."""
+        proforma_invoice_id = int(fields["proforma_invoice_id"]) if fields.get("proforma_invoice_id") else None
+        if proforma_invoice_id is None:
+            return None
+        invoice = self.proforma_invoice_repo.get_by_id(proforma_invoice_id)
+        if not invoice or invoice.company_id != current_user.company_id:
+            return None
+        return invoice
+
+    def _build_header(self, current_user: User, fields: dict, items: List[JobWorkItem],
+                       products: List[JobWorkProduct], invoice: Optional[ProformaInvoice]) -> JobWork:
+        seller_name = (fields.get("seller_name") or "").strip()
+        if not seller_name:
+            raise ValidationError("From Seller name is compulsory.")
+        manufacturer_name = (fields.get("manufacturer_name") or "").strip()
+        if not manufacturer_name:
+            raise ValidationError("Job Manufacturer name is compulsory.")
+        job_work_date = (fields.get("job_work_date") or "").strip() or date.today().isoformat()
+        proforma_invoice_id = invoice.id if invoice else None
+        manufacturer_gstin = (fields.get("manufacturer_gstin") or "").strip() or None
+
+        purchase_type = (fields.get("purchase_type") or "").strip() or DEFAULT_PURCHASE_TYPE
+        if purchase_type not in PURCHASE_TYPES:
+            raise ValidationError("'Purchase under' must be either a full tax purchase or an exemption.")
+        # Percentages are never taken from the form - the form only displays
+        # them, so a posted value would be a stale (or crafted) copy of what
+        # is derived here (same reasoning as PurchaseOrderService).
+        igst_percent, cgst_percent, sgst_percent = self._tax_percentages(
+            current_user.company_id, purchase_type, manufacturer_gstin, products
+        )
+
+        # Currency name + symbol are snapshotted off the Miscellaneous list so
+        # editing that list later can't rewrite an issued sheet, exactly as
+        # PurchaseOrderService does it.
+        currency_code, currency_symbol = (
+            self.misc_list_service.resolve_currency(current_user.company_id, fields.get("currency_code"))
+            if self.misc_list_service else ((fields.get("currency_code") or "").strip() or None, None)
+        )
+
+        return JobWork(
+            id=None, company_id=current_user.company_id, job_work_number="", job_work_date=job_work_date,
+            seller_name=seller_name, created_by=current_user.id,
+            proforma_invoice_id=proforma_invoice_id,
+            seller_supplier_id=self._supplier_id(
+                fields.get("seller_supplier_id"), current_user.company_id
+            ),
+            seller_address=(fields.get("seller_address") or "").strip() or None,
+            seller_pan=(fields.get("seller_pan") or "").strip() or None,
+            seller_gstin=(fields.get("seller_gstin") or "").strip() or None,
+            manufacturer_supplier_id=self._supplier_id(
+                fields.get("manufacturer_supplier_id"), current_user.company_id
+            ),
+            manufacturer_name=manufacturer_name,
+            manufacturer_address=(fields.get("manufacturer_address") or "").strip() or None,
+            manufacturer_pan=(fields.get("manufacturer_pan") or "").strip() or None,
+            manufacturer_gstin=manufacturer_gstin,
+            seller_ref_no=(fields.get("seller_ref_no") or "").strip() or None,
+            delivery_time=(fields.get("delivery_time") or "").strip() or None,
+            advance_percent=(fields.get("advance_percent") or "").strip() or None,
+            payment_terms=(fields.get("payment_terms") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+            currency_code=currency_code, currency_symbol=currency_symbol,
+            igst_percent=igst_percent, cgst_percent=cgst_percent, sgst_percent=sgst_percent,
+            purchase_type=purchase_type,
+            tax_as_actual=str(fields.get("tax_as_actual") or "").lower() in ("1", "true", "on", "yes"),
+            items=items, products=products,
+        )
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, raw_items: list, raw_products: Optional[list] = None) -> JobWork:
+        invoice = self._resolve_invoice(current_user, fields)
+        quantities, quantities_by_design = (
+            self.invoice_quantities(current_user.company_id, invoice) if invoice else ({}, {})
+        )
+        items = self._build_items(current_user.company_id, raw_items, quantities, quantities_by_design)
+        products = self._build_products(current_user.company_id, raw_products or [])
+        job_work = self._build_header(current_user, fields, items, products, invoice)
+        job_work.job_work_number = self._generate_number(current_user.company_id, job_work.job_work_date)
+        created = self.job_work_repo.create(job_work)
+        self.version_service.record("job_work", created, current_user.id)
+        return created
+
+    def update(self, current_user: User, job_work_id: int, fields: dict, raw_items: list,
+               raw_products: Optional[list] = None) -> JobWork:
+        existing = self.get(job_work_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        invoice = self._resolve_invoice(current_user, fields)
+        quantities, quantities_by_design = (
+            self.invoice_quantities(current_user.company_id, invoice) if invoice else ({}, {})
+        )
+        items = self._build_items(current_user.company_id, raw_items, quantities, quantities_by_design)
+        products = self._build_products(current_user.company_id, raw_products or [])
+        job_work = self._build_header(current_user, fields, items, products, invoice)
+        self.job_work_repo.update(job_work_id, job_work)
+        updated = self.get(job_work_id, current_user.company_id)
+        self.version_service.record("job_work", updated, current_user.id)
+        return updated
+
+    def delete(self, current_user: User, job_work_id: int) -> None:
+        existing = self.get(job_work_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self.job_work_repo.delete(job_work_id)
 
 
 # ============================================================

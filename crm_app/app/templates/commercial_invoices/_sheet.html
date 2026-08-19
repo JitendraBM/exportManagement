@@ -34,8 +34,8 @@
   <table class="ci-items">
     <colgroup>
       <col style="width:5%"><col style="width:34%"><col style="width:9%">
-      <col style="width:6%"><col style="width:6%"><col style="width:9%">
-      <col style="width:9%"><col style="width:5%"><col style="width:17%">
+      <col style="width:10%"><col style="width:8%"><col style="width:9%">
+      <col style="width:9%"><col style="width:16%">
     </colgroup>
     <thead>
       <tr>
@@ -46,7 +46,6 @@
         <td>Qty</td>
         <td>Alt. Qty</td>
         <td>Rate</td>
-        <td>Unit</td>
         <td>Total Amount</td>
       </tr>
     </thead>
@@ -62,18 +61,17 @@
           {%- if item.dimension_mm %}<br>{{ item.dimension_mm }}{% endif -%}
         </td>
         <td class="ci-c">{{ item.hsn_code or '' }}</td>
-        <td class="ci-cnum">{{ '{:,.0f}'.format(item.pallets) if item.pallets else '' }}</td>
+        <td class="ci-cnum">{% if item.pallets %}{{ '{:,.0f}'.format(item.pallets) }} <span class="ci-unit-sm">PLTS</span>{% endif %}</td>
         <td class="ci-cnum">{% if item.quantity_boxes %}{{ '{:,.0f}'.format(item.quantity_boxes) }} <span class="ci-unit-sm">{{ item.quantity_unit }}</span>{% endif %}</td>
         <td class="ci-cnum">{{ '{:,.2f}'.format(item.quantity_value) }} <span class="ci-unit-sm">{{ item.unit }}</span></td>
-        <td class="ci-cnum">{{ money(item.price_usd) }}</td>
-        <td class="ci-c">{{ item.unit }}</td>
+        <td class="ci-cnum">{{ money(item.price_usd) }} <span class="ci-unit-sm">/ {{ item.unit }}</span></td>
         <td class="ci-num">{{ money(item.total_usd) }}</td>
       </tr>
       {% endfor %}
       {# Blank filler, stretched by _page_filler.html so the sheet fills its A4
          page exactly however few goods lines there are. #}
       <tr class="js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
 
       {% set order_net_weight = (packing_list.total_net_weight if packing_list and packing_list.items else None) or invoice.total_net_weight_kg %}
@@ -151,7 +149,7 @@
         <td colspan="2" rowspan="{{ gross_rows }}" class="ci-mid">Gross Weight</td>
         <td rowspan="{{ gross_rows }}" class="ci-num ci-mid">{{ '{:,.2f}'.format(order_gross_weight) if order_gross_weight else '-' }}</td>
         {% endif %}
-        <td colspan="2" class="ci-r">{{ label }}</td>
+        <td class="ci-r">{{ label }}</td>
         <td class="ci-num">{% if signed %}{{ money_signed(value) }}{% else %}{{ money(value) }}{% endif %}</td>
       </tr>
       {% endfor %}

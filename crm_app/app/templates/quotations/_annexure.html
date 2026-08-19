@@ -6,7 +6,7 @@
    quotations/_sheet.html (it reuses the .qt-* styles that partial brings
    along). Keep QUOTE_ANNEX_START in sync with _sheet.html. #}
 {% import 'quotations/_goods_rows.html' as goods %}
-{% set QUOTE_ANNEX_START = 6 %}
+{% set QUOTE_ANNEX_START = 8 %}
 {% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
 {% if annex_items %}
 
@@ -33,8 +33,8 @@
 
     <table class="qt-items">
       <colgroup>
-        <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:7%">
-        <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:17%">
+        <col style="width:6%"><col style="width:31%"><col style="width:8%"><col style="width:10%"><col style="width:10%">
+        <col style="width:12%"><col style="width:10%"><col style="width:13%">
       </colgroup>
       <thead>
         <tr>
@@ -45,23 +45,21 @@
           <td>Qty</td>
           <td>Alt. Qty</td>
           <td>Rate</td>
-          <td>Unit</td>
           <td>Total Amount</td>
         </tr>
       </thead>
       <tbody>
         {{ goods.rows(annex_items, quotation.currency_prefix) }}
         <tr class="qt-filler js-page-filler">
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
         </tr>
         <tr>
           <td></td>
           <td class="qt-val qt-center">TOTAL</td>
           <td></td>
-          <td class="qt-val qt-center">{{ '{:,.2f}'.format(axns.pallets) if axns.pallets else '' }}</td>
+          <td class="qt-val qt-center">{{ '{:,.0f}'.format(axns.pallets) if axns.pallets else '' }}</td>
           <td class="qt-val qt-right">{{ '{:,.0f}'.format(axns.boxes) if axns.boxes else '' }}</td>
           <td class="qt-val qt-right">{{ '{:,.2f}'.format(axns.qty) }}</td>
-          <td></td>
           <td></td>
           <td class="qt-val qt-right">{{ ax_usd(axns.amount) }}</td>
         </tr>

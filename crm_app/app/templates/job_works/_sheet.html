@@ -1,0 +1,228 @@
+{# The job work A4 sheet, cut to the same pattern as the purchase order's own
+   sheet (templates/purchase_orders/_sheet.html) - our company prints as the
+   BUYER, and the two parties the document exists to name print side by side:
+   the FROM SELLER the goods come from and the JOB MANUFACTURER doing the
+   work. There is no money on a job work, so where the PO sheet carries a
+   price/total block this one carries the derived quantity chain instead -
+   see JobWorkItem's own docstring for the exact formula: JOBED QTY (fetched
+   off the proforma invoice) -> CONVERSION VALUE (typed) -> CONVERTED QTY ->
+   EXTRA QTY % (typed) -> EXTRA QTY -> JOB QUANTITY, the document's one final
+   figure per design.
+
+   Expects `job_work` and `company` in context; brings its own scoped .jw-*
+   styles along. #}
+<style>
+  .jw-sheet {
+    background: #fff;
+    color: #000;
+    width: 205mm;
+    margin: 24px auto 48px;
+    padding: 6mm 6mm 8mm;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+  .jw-title {
+    border: 1px solid #000;
+    text-align: center;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 3px 0;
+  }
+  .jw-sheet table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: -1px; }
+  .jw-sheet td { border: 1px solid #000; padding: 3px 5px; vertical-align: middle; text-align: left; word-wrap: break-word; }
+  .jw-label { font-size: 9px; }
+  .jw-val { font-weight: bold; }
+  /* Multi-line paragraph cells (addresses, remarks) read from the top like a
+     letterhead rather than being centred in a tall cell. */
+  .jw-left { text-align: left; vertical-align: top; }
+  .jw-mid { vertical-align: middle !important; }
+  .jw-bottom { vertical-align: bottom !important; }
+  .jw-right { text-align: right; }
+  .jw-center { text-align: center; }
+  .jw-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
+  .jw-side {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    text-align: center;
+    font-size: 9px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 2px 1px;
+    vertical-align: middle;
+  }
+  /* Buyer cell: text on the left, logo pinned to the right edge over the full
+     height of the cell - same treatment as the purchase order sheet. */
+  .jw-buyer-cell { position: relative; }
+  .jw-buyer-text { padding-right: 115px; }
+  .jw-buyer-logo { position: absolute; top: 1px; right: 6px; bottom: 1px; display: flex; align-items: center; }
+  .jw-buyer-logo img { max-height: 100%; width: auto; max-width: 110px; object-fit: contain; }
+  .jw-items thead td { text-align: left; vertical-align: middle; font-size: 9px; font-weight: bold; }
+  .jw-items tbody tr.jw-goods td, .jw-items tbody tr.jw-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
+  {# .jw-filler's height is measured in the browser - see templates/_page_filler.html #}
+  .jw-sign-cell { height: 92px; padding: 4px 6px; }
+  .jw-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
+  @media print {
+    .jw-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; }
+  }
+</style>
+
+{% macro num(v) -%}
+  {%- if v is not none and v != '' and v != 0 %}{{ '{:g}'.format(v | round(2)) }}{% else %}-{% endif -%}
+{%- endmacro %}
+
+<div class="jw-sheet js-page-sheet">
+  <div class="jw-title">JOB WORK</div>
+
+  <!-- Buyer (our company) / job work references -->
+  <table>
+    <colgroup>
+      <col style="width:20px"><col style="width:50%"><col style="width:15%"><col>
+    </colgroup>
+    <tr>
+      <td class="jw-side" rowspan="3">BUYER</td>
+      <td rowspan="3" class="jw-buyer-cell jw-left" style="border-bottom:none;">
+        <div class="jw-buyer-text"
+             {% if not (company and company.logo_path) %}style="padding-right:0;"{% endif %}>
+          <span class="jw-val">{{ company.company_name|upper if company else '' }}</span><br>
+          <span class="jw-val">{{ (company.address or '')|upper|replace('\n', '<br>')|safe if company else '' }}</span>
+          {% if company and company.pan_no %}<br><span class="jw-val">PAN NO : {{ company.pan_no }}</span>{% endif %}
+          {% if company and company.gstin %}<br><span class="jw-val">GSTIN : {{ company.gstin }}</span>{% endif %}
+        </div>
+        {% if company and company.logo_path %}
+        <div class="jw-buyer-logo">
+          <img src="{{ url_for('static', filename=company.logo_path) }}" alt="{{ company.company_name }} logo">
+        </div>
+        {% endif %}
+      </td>
+      <td class="jw-label jw-mid">JOB WORK NO</td>
+      <td class="jw-val jw-mid">{{ job_work.job_work_number }}</td>
+    </tr>
+    <tr>
+      <td class="jw-label">DATE</td>
+      <td class="jw-val">{{ job_work.job_work_date | long_date }}</td>
+    </tr>
+    <tr>
+      <td class="jw-label">PROFORMA INVOICE NO</td>
+      <td class="jw-val">{{ job_work.proforma_invoice_number or '-' }}</td>
+    </tr>
+  </table>
+
+  <!-- The two parties, side by side -->
+  <table>
+    <colgroup><col style="width:20px"><col style="width:50%"><col style="width:20px"><col></colgroup>
+    <tr>
+      <td class="jw-side">FROM SELLER</td>
+      <td class="jw-left">
+        <span class="jw-val">{{ (job_work.seller_name or '')|upper }}</span><br>
+        <span class="jw-val">{{ (job_work.seller_address or '')|upper|replace('\n', '<br>')|safe }}</span>
+        {% if job_work.seller_pan %}<br><span class="jw-val">PAN NO : {{ job_work.seller_pan|upper }}</span>{% endif %}
+        {% if job_work.seller_gstin %}<br><span class="jw-val">GSTIN : {{ job_work.seller_gstin|upper }}</span>{% endif %}
+      </td>
+      <td class="jw-side">JOB MANUFACTURER</td>
+      <td class="jw-left">
+        <span class="jw-val">{{ (job_work.manufacturer_name or '')|upper }}</span><br>
+        <span class="jw-val">{{ (job_work.manufacturer_address or '')|upper|replace('\n', '<br>')|safe }}</span>
+        {% if job_work.manufacturer_pan %}<br><span class="jw-val">PAN NO : {{ job_work.manufacturer_pan|upper }}</span>{% endif %}
+        {% if job_work.manufacturer_gstin %}<br><span class="jw-val">GSTIN : {{ job_work.manufacturer_gstin|upper }}</span>{% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- Terms -->
+  <table>
+    <colgroup><col style="width:18%"><col style="width:32%"><col style="width:18%"><col></colgroup>
+    <tr>
+      <td class="jw-label">SELLER REF NO</td>
+      <td class="jw-val">{{ job_work.seller_ref_no or '-' }}</td>
+      <td class="jw-label">DELIVERY TIME</td>
+      <td class="jw-val">{{ (job_work.delivery_time or '-')|upper }}</td>
+    </tr>
+    <tr>
+      <td class="jw-label">ADVANCE</td>
+      <td class="jw-val">{{ job_work.advance_percent or '-' }}</td>
+      <td class="jw-label">PAYMENT TERMS</td>
+      <td class="jw-val">{{ job_work.payment_terms or '-' }}</td>
+    </tr>
+    <tr>
+      <td class="jw-label jw-left">REMARKS :</td>
+      <td class="jw-val jw-left" colspan="3">{{ (job_work.remarks or '')|upper|replace('\n', '<br>')|safe }}</td>
+    </tr>
+  </table>
+
+  <!-- Designs sent out for job work -->
+  <table class="jw-items">
+    <colgroup>
+      <col style="width:4%"><col style="width:22%"><col style="width:14%">
+      <col style="width:10%"><col style="width:11%"><col style="width:11%">
+      <col style="width:9%"><col style="width:9%"><col style="width:10%">
+    </colgroup>
+    <thead>
+      <tr>
+        <td>SR<br>NO</td>
+        <td>DESCRIPTION OF GOODS</td>
+        <td>DESIGN</td>
+        <td>JOBED QTY</td>
+        <td>CONVERSION VALUE</td>
+        <td>CONVERTED QTY</td>
+        <td>EXTRA QTY %</td>
+        <td>EXTRA QTY</td>
+        <td>JOB QUANTITY</td>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in job_work.items %}
+      <tr class="jw-goods">
+        <td class="jw-center">{{ item.sr_no }}</td>
+        <td class="jw-bottom">{{ item.to_product_name or item.product_name }}</td>
+        <td class="jw-bottom">{{ item.design_name or '-' }}</td>
+        <td class="jw-right">{{ num(item.source_quantity) }} <span class="jw-unit-sm">{{ item.unit if item.source_quantity else '' }}</span></td>
+        <td class="jw-right">{{ num(item.conversion_value) }}</td>
+        <td class="jw-right">{{ num(item.converted_quantity) }} <span class="jw-unit-sm">{{ item.unit if item.converted_quantity else '' }}</span></td>
+        <td class="jw-right">{{ num(item.extra_percent) }}%</td>
+        <td class="jw-right">{{ num(item.extra_quantity) }} <span class="jw-unit-sm">{{ item.unit if item.extra_quantity else '' }}</span></td>
+        <td class="jw-right">{{ num(item.job_quantity) }} <span class="jw-unit-sm">{{ item.unit if item.job_quantity else '' }}</span></td>
+      </tr>
+      {% endfor %}
+      <tr class="jw-filler js-page-filler">
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+      <tr>
+        <td></td>
+        <td class="jw-val jw-center" colspan="2">TOTAL</td>
+        <td class="jw-val jw-right">{{ num(job_work.total_source_quantity) }}</td>
+        <td></td>
+        <td class="jw-val jw-right">{{ num(job_work.total_converted_quantity) }}</td>
+        <td></td>
+        <td class="jw-val jw-right">{{ num(job_work.total_extra_quantity) }}</td>
+        <td class="jw-val jw-right">{{ num(job_work.total_job_quantity) }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Signatures -->
+  <table>
+    <colgroup><col style="width:33%"><col style="width:33%"><col></colgroup>
+    <tr>
+      <td class="jw-sign-cell">
+        <div class="jw-sign-flex">
+          <div class="jw-val">ACCEPTED BY SELLER</div>
+          <div class="jw-val">SEAL &amp; SIGNATURE</div>
+        </div>
+      </td>
+      <td class="jw-sign-cell">
+        <div class="jw-sign-flex">
+          <div class="jw-val">ACCEPTED BY JOB MANUFACTURER</div>
+          <div class="jw-val">SEAL &amp; SIGNATURE</div>
+        </div>
+      </td>
+      <td class="jw-sign-cell">
+        <div class="jw-sign-flex">
+          <div class="jw-val">FOR&nbsp; {{ company.company_name|upper if company else '' }}</div>
+          <div class="jw-val">AUTHORISED SIGNATORY</div>
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>

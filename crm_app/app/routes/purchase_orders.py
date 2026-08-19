@@ -335,5 +335,6 @@ def view_purchase_order_version(purchase_order_id, version_number):
     company = container.company_service.get(g.user.company_id)
     return render_template(
         "purchase_orders/print.html", purchase_order=historical_purchase_order, company=company,
-        packing_lists=[], packing_details_items=[], historical_version=version,
+        packing_lists=[], purchase_invoices=[],
+        packing_details_items=[], historical_version=version,
     )

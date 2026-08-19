@@ -541,6 +541,52 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .modal-header h3 { margin: 0; }
 
 /* ---------------------------------------------------------------
+   Searchable dropdown (.combo)
+   A dropdown that carries its own search box inside the open panel -
+   what a native <select> cannot do. Used by the HSN code field on the
+   product form; the chosen value lives in a hidden input alongside, so
+   forms post exactly as they did with a plain <select>.
+   --------------------------------------------------------------- */
+.combo { position: relative; }
+.combo-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 11px; font-family: var(--font-body); font-size: .9rem; text-align: left;
+  color: var(--color-text); background: var(--color-surface);
+  border: 1px solid #c9c1ab; border-radius: var(--radius); cursor: pointer;
+}
+.combo-toggle:focus { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.combo-toggle > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-caret { color: var(--color-text-soft); font-size: .7rem; }
+.combo-panel {
+  position: absolute; z-index: 50; top: calc(100% + 4px); left: 0; right: 0; min-width: 260px;
+  background: var(--color-surface); border: 1px solid var(--color-line);
+  border-radius: var(--radius); box-shadow: var(--shadow-card); padding: 8px;
+}
+.combo-panel[hidden] { display: none; }
+.combo-search { margin-bottom: 6px; }
+.combo-list { max-height: 240px; overflow-y: auto; }
+.combo-option {
+  padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: .88rem; line-height: 1.3;
+}
+.combo-option[hidden] { display: none; }
+.combo-option:hover, .combo-option.is-active { background: var(--color-paper); }
+.combo-option.is-selected { font-weight: 600; }
+.combo-option-main { display: block; }
+.combo-option-note {
+  display: block; font-size: .74rem; color: var(--color-text-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-option-note:empty { display: none; }
+.combo-empty { padding: 10px 8px; font-size: .82rem; color: var(--color-text-soft); text-align: center; }
+.combo-empty[hidden] { display: none; }
+.combo-add {
+  display: block; width: 100%; margin-top: 6px; padding: 7px 8px;
+  font-family: var(--font-body); font-size: .82rem; text-align: left; cursor: pointer;
+  color: var(--color-accent); background: none; border: none; border-top: 1px solid var(--color-line);
+}
+.combo-add:hover { background: var(--color-paper); }
+
+/* ---------------------------------------------------------------
    Quotation print sheet
    --------------------------------------------------------------- */
 .quote-print-body { background: #d8d2c0; margin: 0; padding: 0; }

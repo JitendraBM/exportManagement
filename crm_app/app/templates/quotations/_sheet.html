@@ -10,7 +10,7 @@
    charges block, like the original Excel document. Keep QUOTE_ANNEX_START in
    sync with _annexure.html. #}
 {% import 'quotations/_goods_rows.html' as goods %}
-{% set QUOTE_ANNEX_START = 6 %}
+{% set QUOTE_ANNEX_START = 8 %}
 {% set main_items = quotation.items[:QUOTE_ANNEX_START] %}
 {% set annex_items = quotation.items[QUOTE_ANNEX_START:] %}
 {# The filler row's height is measured in the browser (templates/_page_filler.html)
@@ -64,6 +64,7 @@
   .qt-nest table.qt-nosplit td + td { border-left: none; }
   .qt-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
   .qt-items tbody tr.qt-goods td, .qt-items tbody tr.qt-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
+  .qt-items tbody tr.qt-goods td.qt-right, .qt-items tbody tr.qt-goods td.qt-center { white-space: nowrap; }
   .qt-charge-label { text-align: left; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .qt-sign-cell { height: 92px; padding: 4px 6px; }
   .qt-sign-flex { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
@@ -145,8 +146,8 @@
   <!-- Goods -->
   <table class="qt-items">
     <colgroup>
-      <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:7%">
-      <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:17%">
+      <col style="width:6%"><col style="width:31%"><col style="width:8%"><col style="width:10%"><col style="width:10%">
+      <col style="width:12%"><col style="width:10%"><col style="width:13%">
     </colgroup>
     <thead>
       <tr>
@@ -157,7 +158,6 @@
         <td>Qty</td>
         <td>Alt. Qty</td>
         <td>Rate</td>
-        <td>Unit</td>
         <td>Total Amount</td>
       </tr>
     </thead>
@@ -167,20 +167,19 @@
       <tr class="qt-goods">
         <td></td>
         <td class="qt-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
       <tr class="qt-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="qt-val qt-center">TOTAL</td>
         <td></td>
-        <td class="qt-val qt-center">{{ '{:,.2f}'.format(ns.pallets) if ns.pallets else '' }}</td>
+        <td class="qt-val qt-center">{{ '{:,.0f}'.format(ns.pallets) if ns.pallets else '' }}</td>
         <td class="qt-val qt-right">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="qt-val qt-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
-        <td></td>
         <td></td>
         <td class="qt-val qt-right">{{ usd(ns.amount) }}</td>
       </tr>

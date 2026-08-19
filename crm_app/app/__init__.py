@@ -22,7 +22,8 @@ from app.repositories import (
     SqlitePartyRepository, SqliteSupplierRepository, SqliteTransporterRepository,
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
-    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, PurchaseInvoiceRepository,
+    QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, JobWorkRepository,
+    PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository, ExportDesignsPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
@@ -30,7 +31,7 @@ from app.repositories import (
 from app.services import (
     AuthService, LeadService, PartyService, SupplierService, TransporterService, CurrencyService,
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
-    QuotationService, ProformaInvoiceService, PurchaseOrderService, PurchaseInvoiceService,
+    QuotationService, ProformaInvoiceService, PurchaseOrderService, JobWorkService, PurchaseInvoiceService,
     ExportInvoiceService, ExportPackingListService, PackingListService, BackupService,
     DocumentVersionService, ProformaFulfilmentService,
     InventoryService, PermitService, BookingDetailService, MiscListService,
@@ -66,6 +67,7 @@ class ServiceContainer:
         self.quotation_repo = QuotationRepository(db)
         self.proforma_invoice_repo = ProformaInvoiceRepository(db)
         self.purchase_order_repo = PurchaseOrderRepository(db)
+        self.job_work_repo = JobWorkRepository(db)
         self.purchase_invoice_repo = PurchaseInvoiceRepository(db)
         self.export_invoice_repo = ExportInvoiceRepository(db)
         self.export_packing_list_repo = ExportPackingListRepository(db, self.export_invoice_repo)
@@ -118,6 +120,7 @@ class ServiceContainer:
             self.category_repo, self.product_repo, self.product_folder_repo, self.design_repo,
             self.product_pallet_type_repo,
             Config.PRODUCT_UPLOAD_FOLDER, Config.ALLOWED_IMAGE_EXTENSIONS,
+            self.job_work_repo,
         )
         self.inventory_service = InventoryService(
             self.product_service, self.packing_list_repo, self.design_repo,
@@ -154,6 +157,13 @@ class ServiceContainer:
             self.purchase_order_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
             self.document_version_service, self.party_repos, self.supplier_repo, self.company_repo,
             self.proforma_fulfilment_service, self.misc_list_service, self.quotation_repo,
+        )
+        # Wired after PackingListService's own repo (job work reads a proforma
+        # invoice's designs off its packing list, since an invoice only sells
+        # by product - see JobWorkService.design_rows_for_proforma_invoice).
+        self.job_work_service = JobWorkService(
+            self.job_work_repo, self.proforma_invoice_repo, self.packing_list_repo, self.product_repo,
+            self.document_version_service, self.supplier_repo, self.misc_list_service, self.company_repo,
         )
         self.packing_list_service = PackingListService(
             self.packing_list_repo, self.product_repo, self.design_repo,
@@ -282,6 +292,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.quotations import quotations_bp
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
+    from app.routes.job_works import job_works_bp
     from app.routes.purchase_invoices import purchase_invoices_bp
     from app.routes.export_invoices import export_invoices_bp
     from app.routes.export_packing_lists import export_packing_lists_bp
@@ -319,6 +330,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(quotations_bp)
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)
+    app.register_blueprint(job_works_bp)
     app.register_blueprint(purchase_invoices_bp)
     app.register_blueprint(export_invoices_bp)
     app.register_blueprint(export_packing_lists_bp)
