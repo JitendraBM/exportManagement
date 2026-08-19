@@ -55,6 +55,7 @@
     <div><div class="text-sm text-soft">Alt quantity</div><div>{{ product.alternate_quantity or '—' }}{% if product.alternate_quantity %} {{ product.alternate_quantity_unit }}{% endif %}</div></div>
     <div><div class="text-sm text-soft">Net weight / box</div><div>{{ (product.net_weight_kg ~ ' KG') if product.net_weight_kg is not none else '—' }}</div></div>
     <div><div class="text-sm text-soft">Gross weight / box</div><div>{{ (product.gross_weight_kg ~ ' KG') if product.gross_weight_kg is not none else '—' }}</div></div>
+    <div><div class="text-sm text-soft">Job quantity (total)</div><div>{{ total_job_quantity | int if total_job_quantity == (total_job_quantity | int) else total_job_quantity }}</div></div>
   </div>
 </div>
 {% endif %}

@@ -210,9 +210,11 @@ def view_product(product_id, folder_id=None):
         abort(404)
     breadcrumb = container.product_service.breadcrumb(g.user.company_id, folder_id)
     pallet_types = container.product_service.pallet_types_for_product(product_id)
+    total_job_quantity = container.product_service.total_job_quantity_for_product(product_id)
     return render_template(
         "products/detail.html", product=product, category=category, current_folder=current_folder,
         breadcrumb=breadcrumb, subfolders=subfolders, designs=designs, pallet_types=pallet_types,
+        total_job_quantity=total_job_quantity,
     )
 
 

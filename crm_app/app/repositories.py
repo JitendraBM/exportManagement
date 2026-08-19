@@ -21,6 +21,7 @@ from app.models import (
     PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, MiscCountry, MiscUnit, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
+    JobWork, JobWorkItem, JobWorkProduct,
     PurchaseInvoice, PurchaseInvoiceItem,
     ExportInvoice, ExportInvoiceItem,
     ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
@@ -3096,6 +3097,189 @@ class PurchaseOrderRepository:
             (company_id, design_id),
         )
         return [dict(r) for r in rows]
+
+
+class JobWorkRepository:
+    """Persistence for the JOB WORK document: header + design lines, a
+    day-scoped number sequence, and a reference-only proforma_invoice_id -
+    mirrors PurchaseOrderRepository layer for layer."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def count_for_date_prefix(self, company_id: int, number_prefix: str) -> int:
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS cnt FROM job_works WHERE company_id = ? AND job_work_number LIKE ?",
+            (company_id, f"{number_prefix}%"),
+        )
+        return row["cnt"] if row else 0
+
+    # {totals} lets list queries add precomputed per-job-work quantity sums
+    # without repeating the join block (same trick as
+    # PurchaseOrderRepository._SELECT's {items_total}).
+    _SELECT = """
+        SELECT jw.*, u.full_name AS created_by_name, pi.invoice_number AS proforma_invoice_number{totals}
+        FROM job_works jw
+        JOIN users u ON u.id = jw.created_by
+        LEFT JOIN proforma_invoices pi ON pi.id = jw.proforma_invoice_id
+    """
+    _TOTALS = (", COALESCE((SELECT SUM(job_quantity) FROM job_work_items "
+               "WHERE job_work_id = jw.id), 0) AS items_job_quantity")
+
+    def get_by_id(self, job_work_id: int) -> Optional[JobWork]:
+        row = self.db.query_one(self._SELECT.format(totals="") + " WHERE jw.id = ?", (job_work_id,))
+        if not row:
+            return None
+        job_work = JobWork.from_row(row)
+        item_rows = self.db.query(
+            "SELECT * FROM job_work_items WHERE job_work_id = ? ORDER BY sr_no", (job_work_id,)
+        )
+        job_work.items = [JobWorkItem.from_row(r) for r in item_rows]
+        product_rows = self.db.query(
+            "SELECT * FROM job_work_products WHERE job_work_id = ? ORDER BY sr_no", (job_work_id,)
+        )
+        job_work.products = [JobWorkProduct.from_row(r) for r in product_rows]
+        return job_work
+
+    def list_all(self, company_id: int) -> List[JobWork]:
+        rows = self.db.query(
+            self._SELECT.format(totals=self._TOTALS) +
+            " WHERE jw.company_id = ? ORDER BY jw.job_work_date DESC, jw.id DESC",
+            (company_id,),
+        )
+        return [JobWork.from_row(r) for r in rows]
+
+    def list_for_proforma(self, proforma_invoice_id: int) -> List[JobWork]:
+        """Every job work raised against one proforma invoice, newest first -
+        an invoice's goods can be sent out for job work more than once."""
+        rows = self.db.query(
+            self._SELECT.format(totals=self._TOTALS) +
+            " WHERE jw.proforma_invoice_id = ? ORDER BY jw.id DESC",
+            (proforma_invoice_id,),
+        )
+        return [JobWork.from_row(r) for r in rows]
+
+    def sum_job_quantity_for_product(self, product_id: int) -> float:
+        """Total Job Quantity across every job-work line that produced this
+        product - either directly (to_product_id) or via a design that
+        belongs to it (design_id -> designs.product_id) - for the Products
+        catalog page's read-only total."""
+        row = self.db.query_one(
+            """SELECT COALESCE(SUM(jwi.job_quantity), 0) AS total
+               FROM job_work_items jwi
+               LEFT JOIN designs d ON d.id = jwi.design_id
+               WHERE jwi.to_product_id = ? OR d.product_id = ?""",
+            (product_id, product_id),
+        )
+        return row["total"] if row else 0.0
+
+    def count_map_by_proforma(self, company_id: int) -> dict:
+        """proforma_invoice_id -> how many job works point at it, so the
+        proforma list can show a Job work count without an N+1 query
+        (mirrors PurchaseOrderRepository.count_map_by_proforma)."""
+        rows = self.db.query(
+            "SELECT proforma_invoice_id, COUNT(*) AS cnt FROM job_works "
+            "WHERE company_id = ? AND proforma_invoice_id IS NOT NULL GROUP BY proforma_invoice_id",
+            (company_id,),
+        )
+        return {row["proforma_invoice_id"]: row["cnt"] for row in rows}
+
+    def create(self, job_work: JobWork) -> JobWork:
+        new_id = self.db.execute(
+            """INSERT INTO job_works
+               (company_id, job_work_number, job_work_date, proforma_invoice_id,
+                seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin,
+                manufacturer_supplier_id, manufacturer_name, manufacturer_address,
+                manufacturer_pan, manufacturer_gstin,
+                seller_ref_no, delivery_time, advance_percent, payment_terms, remarks,
+                currency_code, currency_symbol,
+                igst_percent, cgst_percent, sgst_percent, purchase_type, tax_as_actual,
+                created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_work.company_id, job_work.job_work_number, job_work.job_work_date,
+             job_work.proforma_invoice_id, job_work.seller_supplier_id, job_work.seller_name,
+             job_work.seller_address, job_work.seller_pan, job_work.seller_gstin,
+             job_work.manufacturer_supplier_id, job_work.manufacturer_name,
+             job_work.manufacturer_address, job_work.manufacturer_pan, job_work.manufacturer_gstin,
+             job_work.seller_ref_no, job_work.delivery_time, job_work.advance_percent,
+             job_work.payment_terms, job_work.remarks,
+             job_work.currency_code, job_work.currency_symbol,
+             job_work.igst_percent, job_work.cgst_percent, job_work.sgst_percent,
+             job_work.purchase_type, int(job_work.tax_as_actual),
+             job_work.created_by),
+        )
+        self._replace_items(new_id, job_work.items)
+        self._replace_products(new_id, job_work.products)
+        return self.get_by_id(new_id)
+
+    def update(self, job_work_id: int, job_work: JobWork) -> None:
+        self.db.execute(
+            """UPDATE job_works SET job_work_date = ?, proforma_invoice_id = ?,
+                                    seller_supplier_id = ?, seller_name = ?, seller_address = ?,
+                                    seller_pan = ?, seller_gstin = ?,
+                                    manufacturer_supplier_id = ?, manufacturer_name = ?,
+                                    manufacturer_address = ?, manufacturer_pan = ?, manufacturer_gstin = ?,
+                                    seller_ref_no = ?, delivery_time = ?, advance_percent = ?,
+                                    payment_terms = ?, remarks = ?,
+                                    currency_code = ?, currency_symbol = ?,
+                                    igst_percent = ?, cgst_percent = ?, sgst_percent = ?,
+                                    purchase_type = ?, tax_as_actual = ?,
+                                    updated_at = datetime('now')
+               WHERE id = ?""",
+            (job_work.job_work_date, job_work.proforma_invoice_id,
+             job_work.seller_supplier_id, job_work.seller_name, job_work.seller_address,
+             job_work.seller_pan, job_work.seller_gstin,
+             job_work.manufacturer_supplier_id, job_work.manufacturer_name,
+             job_work.manufacturer_address, job_work.manufacturer_pan, job_work.manufacturer_gstin,
+             job_work.seller_ref_no, job_work.delivery_time, job_work.advance_percent,
+             job_work.payment_terms, job_work.remarks,
+             job_work.currency_code, job_work.currency_symbol,
+             job_work.igst_percent, job_work.cgst_percent, job_work.sgst_percent,
+             job_work.purchase_type, int(job_work.tax_as_actual),
+             job_work_id),
+        )
+        self._replace_items(job_work_id, job_work.items)
+        self._replace_products(job_work_id, job_work.products)
+
+    def _replace_items(self, job_work_id: int, items: List[JobWorkItem]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM job_work_items WHERE job_work_id = ?", (job_work_id,))
+            for item in items:
+                conn.execute(
+                    """INSERT INTO job_work_items
+                       (job_work_id, sr_no, product_id, product_name, to_product_id, to_product_name,
+                        hsn_code, design_id, design_name, unit,
+                        source_quantity, conversion_value, extra_percent, converted_quantity,
+                        extra_quantity, job_quantity)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job_work_id, item.sr_no, item.product_id, item.product_name,
+                     item.to_product_id, item.to_product_name, item.hsn_code,
+                     item.design_id, item.design_name, item.unit,
+                     item.source_quantity, item.conversion_value, item.extra_percent,
+                     item.converted_quantity, item.extra_quantity, item.job_quantity),
+                )
+
+    def _replace_products(self, job_work_id: int, products: List[JobWorkProduct]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM job_work_products WHERE job_work_id = ?", (job_work_id,))
+            for product in products:
+                conn.execute(
+                    """INSERT INTO job_work_products
+                       (job_work_id, sr_no, product_id, product_name, hsn_code,
+                        quantity_boxes, quantity_unit, quantity_value, unit,
+                        price_inr, price_per, total_inr)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job_work_id, product.sr_no, product.product_id, product.product_name,
+                     product.hsn_code, product.quantity_boxes, product.quantity_unit,
+                     product.quantity_value, product.unit,
+                     product.price_inr, product.price_per, product.total_inr),
+                )
+
+    def delete(self, job_work_id: int) -> None:
+        """job_work_items/job_work_products cascade on the FK; nothing else
+        hangs off a job work, so there is no cascade helper to route
+        through."""
+        self.db.execute("DELETE FROM job_works WHERE id = ?", (job_work_id,))
 
 
 class PurchaseInvoiceRepository:

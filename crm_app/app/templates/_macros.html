@@ -278,3 +278,47 @@
   {% endif %}
 </div>
 {% endmacro %}
+
+{% macro searchable_select(field_id, name, chosen, options, label='', hint='', placeholder='— none —',
+                           search_placeholder='Search…', allow_blank=false, field_style='') %}
+{# A dropdown with its own search box INSIDE the open list - a native <select>
+   cannot hold one, and these lists (HSN codes, units) grow long enough that
+   scrolling for a value is the slow part.
+
+   The value lives in the hidden input, which keeps `name` and `field_id`, so
+   the form posts exactly what the plain <select> posted and any script that
+   read the old select by id (`.value`, a 'change' listener) still works -
+   initCombo fires 'change' on it when a value is picked.
+
+   `options` is a list of rows with a `.name`; a value no longer on the list is
+   listed too, so a stored one stays selectable rather than silently blanking.
+   Behaviour lives in static/js/combo.js. #}
+<div class="field" {% if field_style %}style="{{ field_style }}"{% endif %}>
+  {% if label %}<label for="{{ field_id }}-toggle">{{ label }}</label>{% endif %}
+  <div class="combo" id="{{ field_id }}-combo">
+    <input type="hidden" id="{{ field_id }}" name="{{ name }}" value="{{ chosen }}">
+    <button type="button" class="combo-toggle" id="{{ field_id }}-toggle"
+            aria-haspopup="listbox" aria-expanded="false" data-placeholder="{{ placeholder }}">
+      <span class="combo-toggle-label">{{ chosen if chosen else placeholder }}</span>
+      <span class="combo-caret" aria-hidden="true">&#9662;</span>
+    </button>
+    <div class="combo-panel" hidden>
+      <input type="text" class="combo-search" placeholder="{{ search_placeholder }}" autocomplete="off">
+      <div class="combo-list" role="listbox">
+        {% if allow_blank %}
+        <div class="combo-option" role="option" data-value="">{{ placeholder }}</div>
+        {% endif %}
+        {% if chosen and chosen not in options | map(attribute='name') | list %}
+        <div class="combo-option" role="option" data-value="{{ chosen }}">{{ chosen }}</div>
+        {% endif %}
+        {% for option in options %}
+        <div class="combo-option" role="option" data-value="{{ option.name }}">{{ option.name }}</div>
+        {% endfor %}
+      </div>
+      <div class="combo-empty" hidden>No match.</div>
+    </div>
+  </div>
+  {% if hint %}<div class="hint">{{ hint }}</div>{% endif %}
+  <script>initCombo('{{ field_id }}-combo');</script>
+</div>
+{% endmacro %}

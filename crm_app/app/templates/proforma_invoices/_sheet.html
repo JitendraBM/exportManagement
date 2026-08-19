@@ -75,6 +75,7 @@
   .pi-nest table.pi-nosplit td + td { border-left: none; }
   .pi-items thead td { text-align: center; vertical-align: middle; font-size: 9px; }
   .pi-items tbody tr.pi-goods td, .pi-items tbody tr.pi-filler td { border-top: none; border-bottom: none; padding: 2px 5px; }
+  .pi-items tbody tr.pi-goods td.pi-right, .pi-items tbody tr.pi-goods td.pi-center { white-space: nowrap; }
   .pi-items tbody tr.pi-group-gap td { height: 8px; padding: 0; }
   .pi-charge-label { text-align: left; font-weight: bold; font-size: 9px; vertical-align: middle; }
   .pi-sign-cell { height: 92px; padding: 4px 6px; }
@@ -172,8 +173,8 @@
   <!-- Goods -->
   <table class="pi-items">
     <colgroup>
-      <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:7%"><col style="width:9%">
-      <col style="width:11%"><col style="width:9%"><col style="width:6%"><col style="width:15%">
+      <col style="width:6%"><col style="width:29%"><col style="width:8%"><col style="width:9%"><col style="width:11%">
+      <col style="width:11%"><col style="width:9%"><col style="width:17%">
     </colgroup>
     <thead>
       <tr>
@@ -184,7 +185,6 @@
         <td>Qty</td>
         <td>Alt. Qty</td>
         <td>Rate</td>
-        <td>Unit</td>
         <td>Total Amount</td>
       </tr>
     </thead>
@@ -194,20 +194,19 @@
       <tr class="pi-goods">
         <td></td>
         <td class="pi-val">(CONTINUE TO ANNEXURE-----&gt;)</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       {% endif %}
       <tr class="pi-filler js-page-filler">
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>
       <tr>
         <td></td>
         <td class="pi-val pi-center">TOTAL</td>
         <td></td>
-        <td class="pi-val pi-center">{{ '{:,.2f}'.format(ns.pallets) if ns.pallets else '' }}</td>
+        <td class="pi-val pi-center">{{ '{:,.0f}'.format(ns.pallets) if ns.pallets else '' }}</td>
         <td class="pi-val pi-right">{{ '{:,.0f}'.format(ns.boxes) if ns.boxes else '' }}</td>
         <td class="pi-val pi-right">{{ '{:,.2f}'.format(ns.qty) }}</td>
-        <td></td>
         <td></td>
         <td class="pi-val pi-right">{{ usd(ns.amount) }}</td>
       </tr>

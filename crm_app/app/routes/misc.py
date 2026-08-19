@@ -313,6 +313,22 @@ def delete_hsn_code(entry_id):
     return redirect(url_for("misc.index", _anchor="section-hsn"))
 
 
+@misc_bp.route("/api/hsn-codes", methods=["POST"])
+@admin_required
+def api_quick_create_hsn_code():
+    """Lets an admin add an HSN code to the list straight from the HSN code
+    dropdown on the product form, so a missing code doesn't cost a detour to
+    Administration -> Miscellaneous and a half-typed product. Same shape as
+    the port of loading / currency quick-creates; everything else about the
+    list is still managed on the Miscellaneous page."""
+    try:
+        entry = current_app.container.misc_list_service.create_hsn_code(g.user, _fields(request.form))
+    except (ValidationError, PermissionDeniedError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"id": entry.id, "name": entry.name, "gst_slab": entry.gst_slab,
+                    "related_products": entry.related_products})
+
+
 @misc_bp.route("/countries", methods=["POST"])
 @admin_required
 def add_country():

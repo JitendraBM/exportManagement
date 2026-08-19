@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ job_work.job_work_number }} · Job Work</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page { size: A4 portrait; margin: 6mm; }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  {% if historical_version %}
+  <div class="quote-toolbar no-print" style="background:#fff4d6;">
+    <div>Viewing <strong>version {{ historical_version.version_number }}</strong> of {{ job_work.job_work_number }} - saved {{ historical_version.created_at | friendly_date }} by {{ historical_version.changed_by_name }}. Read-only.</div>
+    <a href="{{ url_for('job_works.view_job_work', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">View current version →</a>
+  </div>
+  {% endif %}
+
+  <div class="quote-toolbar no-print">
+    <a href="{{ url_for('job_works.list_job_works') }}" class="btn btn-ghost btn-sm">← All job works</a>
+    <div class="flex gap-8">
+      {% if not historical_version %}
+      {% if proforma_invoice %}
+      <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=proforma_invoice.id) }}" class="btn btn-ghost btn-sm">📄 View proforma invoice</a>
+      {% endif %}
+      <a href="{{ url_for('job_works.edit_job_work', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">Edit</a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('job_works.job_work_versions', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">Version history</a>
+      {% endif %}
+      <form method="POST" action="{{ url_for('job_works.delete_job_work', job_work_id=job_work.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this job work?');">
+        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+      </form>
+      {% endif %}
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Generate job work</button>
+    </div>
+  </div>
+
+  {# This page doesn't extend base.html, so it renders its own flashes -
+     creating/updating a job work redirects straight back here. #}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="sheet-note no-print flash-stack">
+      {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endwith %}
+
+  {% include 'job_works/_sheet.html' %}
+  {% include '_page_filler.html' %}
+
+  <script>
+    function confirmDeleteWithPassword(form, message) {
+      if (!window.confirm(message)) return false;
+      var password = window.prompt('Enter your password to confirm deletion:');
+      if (!password) return false;
+      var input = form.querySelector('input[name="delete_password"]');
+      if (!input) {
+        input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_password';
+        form.appendChild(input);
+      }
+      input.value = password;
+      return true;
+    }
+  </script>
+</body>
+</html>

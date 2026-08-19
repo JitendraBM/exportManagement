@@ -1315,6 +1315,128 @@ CREATE TABLE IF NOT EXISTS packing_list_items (
 );
 
 -- ============================================================
+-- JOB WORKS  (header + design lines, number generated as
+-- JW{YYYYMMDD}{seq-of-that-day} per company. The document that hands a
+-- proforma invoice's goods on to be worked on: a FROM SELLER (the supplier the
+-- goods come from) and a JOB MANUFACTURER (the supplier doing the job work),
+-- with one line per catalog DESIGN taken off that proforma invoice.
+-- proforma_invoice_id is a "generated from" reference only, same pattern as
+-- purchase_orders.proforma_invoice_id - every line is snapshotted here, so a
+-- later edit of the invoice can't rewrite an issued sheet. Each line carries
+-- the invoice's own quantity (quantity_boxes / quantity_value, both read-only
+-- on the form), the JOB QUANTITY sent out for job work, and the JOBED QTY the
+-- manufacturer reports back against it.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS job_works (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id               INTEGER NOT NULL REFERENCES tenants(id),
+    job_work_number          TEXT NOT NULL,
+    job_work_date            TEXT NOT NULL,
+    proforma_invoice_id      INTEGER REFERENCES proforma_invoices(id) ON DELETE SET NULL,  -- optional, "generated from" reference only
+    seller_supplier_id       INTEGER REFERENCES suppliers(id),   -- optional, the Supplier picked as "From Seller"
+    seller_name              TEXT NOT NULL,
+    seller_address           TEXT,
+    seller_pan               TEXT,
+    seller_gstin             TEXT,
+    manufacturer_supplier_id INTEGER REFERENCES suppliers(id),   -- optional, the Supplier picked as "Job Manufacturer"
+    manufacturer_name        TEXT,
+    manufacturer_address     TEXT,
+    manufacturer_pan         TEXT,
+    manufacturer_gstin       TEXT,
+    seller_ref_no            TEXT,
+    delivery_time            TEXT,          -- e.g. "20 DAY FROM JOB WORK DATE"
+    advance_percent          TEXT,
+    payment_terms            TEXT,
+    remarks                  TEXT,
+    -- Currency shown on the document, snapshotted (name + symbol) exactly as
+    -- purchase_orders does it.
+    currency_code            TEXT,
+    currency_symbol          TEXT,
+    -- Products card (a copy of purchase_orders' own tax block): the rate
+    -- comes from purchase_type, split into IGST or CGST+SGST by comparing
+    -- our own GSTIN against manufacturer_gstin - see
+    -- JobWorkService._tax_percentages. Purely a costing reference; nothing
+    -- here feeds the design lines above or the printed sheet.
+    igst_percent             REAL NOT NULL DEFAULT 0,
+    cgst_percent             REAL NOT NULL DEFAULT 0,
+    sgst_percent             REAL NOT NULL DEFAULT 0,
+    purchase_type            TEXT NOT NULL DEFAULT 'full_tax',
+    tax_as_actual            INTEGER NOT NULL DEFAULT 0,
+    created_by               INTEGER NOT NULL REFERENCES users(id),
+    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, job_work_number)
+);
+
+CREATE TABLE IF NOT EXISTS job_work_items (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_work_id        INTEGER NOT NULL REFERENCES job_works(id) ON DELETE CASCADE,
+    sr_no              INTEGER NOT NULL,
+    -- The SOURCE side: the proforma invoice's own product, kept only to look
+    -- up source_quantity below (the invoice's packing list, matched by this
+    -- product + the chosen design's name) - not shown as "the" product on the
+    -- printed sheet, which describes what actually goes out (to_product).
+    product_id         INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name       TEXT NOT NULL,
+    -- The TARGET side: what the job work converts the design INTO (job work
+    -- is normally a size change, e.g. GVT/PGVT 600X1200MM [2PCS=1.44SQM] cut
+    -- down to GVT/PGVT 200X1200MM [6PCS=1.44SQM]) - this is what the printed
+    -- sheet's DESCRIPTION OF GOODS actually names, and hsn_code snapshots
+    -- its HSN. Picked first, in the Job Manufacturer card; its own designs
+    -- are what the Design column below offers.
+    to_product_id      INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    to_product_name    TEXT,
+    hsn_code           TEXT,
+    design_id          INTEGER REFERENCES designs(id) ON DELETE SET NULL,   -- a design of to_product; optional, just for prefill/reference
+    design_name        TEXT,                            -- snapshot of the chosen design
+    -- What every quantity below is measured in: the product's QTY unit
+    -- (products.quantity_unit, e.g. BOX/PCS), taken from to_product - job
+    -- work is counted, not measured by area.
+    unit               TEXT NOT NULL DEFAULT 'PCS',
+    -- The whole line is a chain of derived figures, computed server-side on
+    -- every save and persisted (same treatment purchase_order_items.total_inr
+    -- gets) rather than recomputed live, so a printed sheet never disagrees
+    -- with what was actually saved:
+    --   source_quantity   fetched from the proforma invoice's packing list -
+    --                      this design's quantity_boxes under `product_id`,
+    --                      matched by design name (0 when no match is found)
+    --   conversion_value  typed; must be > 0
+    --   extra_percent     typed; may be 0
+    --   converted_quantity = source_quantity / conversion_value
+    --   extra_quantity     = converted_quantity * extra_percent / 100
+    --   job_quantity        = converted_quantity + extra_quantity  (the
+    --                         document's one final figure per design - no
+    --                         longer typed by hand)
+    source_quantity    REAL NOT NULL DEFAULT 0,
+    conversion_value   REAL NOT NULL DEFAULT 1,
+    extra_percent      REAL NOT NULL DEFAULT 0,
+    converted_quantity REAL NOT NULL DEFAULT 0,
+    extra_quantity     REAL NOT NULL DEFAULT 0,
+    job_quantity       REAL NOT NULL DEFAULT 0
+);
+
+-- Products card of a job work: a plain copy of purchase_order_items'
+-- shape, one row per product picked from the Job Manufacturer -> Product
+-- dropdown (the invoice's own products - NOT to_product, the design lines'
+-- conversion target). Purely a costing/reference line - never printed and
+-- never feeds job_work_items' derived chain.
+CREATE TABLE IF NOT EXISTS job_work_products (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_work_id        INTEGER NOT NULL REFERENCES job_works(id) ON DELETE CASCADE,
+    sr_no              INTEGER NOT NULL,
+    product_id         INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name       TEXT NOT NULL,
+    hsn_code           TEXT,
+    quantity_boxes     REAL,
+    quantity_unit      TEXT NOT NULL DEFAULT 'PCS',
+    quantity_value     REAL NOT NULL DEFAULT 0,
+    unit               TEXT NOT NULL DEFAULT 'SQM',
+    price_inr          REAL NOT NULL DEFAULT 0,
+    price_per          TEXT NOT NULL DEFAULT 'BOX',
+    total_inr          REAL NOT NULL DEFAULT 0
+);
+
+-- ============================================================
 -- DOCUMENT VERSIONS  (append-only history for quotations, proforma
 -- invoices and packing lists. Every create/update snapshots the full
 -- header+items state of the document as JSON under the next version
@@ -1396,4 +1518,11 @@ CREATE INDEX IF NOT EXISTS idx_packing_lists_company ON packing_lists(company_id
 CREATE INDEX IF NOT EXISTS idx_packing_lists_created_by ON packing_lists(created_by);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_date ON packing_lists(packing_list_date);
 CREATE INDEX IF NOT EXISTS idx_packing_list_items_list ON packing_list_items(packing_list_id);
+CREATE INDEX IF NOT EXISTS idx_job_works_company ON job_works(company_id);
+CREATE INDEX IF NOT EXISTS idx_job_works_created_by ON job_works(created_by);
+CREATE INDEX IF NOT EXISTS idx_job_works_date ON job_works(job_work_date);
+-- idx_job_works_proforma lives in database.py's _migrate: on a pre-v82 DB the
+-- proforma_invoice_id column doesn't exist yet when this script runs.
+CREATE INDEX IF NOT EXISTS idx_job_work_items_job_work ON job_work_items(job_work_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_products_job_work ON job_work_products(job_work_id);
 CREATE INDEX IF NOT EXISTS idx_document_versions_lookup ON document_versions(document_type, document_id);

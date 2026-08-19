@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Job Works{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Sales documents</div>
+    <h1>Job Works</h1>
+  </div>
+  <div class="topbar-actions">
+    <a href="{{ url_for('job_works.new_job_work') }}" class="btn btn-primary">+ New job work</a>
+  </div>
+</div>
+
+<div class="card">
+  {% if job_works %}
+  <div class="table-wrap">
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Job work no.</th>
+          <th>Date</th>
+          <th>From seller</th>
+          <th>Job manufacturer</th>
+          <th>From proforma</th>
+          <th>Created by</th>
+          <th class="num">Job quantity</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for jw in job_works %}
+        <tr>
+          <td class="mono">{{ jw.job_work_number }}</td>
+          <td class="text-sm">{{ jw.job_work_date }}</td>
+          <td><strong>{{ jw.seller_name }}</strong></td>
+          <td>{{ jw.manufacturer_name or '—' }}</td>
+          <td class="text-sm">{{ jw.proforma_invoice_number or '—' }}</td>
+          <td class="text-sm">{{ jw.created_by_name }}</td>
+          <td class="num">{{ '{:,.2f}'.format(jw.total_job_quantity) }}</td>
+          <td><a href="{{ url_for('job_works.view_job_work', job_work_id=jw.id) }}" class="text-sm">Open →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No job works yet. <a href="{{ url_for('job_works.new_job_work') }}">Create one →</a></div>
+  {% endif %}
+</div>
+
+{% endblock %}
