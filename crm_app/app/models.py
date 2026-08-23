@@ -1528,6 +1528,7 @@ class JobWork:
     products: List[JobWorkProduct] = field(default_factory=list)
     # Precomputed by list queries, which deliberately don't load items.
     computed_job_quantity: Optional[float] = None
+    computed_subtotal_inr: Optional[float] = None
 
     @staticmethod
     def from_row(row) -> "JobWork":
@@ -1567,6 +1568,7 @@ class JobWork:
             purchase_type=(row["purchase_type"] if "purchase_type" in row.keys() else None) or DEFAULT_PURCHASE_TYPE,
             tax_as_actual=bool(row["tax_as_actual"]) if "tax_as_actual" in row.keys() else False,
             computed_job_quantity=row["items_job_quantity"] if "items_job_quantity" in row.keys() else None,
+            computed_subtotal_inr=row["products_total"] if "products_total" in row.keys() else None,
         )
 
     @property
@@ -1599,6 +1601,34 @@ class JobWork:
     def total_extra_quantity(self) -> float:
         return sum(item.extra_quantity or 0 for item in self.items)
 
+    # ---- Products card money figures (mirrors PurchaseOrder's own, over
+    # self.products rather than self.items - a job work now prints/numbers as
+    # a purchase order, so the same "Start from" picker on a purchase
+    # invoice needs the same order-value figure to display). ----
+    @property
+    def subtotal_inr(self) -> float:
+        if self.computed_subtotal_inr is not None and not self.products:
+            return self.computed_subtotal_inr
+        return sum(product.total_inr for product in self.products)
+
+    @property
+    def igst_amount(self) -> float:
+        return round(self.subtotal_inr * (self.igst_percent or 0) / 100, 2)
+
+    @property
+    def cgst_amount(self) -> float:
+        return round(self.subtotal_inr * (self.cgst_percent or 0) / 100, 2)
+
+    @property
+    def sgst_amount(self) -> float:
+        return round(self.subtotal_inr * (self.sgst_percent or 0) / 100, 2)
+
+    @property
+    def order_value_inr(self) -> float:
+        if self.tax_as_actual:
+            return float(round(self.subtotal_inr))
+        return float(round(self.subtotal_inr + self.igst_amount + self.cgst_amount + self.sgst_amount))
+
 
 
 @dataclass
@@ -1625,6 +1655,11 @@ class PurchaseInvoiceItem:
     # joined display-only convenience, never written.
     purchase_order_id: Optional[int] = None
     source_po_number: Optional[str] = None  # populated by joined queries only
+    # Same idea as purchase_order_id/source_po_number above, for a line
+    # prefilled from a Job Work's Products card instead - mutually exclusive
+    # with purchase_order_id per row.
+    job_work_id: Optional[int] = None
+    source_jw_number: Optional[str] = None  # populated by joined queries only
 
     @staticmethod
     def from_row(row) -> "PurchaseInvoiceItem":
@@ -1643,6 +1678,8 @@ class PurchaseInvoiceItem:
             total_inr=row["total_inr"],
             purchase_order_id=row["purchase_order_id"] if "purchase_order_id" in row.keys() else None,
             source_po_number=row["source_po_number"] if "source_po_number" in row.keys() else None,
+            job_work_id=row["job_work_id"] if "job_work_id" in row.keys() else None,
+            source_jw_number=row["source_jw_number"] if "source_jw_number" in row.keys() else None,
         )
 
 
@@ -1668,6 +1705,12 @@ class PurchaseInvoice:
     seller_name: str
     created_by: int
     purchase_order_id: Optional[int] = None
+    # Same idea as purchase_order_id above, for a purchase invoice raised
+    # against a Job Work instead - a job work now prints/numbers as a
+    # purchase order (see job_works.job_work_number), so it can be the
+    # "generated from" reference here too. Mutually exclusive in practice
+    # with purchase_order_id, same as job_work_ids/purchase_order_ids below.
+    job_work_id: Optional[int] = None
     lead_id: Optional[int] = None
     seller_supplier_id: Optional[int] = None
     seller_address: Optional[str] = None
@@ -1694,6 +1737,7 @@ class PurchaseInvoice:
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
     purchase_order_number: Optional[str] = None  # populated by joined queries only
+    job_work_number: Optional[str] = None  # populated by joined queries only
     # Currency the document is written in, picked from the Administration ->
     # Miscellaneous list and snapshotted so a later edit of that list can't
     # rewrite an issued sheet. Display information only - no conversion.
@@ -1709,6 +1753,10 @@ class PurchaseInvoice:
     # purchase_invoice_purchase_order_links table.
     purchase_order_ids: List[int] = field(default_factory=list)
     purchase_orders: List["PurchaseOrder"] = field(default_factory=list)  # populated by the service, not from_row
+    # Same idea as purchase_order_ids/purchase_orders above, for the Job
+    # Works (of possibly several) this invoice was raised against instead.
+    job_work_ids: List[int] = field(default_factory=list)
+    job_works: List["JobWork"] = field(default_factory=list)  # populated by the service, not from_row
 
     @staticmethod
     def from_row(row) -> "PurchaseInvoice":
@@ -1719,6 +1767,7 @@ class PurchaseInvoice:
             invoice_number=row["invoice_number"],
             invoice_date=row["invoice_date"],
             purchase_order_id=row["purchase_order_id"],
+            job_work_id=row["job_work_id"] if "job_work_id" in row.keys() else None,
             lead_id=row["lead_id"],
             seller_supplier_id=row["seller_supplier_id"],
             seller_name=row["seller_name"],
@@ -1747,6 +1796,7 @@ class PurchaseInvoice:
             updated_at=row["updated_at"],
             created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
             purchase_order_number=row["purchase_order_number"] if "purchase_order_number" in row.keys() else None,
+            job_work_number=row["job_work_number"] if "job_work_number" in row.keys() else None,
             computed_subtotal_inr=row["items_total"] if "items_total" in row.keys() else None,
             currency_code=row["currency_code"] if "currency_code" in row.keys() else None,
             currency_symbol=row["currency_symbol"] if "currency_symbol" in row.keys() else None,

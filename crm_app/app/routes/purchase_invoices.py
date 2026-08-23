@@ -24,7 +24,7 @@ from app.utils import login_required, admin_required, verify_delete_password
 purchase_invoices_bp = Blueprint("purchase_invoices", __name__, url_prefix="/purchase-invoices")
 
 _HEADER_FIELDS = [
-    "invoice_number", "invoice_date", "purchase_order_id", "lead_id", "seller_supplier_id",
+    "invoice_number", "invoice_date", "purchase_order_id", "job_work_id", "lead_id", "seller_supplier_id",
     "seller_name", "seller_address", "seller_pan", "seller_gstin", "seller_ref_no",
     "transporter_name", "epcg_number", "epcg_date",
     "discount_amount", "insurance_other", "freight", "igst_amount", "cgst_amount", "sgst_amount", "round_off",
@@ -36,6 +36,7 @@ _HEADER_FIELDS = [
 def _extract_header(form) -> dict:
     fields = {key: form.get(key, "") for key in _HEADER_FIELDS}
     fields["purchase_order_ids"] = form.getlist("purchase_order_ids[]")
+    fields["job_work_ids"] = form.getlist("job_work_ids[]")
     return fields
 
 
@@ -49,6 +50,7 @@ def _extract_items(form) -> list:
     prices = form.getlist("item_price_inr[]")
     price_pers = form.getlist("item_price_per[]")
     source_po_ids = form.getlist("item_purchase_order_id[]")
+    source_jw_ids = form.getlist("item_job_work_id[]")
     items = []
     for i in range(len(product_names)):
         items.append({
@@ -61,6 +63,7 @@ def _extract_items(form) -> list:
             "price_inr": prices[i] if i < len(prices) else "",
             "price_per": price_pers[i] if i < len(price_pers) else "BOX",
             "purchase_order_id": source_po_ids[i] if i < len(source_po_ids) else "",
+            "job_work_id": source_jw_ids[i] if i < len(source_jw_ids) else "",
         })
     return items
 
@@ -100,21 +103,28 @@ def _product_meta_map(items) -> dict:
 
 
 def _form_context(exclude_purchase_invoice_id=None):
-    """(leads, purchase orders, suppliers) for the form's Start-from and
-    Seller pickers. `purchase_orders` is only the ones still outstanding
-    (see PurchaseInvoiceService.list_all_outstanding) - a PO already fully
-    invoiced drops off the "Start from" picker, all suppliers at once since
-    the template filters the checkbox list down to whichever supplier is
-    currently selected. `exclude_purchase_invoice_id` (set when editing) makes
-    that invoice's own items not count against its own PO(s), so re-opening
-    it for edit doesn't make its own already-picked PO(s) disappear."""
+    """(leads, purchase orders, job works, suppliers) for the form's
+    Start-from and Seller pickers. `purchase_orders`/`job_works` are only
+    the ones still outstanding (see PurchaseInvoiceService.
+    list_all_outstanding / list_all_outstanding_job_works) - a PO or job
+    work already fully invoiced drops off the "Start from" picker, all
+    suppliers at once since the template filters the checkbox list down to
+    whichever supplier is currently selected (a job work's own supplier for
+    this purpose is its From Seller, seller_supplier_id, the same party a
+    real purchase order's Seller is).
+    `exclude_purchase_invoice_id` (set when editing) makes that invoice's
+    own items not count against its own PO(s)/job work(s), so re-opening it
+    for edit doesn't make its own already-picked one(s) disappear."""
     container = current_app.container
     leads = container.lead_service.list_for_dashboard(g.user)
     purchase_orders = container.purchase_invoice_service.list_all_outstanding(
         g.user.company_id, exclude_purchase_invoice_id
     )
+    job_works = container.purchase_invoice_service.list_all_outstanding_job_works(
+        g.user.company_id, exclude_purchase_invoice_id
+    )
     suppliers = container.supplier_service.list_all(g.user.company_id)
-    return leads, purchase_orders, suppliers
+    return leads, purchase_orders, job_works, suppliers
 
 
 @purchase_invoices_bp.route("/")
@@ -139,37 +149,54 @@ def new_purchase_invoice():
             return redirect(url_for("purchase_invoices.view_purchase_invoice", purchase_invoice_id=purchase_invoice.id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, purchase_orders, suppliers = _form_context()
+            leads, purchase_orders, job_works, suppliers = _form_context()
             items = _extract_items(request.form)
             return render_template(
                 "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
-                suppliers=suppliers, form_data=request.form, form_items=items,
+                job_works=job_works, suppliers=suppliers, form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
                 product_meta_map=_product_meta_map(items),
                 selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
+                selected_job_work_ids=request.form.getlist("job_work_ids[]"),
             ), 400
 
-    leads, purchase_orders, suppliers = _form_context()
+    leads, purchase_orders, job_works, suppliers = _form_context()
     prefill = None
     form_items = None
-    # `purchase_order_ids` (comma-separated) is the multi-select "Start
-    # from" reload; a lone `purchase_order_id` is still accepted for the
-    # older single-PO entry point (purchase_orders/print.html's own "Create
-    # purchase invoice" button).
-    raw_ids = request.args.get("purchase_order_ids") or request.args.get("purchase_order_id") or ""
-    po_ids = [p for p in raw_ids.split(",") if p.strip()]
+    # `purchase_order_ids`/`job_work_ids` (each comma-separated) are the
+    # multi-select "Start from" reload; a lone `purchase_order_id` is still
+    # accepted for the older single-PO entry point (purchase_orders/
+    # print.html's own "Create purchase invoice" button). Both kinds can be
+    # picked together (a shipment covering a real PO and a job work from the
+    # same supplier at once) - their fields are merged, job work fields only
+    # filling in what the purchase order side left blank.
+    raw_po_ids = request.args.get("purchase_order_ids") or request.args.get("purchase_order_id") or ""
+    po_ids = [p for p in raw_po_ids.split(",") if p.strip()]
+    raw_jw_ids = request.args.get("job_work_ids") or ""
+    jw_ids = [p for p in raw_jw_ids.split(",") if p.strip()]
     lead_id = request.args.get("lead_id")
+    po_built = None
+    jw_built = None
     if po_ids:
         try:
             purchase_orders_selected = [
                 container.purchase_order_service.get(int(p), g.user.company_id) for p in po_ids
             ]
-            built = container.purchase_invoice_service.build_prefill_from_purchase_orders(purchase_orders_selected)
-            prefill = built["fields"]
-            prefill["invoice_date"] = date.today().isoformat()
-            form_items = built["items"]
+            po_built = container.purchase_invoice_service.build_prefill_from_purchase_orders(purchase_orders_selected)
         except (NotFoundError, ValueError):
             pass
+    if jw_ids:
+        try:
+            job_works_selected = [
+                container.job_work_service.get(int(p), g.user.company_id) for p in jw_ids
+            ]
+            jw_built = container.purchase_invoice_service.build_prefill_from_job_works(job_works_selected)
+        except (NotFoundError, ValueError):
+            pass
+    if po_built or jw_built:
+        prefill = {**(jw_built["fields"] if jw_built else {}), **(po_built["fields"] if po_built else {})}
+        prefill["invoice_date"] = date.today().isoformat()
+        form_items = (po_built["items"] if po_built else []) + (jw_built["items"] if jw_built else [])
     elif lead_id:
         try:
             lead = container.lead_service.get(int(lead_id), g.user.company_id)
@@ -178,10 +205,11 @@ def new_purchase_invoice():
             pass
     return render_template(
         "purchase_invoices/form.html", purchase_invoice=None, leads=leads, purchase_orders=purchase_orders,
-        suppliers=suppliers, form_data=prefill, form_items=form_items,
+        job_works=job_works, suppliers=suppliers, form_data=prefill, form_items=form_items,
         form_vehicle_numbers=None, today=date.today().isoformat(),
         product_meta_map=_product_meta_map(form_items),
         selected_purchase_order_ids=(prefill or {}).get("purchase_order_ids") or [],
+        selected_job_work_ids=(prefill or {}).get("job_work_ids") or [],
     )
 
 
@@ -194,6 +222,20 @@ def _linked_purchase_orders(container, purchase_invoice):
     for po_id in purchase_invoice.purchase_order_ids:
         try:
             result.append(container.purchase_order_service.get(po_id, g.user.company_id))
+        except NotFoundError:
+            pass
+    return result
+
+
+def _linked_job_works(container, purchase_invoice):
+    """Every job work this purchase invoice was raised against, in the order
+    they were selected - the job-work counterpart of _linked_purchase_orders
+    (a job work now prints/numbers as a purchase order, so it can be one of
+    an invoice's origins the same way)."""
+    result = []
+    for jw_id in purchase_invoice.job_work_ids:
+        try:
+            result.append(container.job_work_service.get(jw_id, g.user.company_id))
         except NotFoundError:
             pass
     return result
@@ -224,6 +266,7 @@ def view_purchase_invoice(purchase_invoice_id):
         abort(404)
     packing_lists = container.packing_list_service.list_for_purchase_invoice(purchase_invoice_id, g.user.company_id)
     purchase_orders = _linked_purchase_orders(container, purchase_invoice)
+    job_works = _linked_job_works(container, purchase_invoice)
     proforma_invoices = []
     for po in _related_proformas(purchase_orders):
         try:
@@ -233,7 +276,7 @@ def view_purchase_invoice(purchase_invoice_id):
         except NotFoundError:
             pass
     return render_template("purchase_invoices/view.html", purchase_invoice=purchase_invoice,
-                           packing_lists=packing_lists, purchase_orders=purchase_orders,
+                           packing_lists=packing_lists, purchase_orders=purchase_orders, job_works=job_works,
                            proforma_invoices=proforma_invoices)
 
 
@@ -259,23 +302,26 @@ def edit_purchase_invoice(purchase_invoice_id):
             return redirect(url_for("purchase_invoices.view_purchase_invoice", purchase_invoice_id=purchase_invoice_id))
         except (ValidationError, PermissionDeniedError) as e:
             flash(str(e), "error")
-            leads, purchase_orders, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
+            leads, purchase_orders, job_works, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
             items = _extract_items(request.form)
             return render_template(
                 "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
-                purchase_orders=purchase_orders, suppliers=suppliers, form_data=request.form, form_items=items,
+                purchase_orders=purchase_orders, job_works=job_works, suppliers=suppliers,
+                form_data=request.form, form_items=items,
                 form_vehicle_numbers=_extract_vehicle_numbers(request.form), today=date.today().isoformat(),
                 product_meta_map=_product_meta_map(items),
                 selected_purchase_order_ids=request.form.getlist("purchase_order_ids[]"),
+                selected_job_work_ids=request.form.getlist("job_work_ids[]"),
             ), 400
 
-    leads, purchase_orders, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
+    leads, purchase_orders, job_works, suppliers = _form_context(exclude_purchase_invoice_id=purchase_invoice_id)
     return render_template(
         "purchase_invoices/form.html", purchase_invoice=purchase_invoice, leads=leads,
-        purchase_orders=purchase_orders, suppliers=suppliers, form_data=None, form_items=None,
+        purchase_orders=purchase_orders, job_works=job_works, suppliers=suppliers, form_data=None, form_items=None,
         form_vehicle_numbers=None, today=date.today().isoformat(),
         product_meta_map=_product_meta_map(purchase_invoice.items),
         selected_purchase_order_ids=purchase_invoice.purchase_order_ids,
+        selected_job_work_ids=purchase_invoice.job_work_ids,
     )
 
 
@@ -335,5 +381,5 @@ def view_purchase_invoice_version(purchase_invoice_id, version_number):
         abort(404)
     return render_template(
         "purchase_invoices/view.html", purchase_invoice=historical_purchase_invoice, historical_version=version,
-        purchase_orders=[], proforma_invoices=[],
+        purchase_orders=[], job_works=[], proforma_invoices=[],
     )
