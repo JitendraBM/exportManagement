@@ -1801,6 +1801,18 @@ def _cascade_delete_purchase_order(conn, purchase_order_id: int) -> None:
     conn.execute("DELETE FROM purchase_orders WHERE id = ?", (purchase_order_id,))
 
 
+def _cascade_delete_job_work(conn, job_work_id: int) -> None:
+    """Mirrors _cascade_delete_purchase_order - a job work now prints/numbers
+    as a purchase order, so a purchase invoice raised against it is cascaded
+    the same way one raised against a real purchase order is."""
+    for row in conn.execute(
+        "SELECT id FROM purchase_invoices WHERE job_work_id = ?", (job_work_id,)
+    ).fetchall():
+        _cascade_delete_purchase_invoice(conn, row["id"])
+    conn.execute("DELETE FROM packing_lists WHERE job_work_id = ?", (job_work_id,))
+    conn.execute("DELETE FROM job_works WHERE id = ?", (job_work_id,))
+
+
 def _cascade_delete_proforma_invoice(conn, proforma_invoice_id: int) -> None:
     for row in conn.execute(
         "SELECT id FROM purchase_orders WHERE proforma_invoice_id = ?", (proforma_invoice_id,)
@@ -3124,7 +3136,9 @@ class JobWorkRepository:
         LEFT JOIN proforma_invoices pi ON pi.id = jw.proforma_invoice_id
     """
     _TOTALS = (", COALESCE((SELECT SUM(job_quantity) FROM job_work_items "
-               "WHERE job_work_id = jw.id), 0) AS items_job_quantity")
+               "WHERE job_work_id = jw.id), 0) AS items_job_quantity"
+               ", COALESCE((SELECT SUM(total_inr) FROM job_work_products "
+               "WHERE job_work_id = jw.id), 0) AS products_total")
 
     def get_by_id(self, job_work_id: int) -> Optional[JobWork]:
         row = self.db.query_one(self._SELECT.format(totals="") + " WHERE jw.id = ?", (job_work_id,))
@@ -3156,6 +3170,19 @@ class JobWorkRepository:
             self._SELECT.format(totals=self._TOTALS) +
             " WHERE jw.proforma_invoice_id = ? ORDER BY jw.id DESC",
             (proforma_invoice_id,),
+        )
+        return [JobWork.from_row(r) for r in rows]
+
+    def list_for_seller(self, seller_supplier_id: int) -> List[JobWork]:
+        """A job work's natural link to a supplier for invoicing purposes is
+        seller_supplier_id (the FROM SELLER, printed as this "purchase
+        order for job work"'s own Seller) - same role
+        PurchaseOrderRepository.list_for_seller's seller_supplier_id plays
+        for a real purchase order."""
+        rows = self.db.query(
+            self._SELECT.format(totals=self._TOTALS) +
+            " WHERE jw.seller_supplier_id = ? ORDER BY jw.job_work_date DESC, jw.id DESC",
+            (seller_supplier_id,),
         )
         return [JobWork.from_row(r) for r in rows]
 
@@ -3276,10 +3303,13 @@ class JobWorkRepository:
                 )
 
     def delete(self, job_work_id: int) -> None:
-        """job_work_items/job_work_products cascade on the FK; nothing else
-        hangs off a job work, so there is no cascade helper to route
-        through."""
-        self.db.execute("DELETE FROM job_works WHERE id = ?", (job_work_id,))
+        """job_work_items/job_work_products cascade on the FK; a purchase
+        invoice raised against this job work (job_works now print/number as
+        purchase orders, so they can be a purchase invoice's own origin) does
+        not, so it's cascade-deleted the same way PurchaseOrderRepository.
+        delete cascades to its own purchase invoices."""
+        with self.db.get_connection() as conn:
+            _cascade_delete_job_work(conn, job_work_id)
 
 
 class PurchaseInvoiceRepository:
@@ -3299,19 +3329,22 @@ class PurchaseInvoiceRepository:
         return row["cnt"] if row else 0
 
     _SELECT = """
-        SELECT pinv.*, u.full_name AS created_by_name, po.po_number AS purchase_order_number{items_total}
+        SELECT pinv.*, u.full_name AS created_by_name, po.po_number AS purchase_order_number,
+               jw.job_work_number AS job_work_number{items_total}
         FROM purchase_invoices pinv
         JOIN users u ON u.id = pinv.created_by
         LEFT JOIN purchase_orders po ON po.id = pinv.purchase_order_id
+        LEFT JOIN job_works jw ON jw.id = pinv.job_work_id
     """
     _ITEMS_TOTAL = (", COALESCE((SELECT SUM(total_inr) FROM purchase_invoice_items "
                     "WHERE purchase_invoice_id = pinv.id), 0) AS items_total")
 
     def _attach_children(self, purchase_invoice: PurchaseInvoice) -> PurchaseInvoice:
         item_rows = self.db.query(
-            """SELECT pinvi.*, po.po_number AS source_po_number
+            """SELECT pinvi.*, po.po_number AS source_po_number, jw.job_work_number AS source_jw_number
                FROM purchase_invoice_items pinvi
                LEFT JOIN purchase_orders po ON po.id = pinvi.purchase_order_id
+               LEFT JOIN job_works jw ON jw.id = pinvi.job_work_id
                WHERE pinvi.purchase_invoice_id = ? ORDER BY pinvi.sr_no""",
             (purchase_invoice.id,),
         )
@@ -3327,6 +3360,12 @@ class PurchaseInvoiceRepository:
             (purchase_invoice.id,),
         )
         purchase_invoice.purchase_order_ids = [r["purchase_order_id"] for r in link_rows]
+        jw_link_rows = self.db.query(
+            "SELECT job_work_id FROM purchase_invoice_job_work_links "
+            "WHERE purchase_invoice_id = ? ORDER BY id",
+            (purchase_invoice.id,),
+        )
+        purchase_invoice.job_work_ids = [r["job_work_id"] for r in jw_link_rows]
         return purchase_invoice
 
     def get_by_id(self, purchase_invoice_id: int) -> Optional[PurchaseInvoice]:
@@ -3360,6 +3399,38 @@ class PurchaseInvoiceRepository:
             (purchase_order_id,),
         )
         return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def list_for_job_work(self, job_work_id: int) -> List[PurchaseInvoice]:
+        """Every purchase invoice raised against this job work, newest first -
+        via the link table, mirrors list_for_purchase_order."""
+        rows = self.db.query(
+            self._SELECT.format(items_total=self._ITEMS_TOTAL) +
+            """ WHERE pinv.id IN (
+                    SELECT purchase_invoice_id FROM purchase_invoice_job_work_links
+                    WHERE job_work_id = ?
+                ) ORDER BY pinv.id DESC""",
+            (job_work_id,),
+        )
+        return [PurchaseInvoice.from_row(r) for r in rows]
+
+    def invoiced_totals_for_job_work(self, job_work_id: int,
+                                      exclude_purchase_invoice_id: Optional[int] = None) -> List[dict]:
+        """Mirrors invoiced_totals_for_purchase_order, keyed by an item's own
+        job_work_id instead - already-invoiced qty/boxes per product line for
+        this job work's Products card, summed across every purchase invoice
+        item tagged with it."""
+        sql = """SELECT product_id, product_name,
+                        COALESCE(SUM(quantity_boxes), 0) AS boxes,
+                        COALESCE(SUM(quantity_value), 0) AS quantity
+                 FROM purchase_invoice_items
+                 WHERE job_work_id = ?"""
+        params = [job_work_id]
+        if exclude_purchase_invoice_id:
+            sql += " AND purchase_invoice_id != ?"
+            params.append(exclude_purchase_invoice_id)
+        sql += " GROUP BY product_id, product_name"
+        rows = self.db.query(sql, tuple(params))
+        return [dict(r) for r in rows]
 
     def invoiced_totals_for_purchase_order(self, purchase_order_id: int,
                                             exclude_purchase_invoice_id: Optional[int] = None) -> List[dict]:
@@ -3409,14 +3480,15 @@ class PurchaseInvoiceRepository:
     def create(self, purchase_invoice: PurchaseInvoice) -> PurchaseInvoice:
         new_id = self.db.execute(
             """INSERT INTO purchase_invoices
-               (company_id, purchase_invoice_number, invoice_number, invoice_date, purchase_order_id, lead_id,
-                seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
+               (company_id, purchase_invoice_number, invoice_number, invoice_date, purchase_order_id, job_work_id,
+                lead_id, seller_supplier_id, seller_name, seller_address, seller_pan, seller_gstin, seller_ref_no,
                 port_of_loading, port_of_discharge, container_details, transporter_name, epcg_number, epcg_date,
                 supplier_pdf_path, discount_amount, insurance_other, freight, igst_amount, cgst_amount,
                 sgst_amount, round_off, purchase_type, remarks, currency_code, currency_symbol, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (purchase_invoice.company_id, purchase_invoice.purchase_invoice_number, purchase_invoice.invoice_number,
-             purchase_invoice.invoice_date, purchase_invoice.purchase_order_id, purchase_invoice.lead_id,
+             purchase_invoice.invoice_date, purchase_invoice.purchase_order_id, purchase_invoice.job_work_id,
+             purchase_invoice.lead_id,
              purchase_invoice.seller_supplier_id, purchase_invoice.seller_name, purchase_invoice.seller_address,
              purchase_invoice.seller_pan, purchase_invoice.seller_gstin, purchase_invoice.seller_ref_no,
              purchase_invoice.port_of_loading, purchase_invoice.port_of_discharge, purchase_invoice.container_details,
@@ -3430,11 +3502,13 @@ class PurchaseInvoiceRepository:
         self._replace_items(new_id, purchase_invoice.items)
         self._replace_vehicles(new_id, purchase_invoice.vehicle_numbers)
         self._replace_purchase_order_links(new_id, purchase_invoice.purchase_order_ids)
+        self._replace_job_work_links(new_id, purchase_invoice.job_work_ids)
         return self.get_by_id(new_id)
 
     def update(self, purchase_invoice_id: int, purchase_invoice: PurchaseInvoice) -> None:
         self.db.execute(
             """UPDATE purchase_invoices SET invoice_number = ?, invoice_date = ?, purchase_order_id = ?,
+                                             job_work_id = ?,
                                              lead_id = ?, seller_supplier_id = ?, seller_name = ?,
                                              seller_address = ?, seller_pan = ?, seller_gstin = ?, seller_ref_no = ?,
                                              port_of_loading = ?, port_of_discharge = ?, container_details = ?,
@@ -3445,6 +3519,7 @@ class PurchaseInvoiceRepository:
                                              currency_symbol = ?, updated_at = datetime('now')
                WHERE id = ?""",
             (purchase_invoice.invoice_number, purchase_invoice.invoice_date, purchase_invoice.purchase_order_id,
+             purchase_invoice.job_work_id,
              purchase_invoice.lead_id, purchase_invoice.seller_supplier_id, purchase_invoice.seller_name,
              purchase_invoice.seller_address, purchase_invoice.seller_pan, purchase_invoice.seller_gstin,
              purchase_invoice.seller_ref_no, purchase_invoice.port_of_loading, purchase_invoice.port_of_discharge,
@@ -3458,6 +3533,7 @@ class PurchaseInvoiceRepository:
         self._replace_items(purchase_invoice_id, purchase_invoice.items)
         self._replace_vehicles(purchase_invoice_id, purchase_invoice.vehicle_numbers)
         self._replace_purchase_order_links(purchase_invoice_id, purchase_invoice.purchase_order_ids)
+        self._replace_job_work_links(purchase_invoice_id, purchase_invoice.job_work_ids)
 
     def _replace_items(self, purchase_invoice_id: int, items: List[PurchaseInvoiceItem]) -> None:
         with self.db.get_connection() as conn:
@@ -3466,11 +3542,12 @@ class PurchaseInvoiceRepository:
                 conn.execute(
                     """INSERT INTO purchase_invoice_items
                        (purchase_invoice_id, sr_no, product_id, product_name, hsn_code,
-                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr, purchase_order_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        quantity_boxes, quantity_value, unit, price_inr, price_per, total_inr, purchase_order_id,
+                        job_work_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (purchase_invoice_id, item.sr_no, item.product_id, item.product_name, item.hsn_code,
                      item.quantity_boxes, item.quantity_value, item.unit, item.price_inr,
-                     item.price_per, item.total_inr, item.purchase_order_id),
+                     item.price_per, item.total_inr, item.purchase_order_id, item.job_work_id),
                 )
 
     def _replace_purchase_order_links(self, purchase_invoice_id: int, purchase_order_ids: List[int]) -> None:
@@ -3484,6 +3561,19 @@ class PurchaseInvoiceRepository:
                     "INSERT INTO purchase_invoice_purchase_order_links (purchase_invoice_id, purchase_order_id) "
                     "VALUES (?, ?)",
                     (purchase_invoice_id, purchase_order_id),
+                )
+
+    def _replace_job_work_links(self, purchase_invoice_id: int, job_work_ids: List[int]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM purchase_invoice_job_work_links WHERE purchase_invoice_id = ?",
+                (purchase_invoice_id,),
+            )
+            for job_work_id in job_work_ids:
+                conn.execute(
+                    "INSERT INTO purchase_invoice_job_work_links (purchase_invoice_id, job_work_id) "
+                    "VALUES (?, ?)",
+                    (purchase_invoice_id, job_work_id),
                 )
 
     def _replace_vehicles(self, purchase_invoice_id: int, vehicle_numbers: List[str]) -> None:
@@ -3747,14 +3837,18 @@ class PackingListRepository:
                    ORDER BY i.design_name"""
         return [dict(r) for r in self.db.query(sql, tuple(params))]
 
-    # ---- inventory (designs bought = placed on a purchase order's packing list) ----
+    # ---- inventory (designs bought = placed on a purchase order's, or a job
+    # work's, packing list) ----
     # A packing list carrying a purchase_order_id is a PO's packing list: the
-    # goods we've bought in. Summed per design, that's everything purchased;
-    # sales (yet to be modelled) will subtract from the same totals later.
+    # goods we've bought in. A job work is now treated the same way (it prints
+    # as a purchase order, see JobWorkService), so its own packing list
+    # (job_work_id set instead) counts toward stock the same way. Summed per
+    # design, that's everything purchased; sales (yet to be modelled) will
+    # subtract from the same totals later.
     def bought_totals_by_design(self, company_id: int) -> dict:
         """design_id -> {boxes, pcs, quantity} bought across every purchase
-        order's packing list. Rows with no design_id (hand-typed lines) are
-        skipped - stock is only tracked for real catalog designs."""
+        order's or job work's packing list. Rows with no design_id (hand-typed
+        lines) are skipped - stock is only tracked for real catalog designs."""
         rows = self.db.query(
             """SELECT i.design_id AS design_id,
                       COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
@@ -3766,7 +3860,8 @@ class PackingListRepository:
                JOIN packing_list_items i ON i.packing_list_id = pl.id
                JOIN designs d ON d.id = i.design_id
                JOIN products p ON p.id = d.product_id
-               WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+               WHERE pl.company_id = ?
+                 AND (pl.purchase_order_id IS NOT NULL OR pl.job_work_id IS NOT NULL)
                  AND i.design_id IS NOT NULL
                GROUP BY i.design_id""",
             (company_id,),

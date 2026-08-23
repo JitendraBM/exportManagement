@@ -33,6 +33,21 @@
       </div>
     </details>
     {% endif %}
+    {% if job_works | length == 1 %}
+    <a href="{{ url_for('job_works.view_job_work', job_work_id=job_works[0].id) }}" class="btn btn-ghost btn-sm">View job work</a>
+    {% elif job_works %}
+    <details class="toolbar-menu">
+      <summary class="btn btn-ghost btn-sm">Job works ({{ job_works | length }}) ▾</summary>
+      <div class="toolbar-menu-panel">
+        {% for jw in job_works %}
+        <a href="{{ url_for('job_works.view_job_work', job_work_id=jw.id) }}" class="toolbar-menu-item">
+          <span class="mono">{{ jw.job_work_number }}</span>
+          <span class="meta">{{ jw.manufacturer_name }} · {{ jw.job_work_date }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
     {% if proforma_invoices | length == 1 %}
     <a href="{{ url_for('proforma_invoices.view_proforma_invoice', proforma_invoice_id=proforma_invoices[0].id) }}" class="btn btn-ghost btn-sm">View proforma invoice</a>
     {% elif proforma_invoices %}
@@ -105,7 +120,7 @@
     <table class="ledger">
       <thead>
         <tr>
-          <th>Sr</th><th>Product</th>{% if purchase_orders | length > 1 %}<th>Source PO</th>{% endif %}<th>HSN code</th><th>Boxes</th><th>Qty</th><th>Unit</th>
+          <th>Sr</th><th>Product</th>{% if purchase_orders | length > 1 %}<th>Source PO</th>{% endif %}{% if job_works | length > 1 %}<th>Source job work</th>{% endif %}<th>HSN code</th><th>Boxes</th><th>Qty</th><th>Unit</th>
           <th>Price ({{ purchase_invoice.currency_name }})</th><th>Per</th><th class="num">Total ({{ purchase_invoice.currency_name }})</th>
         </tr>
       </thead>
@@ -115,6 +130,7 @@
           <td>{{ item.sr_no }}</td>
           <td>{{ item.product_name }}</td>
           {% if purchase_orders | length > 1 %}<td class="text-sm text-soft">{{ item.source_po_number or '—' }}</td>{% endif %}
+          {% if job_works | length > 1 %}<td class="text-sm text-soft">{{ item.source_jw_number or '—' }}</td>{% endif %}
           <td>{{ item.hsn_code or '—' }}</td>
           <td>{{ item.quantity_boxes or '—' }}</td>
           <td>{{ item.quantity_value }}</td>

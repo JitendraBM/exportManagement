@@ -3380,7 +3380,8 @@ class JobWorkService:
                  version_service: "DocumentVersionService",
                  supplier_repo: Optional[SupplierRepositoryBase] = None,
                  misc_list_service: Optional["MiscListService"] = None,
-                 company_repo: Optional[CompanyRepository] = None):
+                 company_repo: Optional[CompanyRepository] = None,
+                 purchase_order_repo: Optional[PurchaseOrderRepository] = None):
         self.job_work_repo = job_work_repo
         self.proforma_invoice_repo = proforma_invoice_repo
         # An invoice sells by product; its designs live on a packing list.
@@ -3395,6 +3396,10 @@ class JobWorkService:
         # against the Job Manufacturer's GSTIN - same use PurchaseOrderService
         # makes of it against the seller's.
         self.company_repo = company_repo
+        # A job work now prints and numbers as a purchase order (see
+        # _generate_number) - optional so a caller that never wires it just
+        # falls back to counting only against other job works.
+        self.purchase_order_repo = purchase_order_repo
 
     # ---- reads --------------------------------------------------
     def get(self, job_work_id: int, company_id: int) -> JobWork:
@@ -3430,11 +3435,18 @@ class JobWorkService:
 
     # ---- number generation --------------------------------------------------
     def _generate_number(self, company_id: int, job_work_date: str) -> str:
-        """JW{YYYYMMDD}{seq} where seq is that day's job work count + 1 for
-        this company, zero-padded to 3 digits (e.g. JW20260817001)."""
+        """PO{YYYYMMDD}{seq} - a job work now prints as, and is numbered as,
+        a regular purchase order (see _sheet.html's title/label), so it
+        shares the same daily counter as PurchaseOrderService._generate_number
+        rather than its own JW-prefixed sequence: seq is that day's purchase
+        order count PLUS that day's job work count, plus 1, zero-padded to 3
+        digits (e.g. PO20260817004)."""
         date_part = (job_work_date or "")[:10].replace("-", "")
-        prefix = f"JW{date_part}"
-        seq = self.job_work_repo.count_for_date_prefix(company_id, prefix) + 1
+        prefix = f"PO{date_part}"
+        po_count = self.purchase_order_repo.count_for_date_prefix(company_id, prefix) \
+            if self.purchase_order_repo else 0
+        jw_count = self.job_work_repo.count_for_date_prefix(company_id, prefix)
+        seq = po_count + jw_count + 1
         return f"{prefix}{seq:03d}"
 
     # ---- the proforma invoice's own products (the "Product" picker) --------
@@ -3882,7 +3894,8 @@ class PurchaseInvoiceService:
                  version_service: "DocumentVersionService", party_repos: Optional[dict] = None,
                  supplier_repo: Optional[SupplierRepositoryBase] = None,
                  upload_folder: str = "", allowed_extensions: set = frozenset(),
-                 misc_list_service: Optional["MiscListService"] = None):
+                 misc_list_service: Optional["MiscListService"] = None,
+                 job_work_repo: Optional[JobWorkRepository] = None):
         self.misc_list_service = misc_list_service
         self.purchase_invoice_repo = purchase_invoice_repo
         self.product_repo = product_repo
@@ -3893,6 +3906,10 @@ class PurchaseInvoiceService:
         self.supplier_repo = supplier_repo  # for validating seller_supplier_id belongs to this company
         self.upload_folder = upload_folder
         self.allowed_extensions = allowed_extensions
+        # A job work now prints/numbers as a purchase order, so it can be a
+        # "Start from" candidate here too - optional so a caller that never
+        # wires it just sees no job works in the picker.
+        self.job_work_repo = job_work_repo
 
     # ---- reads --------------------------------------------------
     def get(self, purchase_invoice_id: int, company_id: int) -> PurchaseInvoice:
@@ -3973,6 +3990,56 @@ class PurchaseInvoiceService:
             invoiced_qty = row["quantity"] if row else 0
             ordered_boxes = item.quantity_boxes or 0
             ordered_qty = item.quantity_value or 0
+            outstanding = (ordered_boxes - invoiced_boxes) if ordered_boxes > 0 else (ordered_qty - invoiced_qty)
+            if outstanding > _DESIGN_QTY_TOLERANCE:
+                return True
+        return False
+
+    # ---- job works as "Start from" candidates (a job work now prints/
+    # numbers as a purchase order, so it is invoiced the same way) --------
+    def list_all_outstanding_job_works(self, company_id: int,
+                                        exclude_purchase_invoice_id: Optional[int] = None) -> List[JobWork]:
+        """Every job work in this company that still has at least one
+        Products-card line not fully covered by purchase invoices raised
+        against it yet - the job-work counterpart of list_all_outstanding."""
+        if not self.job_work_repo:
+            return []
+        job_works = self.job_work_repo.list_all(company_id)
+        return [jw for jw in job_works if self._has_outstanding_job_work(jw, exclude_purchase_invoice_id)]
+
+    def list_outstanding_job_works_for_seller(self, seller_supplier_id: Optional[int], company_id: int,
+                                               exclude_purchase_invoice_id: Optional[int] = None) -> List[JobWork]:
+        """Job-work counterpart of list_outstanding_for_supplier - a job
+        work's natural link to a supplier for invoicing is seller_supplier_id,
+        the FROM SELLER (see JobWorkRepository.list_for_seller)."""
+        if not seller_supplier_id or not self.job_work_repo:
+            return []
+        job_works = self.job_work_repo.list_for_seller(seller_supplier_id)
+        return [jw for jw in job_works if jw.company_id == company_id
+                and self._has_outstanding_job_work(jw, exclude_purchase_invoice_id)]
+
+    def _invoiced_totals_for_job_work(self, job_work_id: int, exclude_purchase_invoice_id: Optional[int] = None) -> dict:
+        return {
+            _product_key({"product_id": row["product_id"], "product_name": row["product_name"]}): row
+            for row in self.purchase_invoice_repo.invoiced_totals_for_job_work(
+                job_work_id, exclude_purchase_invoice_id
+            )
+        }
+
+    def _has_outstanding_job_work(self, job_work: JobWork, exclude_purchase_invoice_id: Optional[int] = None) -> bool:
+        # list_all/list_for_manufacturer don't load the Products card - unlike
+        # a purchase order, a job work's Products card is optional (a costing
+        # reference), so an empty list here can genuinely mean "nothing to
+        # invoice" rather than "not loaded"; get_by_id settles which.
+        products = job_work.products or self.job_work_repo.get_by_id(job_work.id).products
+        invoiced = self._invoiced_totals_for_job_work(job_work.id, exclude_purchase_invoice_id)
+        for product in products:
+            key = _product_key({"product_id": product.product_id, "product_name": product.product_name})
+            row = invoiced.get(key)
+            invoiced_boxes = row["boxes"] if row else 0
+            invoiced_qty = row["quantity"] if row else 0
+            ordered_boxes = product.quantity_boxes or 0
+            ordered_qty = product.quantity_value or 0
             outstanding = (ordered_boxes - invoiced_boxes) if ordered_boxes > 0 else (ordered_qty - invoiced_qty)
             if outstanding > _DESIGN_QTY_TOLERANCE:
                 return True
@@ -4114,6 +4181,75 @@ class PurchaseInvoiceService:
             result.append(raw)
         return result
 
+    # ---- prefill from one or several job works at once (a job work now
+    # prints/numbers as a purchase order, so it's prefilled the same way) ---
+    @staticmethod
+    def _raw_product(product: "JobWorkProduct") -> dict:
+        return {
+            "product_id": product.product_id, "product_name": product.product_name,
+            "hsn_code": product.hsn_code, "quantity_boxes": product.quantity_boxes,
+            "quantity_value": product.quantity_value, "unit": product.unit,
+            "price_inr": product.price_inr, "price_per": product.price_per,
+        }
+
+    def build_prefill_from_job_works(self, job_works: List[JobWork]) -> dict:
+        """Same idea as build_prefill_from_purchase_orders, over job works'
+        Products card lines instead of a purchase order's items. Header
+        fields are taken from the first job work - callers only ever offer
+        job works already filtered to one manufacturer, so every candidate
+        agrees on these; tax amounts are summed across all of them."""
+        if not job_works:
+            return {"fields": {}, "items": []}
+        primary = job_works[0]
+        fields = {
+            "job_work_ids": [jw.id for jw in job_works],
+            "seller_supplier_id": primary.seller_supplier_id,
+            "seller_name": primary.seller_name,
+            "seller_address": primary.seller_address,
+            "seller_pan": primary.seller_pan,
+            "seller_gstin": primary.seller_gstin,
+            "igst_amount": round(sum(jw.igst_amount for jw in job_works), 2),
+            "cgst_amount": round(sum(jw.cgst_amount for jw in job_works), 2),
+            "sgst_amount": round(sum(jw.sgst_amount for jw in job_works), 2),
+            "purchase_type": primary.purchase_type,
+            "currency_code": primary.currency_code,
+        }
+        items = []
+        for jw in job_works:
+            items.extend(self._remaining_products(jw))
+        return {"fields": fields, "items": items}
+
+    def _remaining_products(self, job_work: JobWork) -> list:
+        """One job work's Products-card lines cut down to their outstanding
+        remainder and tagged with the job work they came from - the
+        job-work counterpart of _remaining_items."""
+        invoiced = self._invoiced_totals_for_job_work(job_work.id)
+        result = []
+        for product in job_work.products:
+            key = _product_key({"product_id": product.product_id, "product_name": product.product_name})
+            row = invoiced.get(key)
+            invoiced_boxes = row["boxes"] if row else 0
+            invoiced_qty = row["quantity"] if row else 0
+            ordered_boxes = product.quantity_boxes or 0
+            ordered_qty = product.quantity_value or 0
+            if ordered_boxes > 0:
+                ratio = max(ordered_boxes - invoiced_boxes, 0) / ordered_boxes
+            elif ordered_qty > 0:
+                ratio = max(ordered_qty - invoiced_qty, 0) / ordered_qty
+            else:
+                ratio = 0
+            if ratio <= 0:
+                continue  # already fully invoiced on an earlier purchase invoice against this job work
+            raw = self._raw_product(product)
+            if ratio < 1:
+                for k in ("quantity_boxes", "quantity_value"):
+                    if isinstance(raw.get(k), (int, float)):
+                        raw[k] = round(raw[k] * ratio, 2)
+            raw["job_work_id"] = job_work.id
+            raw["source_jw_number"] = job_work.job_work_number
+            result.append(raw)
+        return result
+
     # ---- validation --------------------------------------------------
     def _build_items(self, company_id: int, raw_items: list) -> List[PurchaseInvoiceItem]:
         items = []
@@ -4154,13 +4290,15 @@ class PurchaseInvoiceService:
             # grouping and the outstanding-quantity check, never access
             # control; a stray/foreign id just fails to match anything.
             purchase_order_id = int(raw["purchase_order_id"]) if raw.get("purchase_order_id") else None
+            # Same idea for a row prefilled from a job work's Products card.
+            job_work_id = int(raw["job_work_id"]) if raw.get("job_work_id") else None
 
             items.append(PurchaseInvoiceItem(
                 id=None, purchase_invoice_id=None, sr_no=i, product_id=product_id, product_name=product_name,
                 hsn_code=(raw.get("hsn_code") or "").strip() or None,
                 quantity_boxes=quantity_boxes, quantity_value=quantity_value, unit=unit,
                 price_inr=price_inr, price_per=price_per, total_inr=total_inr,
-                purchase_order_id=purchase_order_id,
+                purchase_order_id=purchase_order_id, job_work_id=job_work_id,
             ))
         if not items:
             raise ValidationError("At least one product line is compulsory.")
@@ -4217,6 +4355,23 @@ class PurchaseInvoiceService:
                 purchase_order_ids.append(po_id)
         purchase_order_id = purchase_order_ids[0] if purchase_order_ids else None
 
+        # Same idea for the job works (of possibly several) this invoice was
+        # raised against instead - see purchase_order_ids just above.
+        raw_jw_ids = fields.get("job_work_ids") or (
+            [fields["job_work_id"]] if fields.get("job_work_id") else []
+        )
+        job_work_ids = []
+        if self.job_work_repo:
+            for raw in raw_jw_ids:
+                try:
+                    jw_id = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                job_work = self.job_work_repo.get_by_id(jw_id)
+                if job_work and job_work.company_id == current_user.company_id and jw_id not in job_work_ids:
+                    job_work_ids.append(jw_id)
+        job_work_id = job_work_ids[0] if job_work_ids else None
+
         lead_id = int(fields["lead_id"]) if fields.get("lead_id") else None
         if lead_id is not None:
             lead = self.lead_repo.get_by_id(lead_id)
@@ -4242,7 +4397,8 @@ class PurchaseInvoiceService:
             id=None, company_id=current_user.company_id, purchase_invoice_number="",
             invoice_number=invoice_number, invoice_date=invoice_date,
             seller_name=seller_name, created_by=current_user.id,
-            purchase_order_id=purchase_order_id, lead_id=lead_id, seller_supplier_id=seller_supplier_id,
+            purchase_order_id=purchase_order_id, job_work_id=job_work_id,
+            lead_id=lead_id, seller_supplier_id=seller_supplier_id,
             seller_address=(fields.get("seller_address") or "").strip() or None,
             seller_pan=(fields.get("seller_pan") or "").strip() or None,
             seller_gstin=(fields.get("seller_gstin") or "").strip() or None,
@@ -4262,7 +4418,7 @@ class PurchaseInvoiceService:
             purchase_type=purchase_type,
             remarks=(fields.get("remarks") or "").strip() or None,
             currency_code=currency_code, currency_symbol=currency_symbol,
-            items=items, purchase_order_ids=purchase_order_ids,
+            items=items, purchase_order_ids=purchase_order_ids, job_work_ids=job_work_ids,
         )
 
     # ---- supplier PDF storage --------------------------------------------------
@@ -5981,23 +6137,46 @@ class PackingListService:
             for item in source_pl.items
         ]
 
-    def _placeholder_items(self, source_items: list) -> list:
-        """One empty product block per source line (header only, marked
-        is_placeholder so the form doesn't render a blank design row) - used
-        when no upstream packing list exists to import, so the user picks
-        designs and per-design box counts themselves."""
-        return [
-            {
+    def _placeholder_items(self, source_items: list, design_source_items: Optional[list] = None) -> list:
+        """One product block per source line, with boxes/qty left blank for
+        the user to fill in - used when no upstream packing list exists to
+        import. When the line already carries a design (a purchase order's
+        own item can be design-tagged, see PurchaseOrderRepository/v77), or
+        one can be matched off `design_source_items` by product (a purchase
+        invoice's own items never carry a design tag themselves, so its
+        design comes from the linked purchase order's matching line
+        instead), a real design row is emitted with that design filled in;
+        otherwise the block is marked is_placeholder (header only, no design
+        row at all) so the form doesn't render a blank design row, and the
+        user picks a design themselves via "+ Add design"."""
+        design_by_key = {}
+        for item in (design_source_items or []):
+            design_id = getattr(item, "design_id", None)
+            design_name = getattr(item, "design_name", None)
+            if design_id or design_name:
+                key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+                design_by_key.setdefault(key, (design_id, design_name))
+
+        result = []
+        for item in source_items:
+            design_id = getattr(item, "design_id", None)
+            design_name = getattr(item, "design_name", None)
+            if not (design_id or design_name):
+                design_id, design_name = design_by_key.get(
+                    _product_key({"product_id": item.product_id, "product_name": item.product_name}), (None, None)
+                )
+            row = {
                 "product_id": item.product_id, "product_name": item.product_name,
-                "design_id": None, "design_name": "",
+                "design_id": design_id, "design_name": design_name or "",
                 "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
                 "quantity_boxes": "", "pcs": "",
                 "quantity_value": "", "unit": item.unit,
                 "net_weight_kg": "", "gross_weight_kg": "",
-                "is_placeholder": True,
             }
-            for item in source_items
-        ]
+            if not (design_id or design_name):
+                row["is_placeholder"] = True
+            result.append(row)
+        return result
 
     # ---- prefill from an existing proforma invoice --------------------------------------------------
     def build_prefill_from_proforma(self, invoice: ProformaInvoice) -> dict:
@@ -6097,15 +6276,23 @@ class PackingListService:
             "remarks": purchase_invoice.remarks or "MADE IN INDIA",
         }
         source_pl = None
+        linked_po = None
         if purchase_invoice.purchase_order_id:
             source_pl = self._newest_packing_list(
                 self.packing_list_repo.list_for_purchase_order(purchase_invoice.purchase_order_id),
                 purchase_invoice.company_id,
             )
+            if self.purchase_order_repo:
+                linked_po = self.purchase_order_repo.get_by_id(purchase_invoice.purchase_order_id)
         if source_pl:
             items = self._items_from_packing_list(source_pl)
         else:
-            items = self._placeholder_items(purchase_invoice.items)
+            # The invoice's own items never carry a design tag - only a
+            # purchase order's own line can be (see v77) - so the design
+            # comes off the linked PO's matching product line instead.
+            items = self._placeholder_items(
+                purchase_invoice.items, design_source_items=linked_po.items if linked_po else None
+            )
         return {"fields": fields, "items": items}
 
     # ---- prefill from an existing job work --------------------------------------------------

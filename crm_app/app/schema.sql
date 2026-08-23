@@ -844,6 +844,11 @@ CREATE TABLE IF NOT EXISTS purchase_invoices (
     invoice_number          TEXT NOT NULL,   -- the supplier's own invoice number, printed on their PDF
     invoice_date            TEXT NOT NULL,
     purchase_order_id       INTEGER REFERENCES purchase_orders(id),   -- optional, "generated from" reference only
+    -- A Job Work now prints/numbers as a regular purchase order (see
+    -- job_works.job_work_number), so it can stand in for one here too -
+    -- optional, "generated from" reference only, same treatment as
+    -- purchase_order_id above.
+    job_work_id             INTEGER REFERENCES job_works(id),
     lead_id                 INTEGER REFERENCES leads(id),             -- optional, prefill/reference only
     seller_supplier_id      INTEGER REFERENCES suppliers(id),
     seller_name             TEXT NOT NULL,
@@ -895,7 +900,10 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_items (
     -- PO origin. Drives both the "grouped by purchase order" product table
     -- and the outstanding-quantity check that decides whether a PO still
     -- needs invoicing (see PurchaseInvoiceRepository.invoiced_totals_for_purchase_order).
-    purchase_order_id      INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL
+    purchase_order_id      INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL,
+    -- Same idea as purchase_order_id above, for a line prefilled from a Job
+    -- Work's Products card instead - the two are mutually exclusive per row.
+    job_work_id            INTEGER REFERENCES job_works(id) ON DELETE SET NULL
 );
 
 -- The many-to-many between a purchase invoice and the purchase orders it was
@@ -908,6 +916,16 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_purchase_order_links (
     purchase_invoice_id   INTEGER NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
     purchase_order_id     INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
     UNIQUE (purchase_invoice_id, purchase_order_id)
+);
+
+-- Same idea as purchase_invoice_purchase_order_links above, for the Job
+-- Works a purchase invoice was raised against instead (a Job Work now
+-- prints/numbers as a purchase order - see job_works.job_work_number).
+CREATE TABLE IF NOT EXISTS purchase_invoice_job_work_links (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_invoice_id   INTEGER NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+    job_work_id           INTEGER NOT NULL REFERENCES job_works(id) ON DELETE CASCADE,
+    UNIQUE (purchase_invoice_id, job_work_id)
 );
 
 -- Vehicle numbers are a plain repeatable list of values (a supplier's

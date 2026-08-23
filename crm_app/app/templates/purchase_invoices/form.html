@@ -83,6 +83,24 @@
       <button type="button" class="btn btn-ghost btn-sm" id="load-from-po-btn">Load goods from selected purchase order(s)</button>
     </div>
     <p class="hint">Only purchase orders still missing an invoice for some of their goods are listed. Loading reloads this page and copies each selected order's still-outstanding product lines in as a starting point, tagged with the order they came from - the purchase invoice is then its own independent record you can still edit freely.</p>
+
+    {% set selected_jw_ids_str = selected_job_work_ids | map('string') | list %}
+    <div class="field">
+      <label>Prefill from existing job work(s) <span class="text-soft text-sm">(optional - pick the supplier above first)</span></label>
+      <div id="jw-picker">
+        {% for jw in job_works %}
+        <label class="radio-wrap js-jw-option" data-supplier-id="{{ jw.seller_supplier_id or '' }}" hidden style="margin-bottom:6px;">
+          <input type="checkbox" name="job_work_ids[]" value="{{ jw.id }}"
+                 {{ 'checked' if (jw.id | string) in selected_jw_ids_str }}>
+          <span>{{ jw.job_work_number }} — {{ jw.job_work_date }} · {{ jw.currency_prefix }} {{ '{:,.2f}'.format(jw.order_value_inr) }}</span>
+        </label>
+        {% endfor %}
+        <div class="empty-state" id="jw-picker-empty-nosupplier">Pick a supplier above to see its job works still needing an invoice.</div>
+        <div class="empty-state" id="jw-picker-empty-none" hidden>No job work from this supplier still has anything outstanding to invoice.</div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="load-from-jw-btn">Load goods from selected job work(s)</button>
+    </div>
+    <p class="hint">A job work now prints/numbers as a purchase order, so it appears here too (matched against the supplier above as its From Seller) - only ones still missing an invoice for some of their Products card goods are listed.</p>
   </div>
 
   {% set chosen_currency = data.currency_code | default('INR', true) %}
@@ -131,7 +149,7 @@
           <tr>
             <th>Sr</th>
             <th style="min-width:220px;">Product</th>
-            <th>Source PO</th>
+            <th>Source</th>
             <th>HSN code</th>
             <th>Boxes</th>
             <th>Qty (SQM/LM)</th>
@@ -154,7 +172,8 @@
             </td>
             <td class="text-sm text-soft">
               <input type="hidden" name="item_purchase_order_id[]" class="js-source-po-id" value="{{ row.purchase_order_id or '' }}">
-              {{ row.source_po_number or '—' }}
+              <input type="hidden" name="item_job_work_id[]" class="js-source-jw-id" value="{{ row.job_work_id or '' }}">
+              {{ row.source_po_number or row.source_jw_number or '—' }}
             </td>
             <td><input type="text" name="item_hsn_code[]" class="js-hsn" value="{{ row.hsn_code or '' }}"></td>
             <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" value="{{ row.quantity_boxes or '' }}"></td>
@@ -264,6 +283,7 @@
       </td>
       <td class="text-sm text-soft">
         <input type="hidden" name="item_purchase_order_id[]" class="js-source-po-id">
+        <input type="hidden" name="item_job_work_id[]" class="js-source-jw-id">
         —
       </td>
       <td><input type="text" name="item_hsn_code[]" class="js-hsn"></td>
@@ -444,6 +464,40 @@
     window.location = '{{ url_for("purchase_invoices.new_purchase_invoice") }}?purchase_order_ids=' + encodeURIComponent(ids.join(','));
   });
 
+  // ---- job work picker: filtered to the chosen supplier, loaded via ?job_work_ids= --------------------------------------------------
+  const jwOptions = Array.from(document.querySelectorAll('.js-jw-option'));
+  const jwPickerEmptyNoSupplier = document.getElementById('jw-picker-empty-nosupplier');
+  const jwPickerEmptyNone = document.getElementById('jw-picker-empty-none');
+  function filterJwPicker(autoCheckAll) {
+    const supplierId = document.getElementById('seller_supplier_id').value;
+    if (!supplierId) {
+      jwOptions.forEach((el) => { el.hidden = true; });
+      jwPickerEmptyNoSupplier.hidden = false;
+      jwPickerEmptyNone.hidden = true;
+      return;
+    }
+    jwPickerEmptyNoSupplier.hidden = true;
+    let anyVisible = false;
+    jwOptions.forEach((el) => {
+      const match = el.dataset.supplierId === supplierId;
+      el.hidden = !match;
+      if (match) {
+        anyVisible = true;
+        if (autoCheckAll) el.querySelector('input[type=checkbox]').checked = true;
+      }
+    });
+    jwPickerEmptyNone.hidden = anyVisible;
+  }
+  document.getElementById('load-from-jw-btn').addEventListener('click', () => {
+    const ids = jwOptions
+      .filter((el) => !el.hidden)
+      .map((el) => el.querySelector('input[type=checkbox]'))
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.value);
+    if (!ids.length) { alert('Check at least one job work first.'); return; }
+    window.location = '{{ url_for("purchase_invoices.new_purchase_invoice") }}?job_work_ids=' + encodeURIComponent(ids.join(','));
+  });
+
   // ---- seller dropdown prefill --------------------------------------------------
   const sellerSelect = document.getElementById('seller_select');
   function applySeller(id, name, address, pan, gstin) {
@@ -453,6 +507,7 @@
     document.getElementById('seller_pan').value = pan || '';
     document.getElementById('seller_gstin').value = gstin || '';
     filterPoPicker(true);
+    filterJwPicker(true);
   }
   sellerSelect.addEventListener('change', (e) => {
     const opt = e.target.selectedOptions[0];
@@ -460,6 +515,7 @@
     applySeller(opt.value, opt.dataset.name, opt.dataset.address, opt.dataset.pan, opt.dataset.gstin);
   });
   filterPoPicker(false);
+  filterJwPicker(false);
 
   // ---- add new supplier (admin only) --------------------------------------------------
   const sellerAddPanel = document.getElementById('seller-add-new-panel');

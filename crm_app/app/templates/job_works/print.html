@@ -34,6 +34,7 @@
       {% else %}
       <a href="{{ url_for('packing_lists.new_packing_list', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">📦 Create packing list</a>
       {% endif %}
+      <a href="{{ url_for('purchase_invoices.new_purchase_invoice') }}" class="btn btn-ghost btn-sm">🧾 Create purchase invoice</a>
       <a href="{{ url_for('job_works.edit_job_work', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">Edit</a>
       {% if current_user.is_admin %}
       <a href="{{ url_for('job_works.job_work_versions', job_work_id=job_work.id) }}" class="btn btn-ghost btn-sm">Version history</a>
