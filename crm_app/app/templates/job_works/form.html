@@ -156,7 +156,7 @@
           <option value="">— Select a product from the proforma invoice —</option>
           {% for p in invoice_products %}
             {% set meta = invoice_product_meta_map.get(p.product_id | int, {}) if p.product_id else {} %}
-            <option value="{{ p.product_id or '' }}" data-name="{{ p.product_name }}" data-hsn="{{ p.hsn_code or '' }}" data-alt-qty="{{ meta.get('alt_qty', '') }}" data-unit="{{ meta.get('unit', '') }}">{{ p.product_name }}</option>
+            <option value="{{ p.product_id or '' }}" data-name="{{ p.product_name }}" data-hsn="{{ p.hsn_code or '' }}" data-alt-qty="{{ meta.get('alt_qty', '') }}" data-unit="{{ meta.get('unit', '') }}" data-igst="{{ meta.get('igst', '') }}">{{ p.product_name }}</option>
           {% endfor %}
         </select>
         <div class="text-sm text-soft">Tags each design line's Product, which the Products card's Boxes total below uses — not shown on the printed sheet.</div>
@@ -624,7 +624,16 @@
         alert('Pick at least one design and its Conversion Value first.');
         return;
       }
-      lines = lines.filter((l) => String(l.to_product_id) !== String(toProductId)).concat(kept);
+      // Upsert by (To Product, Design) instead of wiping the whole product's
+      // group and replacing it with only what's currently staged - a line
+      // committed on an earlier click must survive later clicks even if the
+      // staging row that produced it was since reused for a different
+      // design, so only designs actually present in `kept` are touched.
+      kept.forEach((newLine) => {
+        const key = normalizeName(newLine.design_name);
+        const idx = lines.findIndex((l) => String(l.to_product_id) === String(toProductId) && normalizeName(l.design_name) === key);
+        if (idx >= 0) lines[idx] = newLine; else lines.push(newLine);
+      });
       render();
       plAddProductFromManufacturerPick();
     });
@@ -875,6 +884,7 @@
       tr.querySelector('.js-pl-product-name').value = name;
       tr.querySelector('.js-pl-hsn').value = hsn;
       tr.dataset.altQty = (opt && opt.dataset.altQty) || '';
+      tr.dataset.igst = (opt && opt.dataset.igst) || '';
       if (opt && opt.dataset.unit) plSetUnitValue(tr.querySelector('.js-pl-unit'), opt.dataset.unit);
       plRenumber();
     }

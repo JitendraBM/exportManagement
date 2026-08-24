@@ -1701,6 +1701,16 @@ class DesignRepository:
         )
         return [Design.from_row(r) for r in rows]
 
+    def list_for_company(self, company_id: int) -> List[Design]:
+        """Every design across every product of the company - used as a
+        by-name fallback when a design can't be found under one specific
+        product (e.g. the same design name catalogued under a sibling size/
+        finish variant instead)."""
+        rows = self.db.query(
+            "SELECT * FROM designs WHERE company_id = ? ORDER BY design_name", (company_id,)
+        )
+        return [Design.from_row(r) for r in rows]
+
     def search(self, company_id: int, query: str) -> List[dict]:
         """Designs (with their product's name attached) whose own name OR
         product name matches `query` - a product-name search should surface
