@@ -6137,6 +6137,122 @@ class PackingListService:
             for item in source_pl.items
         ]
 
+    def _design_id_resolver(self, company_id: int):
+        """Returns a resolve(product_id, design_name) function that matches a
+        typed design name against that product's own catalog designs,
+        falling back to a company-wide by-name match when the design isn't
+        catalogued under this exact product (e.g. it only exists under a
+        sibling size/finish variant of the same tile), OR when there is no
+        product_id to try at all - a job work design line not sourced from
+        a proforma product (see JobWorkItem.product_id's own docstring)
+        still names a real design, it just has nothing to narrow the lookup
+        by, so skipping straight to the company-wide match is the only way
+        it ever resolves. Without this, such a line's design column prints
+        its name but silently drops the photo, since design_id never gets
+        set at all. Lookups are cached per product/company across every
+        call made through the returned function, shared by
+        build_prefill_from_job_work and _placeholder_items_from_job_works."""
+        design_ids_by_product: dict = {}
+        design_ids_by_name: Optional[dict] = None
+
+        def resolve(product_id, design_name):
+            nonlocal design_ids_by_name
+            if not design_name:
+                return None
+            design_id = None
+            if product_id:
+                if product_id not in design_ids_by_product:
+                    design_ids_by_product[product_id] = {
+                        _normalize_name(d.design_name): d.id
+                        for d in self.design_repo.list_for_product(product_id)
+                    }
+                design_id = design_ids_by_product[product_id].get(_normalize_name(design_name))
+            if design_id is None:
+                if design_ids_by_name is None:
+                    design_ids_by_name = {
+                        _normalize_name(d.design_name): d.id
+                        for d in self.design_repo.list_for_company(company_id)
+                    }
+                design_id = design_ids_by_name.get(_normalize_name(design_name))
+            return design_id
+
+        return resolve
+
+    def _placeholder_items_from_job_works(self, purchase_invoice_items: list, job_works: list) -> list:
+        """Product-level placeholder rows (see _placeholder_items), but
+        exploded into one row per design when the purchase invoice's source
+        job work(s) tag that product with individual design lines. A
+        purchase invoice built straight off job works (no purchase_order_id)
+        has neither an upstream packing list nor a linked PO to borrow one
+        design per product from, so without this it falls all the way back
+        to one bare, design-less block per product line.
+
+        A job work prints/numbers as a purchase order in this reduced flow
+        (see PurchaseInvoice.job_work_id), and can just as well already have
+        its own packing list - made directly against the job work, same as a
+        real PO's own PL. That packing list's actual Boxes/Qty/Pallets/
+        weights are imported product-by-product, same as a PO's; only
+        products with no packing list of their own (or no packing list on
+        the job work at all) fall back to a design row with boxes/quantity
+        left blank for the user to fill in by hand."""
+        design_lines_by_jw_product: dict = {}
+        source_pl_items_by_jw: dict = {}
+        for jw in job_works:
+            grouped: dict = {}
+            for line in jw.items:
+                if line.design_name:
+                    grouped.setdefault(line.product_id, []).append(line)
+            design_lines_by_jw_product[jw.id] = grouped
+            source_pl = self._newest_packing_list(
+                self.packing_list_repo.list_for_job_work(jw.id), jw.company_id)
+            if source_pl:
+                by_product: dict = {}
+                for pl_item in self._items_from_packing_list(source_pl):
+                    by_product.setdefault(pl_item["product_id"], []).append(pl_item)
+                source_pl_items_by_jw[jw.id] = by_product
+        resolve_design_id = self._design_id_resolver(job_works[0].company_id) if job_works else None
+
+        result = []
+        for item in purchase_invoice_items:
+            pl_items = source_pl_items_by_jw.get(item.job_work_id, {}).get(item.product_id)
+            if pl_items:
+                for pl_item in pl_items:
+                    row = dict(pl_item)
+                    row["product_name"], row["hsn_code"] = item.product_name, item.hsn_code
+                    # The job work's own packing list can have been saved
+                    # before its design lines resolved a catalog id (e.g.
+                    # created before this photo-fallback logic existed, or a
+                    # row the user hand-added there without a product to
+                    # narrow the match by) - re-resolve here rather than
+                    # carrying a stale blank forward onto this new PL too.
+                    if not row["design_id"] and row["design_name"]:
+                        row["design_id"] = resolve_design_id(row["product_id"], row["design_name"])
+                    result.append(row)
+                continue
+            design_lines = design_lines_by_jw_product.get(item.job_work_id, {}).get(item.product_id)
+            if not design_lines:
+                result.append({
+                    "product_id": item.product_id, "product_name": item.product_name,
+                    "design_id": None, "design_name": "",
+                    "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
+                    "quantity_boxes": "", "pcs": "",
+                    "quantity_value": "", "unit": item.unit,
+                    "net_weight_kg": "", "gross_weight_kg": "",
+                    "is_placeholder": True,
+                })
+                continue
+            for line in design_lines:
+                result.append({
+                    "product_id": item.product_id, "product_name": item.product_name,
+                    "design_id": resolve_design_id(item.product_id, line.design_name),
+                    "design_name": line.design_name or "",
+                    "hsn_code": item.hsn_code, "box_per_pallet": "", "pallets": "",
+                    "quantity_boxes": "", "pcs": "",
+                    "quantity_value": "", "unit": item.unit,
+                    "net_weight_kg": "", "gross_weight_kg": "",
+                })
+        return result
+
     def _placeholder_items(self, source_items: list, design_source_items: Optional[list] = None) -> list:
         """One product block per source line, with boxes/qty left blank for
         the user to fill in - used when no upstream packing list exists to
@@ -6269,7 +6385,12 @@ class PackingListService:
         exactly one PO's shipment, not a split still being placed across
         several. Falls back to one empty product block per invoice line
         (same as build_prefill_from_proforma) when the linked PO has no
-        packing list of its own yet."""
+        packing list of its own yet - unless the invoice was built straight
+        off job work(s) instead of a PO, in which case the fallback explodes
+        each product line into its job work's own design rows (see
+        _placeholder_items_from_job_works) rather than leaving the block
+        design-less, since job works carry their design breakdown on their
+        own items, not a linked document's."""
         fields = {
             "purchase_invoice_id": purchase_invoice.id,
             "buyer_order_no": purchase_invoice.seller_ref_no,
@@ -6286,6 +6407,13 @@ class PackingListService:
                 linked_po = self.purchase_order_repo.get_by_id(purchase_invoice.purchase_order_id)
         if source_pl:
             items = self._items_from_packing_list(source_pl)
+        elif not linked_po and self.job_work_repo and purchase_invoice.job_work_ids:
+            job_works = [
+                jw for jw in (
+                    self.job_work_repo.get_by_id(jw_id) for jw_id in purchase_invoice.job_work_ids
+                ) if jw
+            ]
+            items = self._placeholder_items_from_job_works(purchase_invoice.items, job_works)
         else:
             # The invoice's own items never carry a design tag - only a
             # purchase order's own line can be (see v77) - so the design
@@ -6320,29 +6448,25 @@ class PackingListService:
         only there, not a catalog id - see the job work form's own
         designsForToProduct()), so it has to be re-resolved against the
         resolved product's own catalog designs here; without it the packing
-        list's design photo column has nothing to look up and prints blank."""
+        list's design photo column has nothing to look up and prints blank.
+        A design not catalogued under this exact product (e.g. it only
+        exists under a sibling size/finish variant of the same tile) falls
+        back to a company-wide by-name match, so the photo still shows up
+        rather than silently going blank over a product mismatch."""
         fields = {
             "job_work_id": job_work.id,
             "buyer_order_no": job_work.seller_ref_no,
             "remarks": job_work.remarks or "MADE IN INDIA",
         }
         products_by_id = {p.product_id: p for p in job_work.products if p.product_id}
-        design_ids_by_product: dict = {}
+        resolve_design_id = self._design_id_resolver(job_work.company_id)
         items = []
         for item in job_work.items:
             product = products_by_id.get(item.product_id)
             product_id = product.product_id if product else item.product_id
             product_name = product.product_name if product else (item.product_name or item.to_product_name)
             hsn_code = product.hsn_code if product else item.hsn_code
-
-            design_id = None
-            if product_id and item.design_name:
-                if product_id not in design_ids_by_product:
-                    design_ids_by_product[product_id] = {
-                        _normalize_name(d.design_name): d.id
-                        for d in self.design_repo.list_for_product(product_id)
-                    }
-                design_id = design_ids_by_product[product_id].get(_normalize_name(item.design_name))
+            design_id = resolve_design_id(product_id, item.design_name)
 
             items.append({
                 "product_id": product_id, "product_name": product_name,
@@ -6436,10 +6560,16 @@ class PackingListService:
             design_name = (raw.get("design_name") or "").strip() or None
 
             # Same trust boundary as QuotationService._build_items - only
-            # keep product/design references from this same company (and a
-            # design must actually belong to the row's product). The Boxes
-            # column's unit (printed as small text after the number) is
-            # likewise always the product's own Quantity unit.
+            # keep product/design references from this same company. The
+            # Boxes column's unit (printed as small text after the number)
+            # is likewise always the product's own Quantity unit.
+            #
+            # A design is NOT required to belong to the row's own product -
+            # a job work's design lines are prefilled by a company-wide
+            # by-name match whenever the design isn't catalogued under that
+            # exact product (see PackingListService._design_id_resolver), so
+            # enforcing an exact product match here would silently null out
+            # every one of those on save, right back to a photo-less row.
             product = None
             quantity_unit = "PCS"
             if product_id:
@@ -6451,8 +6581,7 @@ class PackingListService:
                     quantity_unit = product.quantity_unit or "PCS"
             if design_id:
                 design = self.design_repo.get_by_id(design_id)
-                if not design or design.company_id != company_id or \
-                        (product_id and design.product_id != product_id):
+                if not design or design.company_id != company_id:
                     design_id = None
 
             # Boxes is the compulsory field the rest of the row is driven
