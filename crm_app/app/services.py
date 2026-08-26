@@ -34,7 +34,7 @@ from app.models import (
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
     ProductPalletType, ProductFolder,
     Design, Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
-    PurchaseOrder, PurchaseOrderItem, JobWork, JobWorkItem, JobWorkProduct,
+    PurchaseOrder, PurchaseOrderItem, JobWork, JobWorkItem, JobWorkProduct, JobOut, JobIn, JobInItem,
     PurchaseInvoice, PurchaseInvoiceItem, PackingList, PackingListItem,
     DocumentVersion, PURCHASE_TYPES, DEFAULT_PURCHASE_TYPE, EXEMPTION_IGST_PERCENT,
     PROFORMA_STATUSES, PROFORMA_STATUS_DRAFT, PROFORMA_STATUS_CONFIRMED,
@@ -48,6 +48,7 @@ from app.repositories import (
     CommunicationRepository, PaymentRepository, DocumentRepository, CompanyRepository,
     CategoryRepository, ProductRepository, ProductPalletTypeRepository, ProductFolderRepository, DesignRepository,
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, JobWorkRepository,
+    JobOutRepository, JobInRepository,
     PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
     PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
@@ -1842,28 +1843,48 @@ class ProductService:
             grouped.setdefault(pt.product_id, []).append(pt)
         return grouped
 
+    def _parse_master_product_id(self, company_id: int, is_job_work_product: bool,
+                                  master_product_id, exclude_product_id: Optional[int] = None) -> Optional[int]:
+        """The master product a job-work product is made from. Only meaningful
+        (and required) when the "Job Work Product" checkbox is ticked; ignored
+        otherwise so an unticked checkbox always clears it."""
+        if not is_job_work_product:
+            return None
+        if master_product_id in (None, "", "None"):
+            raise ValidationError("Select a master product for a job work product.")
+        master_id = int(master_product_id)
+        if exclude_product_id is not None and master_id == exclude_product_id:
+            raise ValidationError("A product cannot be its own master product.")
+        self.get_product(master_id, company_id)  # 404s if missing/another company's
+        return master_id
+
     def create_product(self, current_user: User, product_name: str, description: str,
                         hsn_code: str, igst_percent: str, quantity: str,
                         alternate_quantity: str, quantity_unit: str = "",
                         alternate_quantity_unit: str = "",
                         net_weight_kg: str = "", gross_weight_kg: str = "",
                         pallet_types: Optional[list] = None,
-                        category_id=None) -> Product:
+                        category_id=None, price_usd: str = "",
+                        is_job_work_product=None, master_product_id=None) -> Product:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can manage the product catalog.")
         if not product_name or not product_name.strip():
             raise ValidationError("Product name is compulsory.")
         parsed_pallet_types = self._parse_pallet_types(pallet_types)
+        is_job_work = bool(is_job_work_product)
         product = Product(
             id=None, company_id=current_user.company_id, product_name=product_name.strip(),
             category_id=self._parse_category_id(current_user.company_id, category_id),
             description=description or None, hsn_code=hsn_code or None,
+            price_usd=self._parse_price(price_usd),
             quantity_unit=self._parse_unit(quantity_unit, default="PCS"),
             quantity=quantity or None,
             alternate_quantity_unit=self._parse_unit(alternate_quantity_unit, default="SQM"),
             alternate_quantity=alternate_quantity or None,
             net_weight_kg=self._parse_weight("Net weight", net_weight_kg),
             gross_weight_kg=self._parse_weight("Gross weight", gross_weight_kg),
+            is_job_work_product=is_job_work,
+            master_product_id=self._parse_master_product_id(current_user.company_id, is_job_work, master_product_id),
             **self._tax_fields(igst_percent),
         )
         product = self.product_repo.create(product)
@@ -1877,16 +1898,19 @@ class ProductService:
                         quantity_unit: str = "", alternate_quantity_unit: str = "",
                         net_weight_kg: str = "", gross_weight_kg: str = "",
                         pallet_types: Optional[list] = None,
-                        category_id=None) -> None:
+                        category_id=None, price_usd: str = "",
+                        is_job_work_product=None, master_product_id=None) -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can manage the product catalog.")
         if not product_name or not product_name.strip():
             raise ValidationError("Product name is compulsory.")
         self.get_product(product_id, current_user.company_id)
         parsed_pallet_types = self._parse_pallet_types(pallet_types)
+        is_job_work = bool(is_job_work_product)
         self.product_repo.update(product_id, {
             "product_name": product_name.strip(), "description": description or None,
             "hsn_code": hsn_code or None,
+            "price_usd": self._parse_price(price_usd),
             "category_id": self._parse_category_id(current_user.company_id, category_id),
             "quantity_unit": self._parse_unit(quantity_unit, default="PCS"),
             "quantity": quantity or None,
@@ -1894,6 +1918,9 @@ class ProductService:
             "alternate_quantity": alternate_quantity or None,
             "net_weight_kg": self._parse_weight("Net weight", net_weight_kg),
             "gross_weight_kg": self._parse_weight("Gross weight", gross_weight_kg),
+            "is_job_work_product": is_job_work,
+            "master_product_id": self._parse_master_product_id(
+                current_user.company_id, is_job_work, master_product_id, exclude_product_id=product_id),
             **self._tax_fields(igst_percent),
         })
         self.pallet_type_repo.replace_for_product(current_user.company_id, product_id, parsed_pallet_types)
@@ -2130,22 +2157,41 @@ class ProductService:
 class InventoryService:
     """Read-only view of the catalog focused on stock on hand. It reuses
     ProductService for all catalog navigation (categories, products, sub
-    categories, designs) and adds the stock numbers on top: `boxes`/`pcs`/
-    `quantity` are the raw purchased totals (everything bought in via a
-    purchase order's packing list); `net_boxes`/`net_pcs`/`net_quantity` are
-    those totals less everything sold (allocated on an export invoice's
-    Designs Packing List, per sold_totals_by_design). pcs isn't tracked on
-    the sold side, so net_pcs is netted proportionally off the bought
+    categories, designs) and adds the stock numbers on top.
+
+    Stock per design moves in three ways:
+
+      RECEIVED  `boxes`/`pcs`/`quantity` - the raw received totals, listed on
+                a PURCHASE INVOICE's own packing list (bought_totals_by_design).
+      DISPATCHED `dispatched_boxes`/`dispatched_quantity` - received goods
+                sent back out for job work, i.e. belonging to an invoice that
+                has a Job Out challan against it (dispatched_totals_by_design).
+      RETURNED  goods coming BACK from job work, received on a Job In
+                (received_back_totals_by_design). These land on the JOBBED
+                product's designs, not the master's - which is the whole
+                point of the cycle: the master goes out, something else comes
+                back. Counted into `boxes`/`quantity` alongside what was
+                purchased, since both are stock genuinely on hand.
+      SOLD      `sold_boxes`/`sold_quantity` - allocated on an export
+                invoice's Designs Packing List (sold_totals_by_design).
+
+    `net_boxes`/`net_pcs`/`net_quantity` are received (purchased + returned)
+    less dispatched less sold. pcs is tracked on neither the dispatched nor
+    the sold side, so net_pcs is netted proportionally off the received
     pcs-per-box ratio."""
 
     def __init__(self, product_service: "ProductService", packing_list_repo: PackingListRepository,
                  design_repo: DesignRepository,
                  purchase_order_repo: Optional[PurchaseOrderRepository] = None,
                  export_invoice_repo: Optional[ExportInvoiceRepository] = None,
-                 purchase_invoice_repo: Optional[PurchaseInvoiceRepository] = None):
+                 purchase_invoice_repo: Optional[PurchaseInvoiceRepository] = None,
+                 job_in_repo: Optional[JobInRepository] = None):
         self.products = product_service
         self.packing_list_repo = packing_list_repo
         self.design_repo = design_repo
+        # Goods returned from job work - the jobbed product's way into stock.
+        # Optional so an unwired caller simply sees no returns.
+        self.job_in_repo = job_in_repo
         # Optional: only needed for stock_history_summary's PO Qty/Sale Qty
         # columns and purchase_sale_history's document links - the rest of
         # this service works without them.
@@ -2153,47 +2199,86 @@ class InventoryService:
         self.export_invoice_repo = export_invoice_repo
         self.purchase_invoice_repo = purchase_invoice_repo
 
-    def _stock_from_bought(self, bought: dict, sold: Optional[dict] = None) -> dict:
-        """Turn a {boxes, pcs, quantity} purchased total into a stock figure
-        carrying both the raw purchased totals and the same figures net of
-        the matching {boxes, quantity} sold. pcs isn't tracked on the sold
-        side, so net_pcs is netted proportionally off the bought pcs-per-box
-        ratio - the same fraction of boxes sold is treated as that fraction
-        of pcs sold, so net_pcs reaches zero exactly when net_boxes does."""
+    def _stock_from_bought(self, bought: dict, sold: Optional[dict] = None,
+                           dispatched: Optional[dict] = None) -> dict:
+        """Turn a {boxes, pcs, quantity} received total into a stock figure
+        carrying the raw received totals and the same figures net of what has
+        been dispatched for job work and what has been sold. pcs is tracked on
+        neither of those sides, so net_pcs is netted proportionally off the
+        received pcs-per-box ratio - the same fraction of boxes gone is
+        treated as that fraction of pcs gone, so net_pcs reaches zero exactly
+        when net_boxes does.
+
+        This is the ONE place stock arithmetic happens; stock_history_summary
+        reads its result rather than repeating the subtraction."""
         sold = sold or {}
+        dispatched = dispatched or {}
         bought_boxes = bought.get("boxes", 0) or 0
         bought_pcs = bought.get("pcs", 0) or 0
         bought_quantity = bought.get("quantity", 0) or 0
         sold_boxes = sold.get("boxes", 0) or 0
         sold_quantity = sold.get("quantity", 0) or 0
-        net_boxes = bought_boxes - sold_boxes
+        dispatched_boxes = dispatched.get("boxes", 0) or 0
+        dispatched_quantity = dispatched.get("quantity", 0) or 0
+        net_boxes = bought_boxes - dispatched_boxes - sold_boxes
         pcs_per_box = (bought_pcs / bought_boxes) if bought_boxes else 0
         return {
             "boxes": bought_boxes,
             "pcs": bought_pcs,
             "quantity": bought_quantity,
+            "dispatched_boxes": dispatched_boxes,
+            "dispatched_quantity": dispatched_quantity,
             "sold_boxes": sold_boxes,
             "sold_quantity": sold_quantity,
             "net_boxes": net_boxes,
             "net_pcs": round(net_boxes * pcs_per_box, 2) if bought_boxes else bought_pcs,
-            "net_quantity": bought_quantity - sold_quantity,
+            "net_quantity": bought_quantity - dispatched_quantity - sold_quantity,
             "unit": bought.get("unit") or None,  # the quantity's unit (SQM/PCS/...)
             "qty_unit": bought.get("qty_unit") or None,  # the boxes' unit (product.quantity_unit)
         }
 
+    def _received_totals(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity, unit, qty_unit} of everything
+        genuinely on hand's way IN: goods purchased (a purchase invoice's
+        packing list) plus goods returned from job work (a Job In). The two
+        land on different designs in the normal case - the master's on the
+        purchase side, the jobbed product's on the return side - but they are
+        summed rather than assumed disjoint, so a product that is both bought
+        directly and produced by job work totals correctly."""
+        totals = dict(self.packing_list_repo.bought_totals_by_design(company_id))
+        if not self.job_in_repo:
+            return totals
+        for design_id, returned in self.job_in_repo.received_back_totals_by_design(company_id).items():
+            existing = totals.get(design_id)
+            if existing is None:
+                totals[design_id] = dict(returned)
+                continue
+            totals[design_id] = {
+                "boxes": (existing.get("boxes") or 0) + (returned.get("boxes") or 0),
+                "pcs": (existing.get("pcs") or 0) + (returned.get("pcs") or 0),
+                "quantity": (existing.get("quantity") or 0) + (returned.get("quantity") or 0),
+                "unit": existing.get("unit") or returned.get("unit"),
+                "qty_unit": existing.get("qty_unit") or returned.get("qty_unit"),
+            }
+        return totals
+
     def stock_by_design(self, company_id: int) -> dict:
-        """design_id -> {boxes, pcs, quantity, sold_boxes, sold_quantity,
-        net_boxes, net_pcs, net_quantity} on hand, for the whole company in
-        one query. Designs never bought are simply absent."""
-        totals = self.packing_list_repo.bought_totals_by_design(company_id)
+        """design_id -> {boxes, pcs, quantity, dispatched_boxes,
+        dispatched_quantity, sold_boxes, sold_quantity, net_boxes, net_pcs,
+        net_quantity} on hand, for the whole company in one query. Designs
+        never received are simply absent."""
+        totals = self._received_totals(company_id)
         sold_totals = self.export_invoice_repo.sold_totals_by_design(company_id) if self.export_invoice_repo else {}
-        return {design_id: self._stock_from_bought(bought, sold_totals.get(design_id))
+        dispatched_totals = self.packing_list_repo.dispatched_totals_by_design(company_id)
+        return {design_id: self._stock_from_bought(bought, sold_totals.get(design_id),
+                                                   dispatched_totals.get(design_id))
                 for design_id, bought in totals.items()}
 
     def stock_for_design(self, company_id: int, design_id: int) -> dict:
-        """Current stock for a single design (zeros when never bought)."""
+        """Current stock for a single design (zeros when never received)."""
         return self.stock_by_design(company_id).get(
             design_id, {"boxes": 0, "pcs": 0, "quantity": 0,
+                        "dispatched_boxes": 0, "dispatched_quantity": 0,
                         "sold_boxes": 0, "sold_quantity": 0,
                         "net_boxes": 0, "net_pcs": 0, "net_quantity": 0,
                         "unit": None, "qty_unit": None}
@@ -2207,14 +2292,16 @@ class InventoryService:
         (net of sales) columns both stay visible for a design that's fully
         sold out rather than the row disappearing. One batched design
         lookup, no per-design queries."""
-        totals = self.packing_list_repo.bought_totals_by_design(company_id)
+        totals = self._received_totals(company_id)
         if not totals:
             return []
         sold_totals = self.export_invoice_repo.sold_totals_by_design(company_id) if self.export_invoice_repo else {}
+        dispatched_totals = self.packing_list_repo.dispatched_totals_by_design(company_id)
         rows = self.design_repo.list_by_ids_with_product(list(totals.keys()))
         in_stock = []
         for row in rows:
-            stock = self._stock_from_bought(totals.get(row["id"], {}), sold_totals.get(row["id"]))
+            stock = self._stock_from_bought(totals.get(row["id"], {}), sold_totals.get(row["id"]),
+                                            dispatched_totals.get(row["id"]))
             if stock["boxes"] or stock["pcs"] or stock["quantity"]:
                 in_stock.append({**row, "stock": stock})
         return in_stock
@@ -2280,8 +2367,13 @@ class InventoryService:
 
     def stock_history_summary(self, company_id: int, design_id: int) -> dict:
         """The design's Stock History card: one row of totals - PO Qty
-        (ordered), Received Qty (bought in via a packing list), PO Remain
-        Qty, Sale Qty (sold via an export invoice), Stock and its Alt Qty.
+        (ordered), Received Qty (listed on a purchase invoice's packing list),
+        PO Remain Qty, Dispatched Qty (sent back out on a Job Out), Sale Qty
+        (sold via an export invoice), Stock and its Alt Qty.
+
+        Stock/Alt Qty come straight off stock_for_design rather than being
+        subtracted again here, so this card and the Inventory card above it
+        can't disagree - _stock_from_bought is the single formula.
 
         PO Qty and Sale Qty are only as complete as the PO/export invoice
         lines that were actually tagged with this design (design tagging on
@@ -2289,26 +2381,28 @@ class InventoryService:
         count, the same way stock itself only counts packing lists with a
         design chosen. purchase_order_repo/export_invoice_repo are optional
         on this service, so a caller that never wired them just sees zeros
-        for those two columns instead of an error."""
-        received = self._stock_from_bought(self.packing_list_repo.bought_totals_by_design(company_id).get(
-            design_id, {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None, "qty_unit": None}
-        ))
+        for those two columns instead of an error.
+
+        Note PO Qty stays purchase-ORDER based while Received Qty is now
+        purchase-INVOICE based, so PO Remain Qty reads as "ordered but not yet
+        invoiced" - which is what it means."""
+        stock = self.stock_for_design(company_id, design_id)
         ordered = (self.purchase_order_repo.ordered_totals_by_design(company_id).get(design_id)
                    if self.purchase_order_repo else None) or {"boxes": 0, "quantity": 0, "qty_unit": None, "unit": None}
-        sold = (self.export_invoice_repo.sold_totals_by_design(company_id).get(design_id)
-                if self.export_invoice_repo else None) or {"boxes": 0, "quantity": 0, "qty_unit": None, "unit": None}
         return {
             "po_boxes": ordered["boxes"],
-            "po_qty_unit": ordered["qty_unit"] or received["qty_unit"],
-            "received_boxes": received["boxes"],
-            "received_qty_unit": received["qty_unit"],
-            "po_remain_boxes": ordered["boxes"] - received["boxes"],
-            "sale_boxes": sold["boxes"],
-            "sale_qty_unit": sold["qty_unit"] or received["qty_unit"],
-            "stock_boxes": received["boxes"] - sold["boxes"],
-            "stock_qty_unit": received["qty_unit"],
-            "stock_alt_qty": received["quantity"] - sold["quantity"],
-            "alt_unit": received["unit"],
+            "po_qty_unit": ordered["qty_unit"] or stock["qty_unit"],
+            "received_boxes": stock["boxes"],
+            "received_qty_unit": stock["qty_unit"],
+            "po_remain_boxes": ordered["boxes"] - stock["boxes"],
+            "dispatched_boxes": stock["dispatched_boxes"],
+            "dispatched_qty_unit": stock["qty_unit"],
+            "sale_boxes": stock["sold_boxes"],
+            "sale_qty_unit": stock["qty_unit"],
+            "stock_boxes": stock["net_boxes"],
+            "stock_qty_unit": stock["qty_unit"],
+            "stock_alt_qty": stock["net_quantity"],
+            "alt_unit": stock["unit"],
         }
 
 
@@ -2326,6 +2420,11 @@ _VERSIONED_TYPES = {
     "proforma_invoice": (ProformaInvoice, ProformaInvoiceItem, "invoice_number"),
     "purchase_order": (PurchaseOrder, PurchaseOrderItem, "po_number"),
     "job_work": (JobWork, JobWorkItem, "job_work_number"),
+    # A job out has no line items of its own (its goods table is read live
+    # off its purchase invoice), so the item class here is never used -
+    # get_version's items list always comes back empty.
+    "job_out": (JobOut, JobOut, "delivery_challan_no"),
+    "job_in": (JobIn, JobInItem, "stock_inward_no"),
     "purchase_invoice": (PurchaseInvoice, PurchaseInvoiceItem, "purchase_invoice_number"),
     "export_invoice": (ExportInvoice, ExportInvoiceItem, "export_invoice_number"),
     "packing_list": (PackingList, PackingListItem, "packing_list_number"),
@@ -3928,15 +4027,35 @@ class PurchaseInvoiceService:
         return [pinv for pinv in self.purchase_invoice_repo.list_for_purchase_order(purchase_order_id)
                 if pinv.company_id == company_id]
 
-    def list_for_proforma(self, purchase_orders: List[PurchaseOrder], company_id: int) -> List[PurchaseInvoice]:
-        """Every purchase invoice raised against any purchase order placed
-        under a proforma invoice - there's no direct proforma_invoice_id on
-        a purchase invoice, the link runs through its purchase order, so the
-        caller passes in the POs already loaded via
-        PurchaseOrderService.list_for_proforma."""
+    def list_for_job_work(self, job_work_id: Optional[int], company_id: int) -> List[PurchaseInvoice]:
+        if not job_work_id:
+            return []
+        return [pinv for pinv in self.purchase_invoice_repo.list_for_job_work(job_work_id)
+                if pinv.company_id == company_id]
+
+    def list_for_proforma(self, purchase_orders: List[PurchaseOrder], company_id: int,
+                           job_works: Optional[list] = None) -> List[PurchaseInvoice]:
+        """Every purchase invoice raised against any purchase order OR job
+        work placed under a proforma invoice - there's no direct
+        proforma_invoice_id on a purchase invoice, the link runs through its
+        purchase order/job work, so the caller passes in both already loaded
+        via PurchaseOrderService.list_for_proforma and
+        JobWorkService.list_for_proforma. A job work now prints/numbers as a
+        purchase order and can be invoiced the same way, so a purchase
+        invoice raised against one has to be picked up here too, not just
+        ones raised against a real purchase order."""
         result = []
+        seen_ids = set()
         for po in purchase_orders:
-            result.extend(self.list_for_purchase_order(po.id, company_id))
+            for pinv in self.list_for_purchase_order(po.id, company_id):
+                if pinv.id not in seen_ids:
+                    seen_ids.add(pinv.id)
+                    result.append(pinv)
+        for jw in job_works or []:
+            for pinv in self.list_for_job_work(jw.id, company_id):
+                if pinv.id not in seen_ids:
+                    seen_ids.add(pinv.id)
+                    result.append(pinv)
         return result
 
     def count_map_by_purchase_order(self, company_id: int) -> dict:
@@ -4486,6 +4605,749 @@ class PurchaseInvoiceService:
         self._assert_can_modify(existing, current_user)
         self._delete_pdf_file(existing.supplier_pdf_path)
         self.purchase_invoice_repo.delete(purchase_invoice_id)
+
+
+# ============================================================
+# JOB OUT SERVICE
+# ============================================================
+class JobOutService:
+    """The JOB OUT sheet - "DELIVERY CHALLAN FOR JOBWORK", the paper that
+    travels with goods going out to a job manufacturer, raised off ONE
+    purchase invoice.
+
+    The unusual thing about this service is how little it stores. Every
+    other document here snapshots its lines on save so a later edit of the
+    source can't rewrite an issued sheet; a job out does the opposite and
+    reads its whole body live off its purchase invoice every time it renders
+    (see build_sheet). That is deliberate - a challan is a dispatch note
+    AGAINST an invoice that already exists, so the two must agree; a
+    corrected invoice should correct its challan, not leave it stale. What
+    IS stored is only what's typed at dispatch time: the challan number/date,
+    the transport block and the e-way bill.
+
+    The goods table's two Description columns come from either side of the
+    JOB WORK this invoice was raised against:
+
+      "Dispatch for Jobwork"          the purchase invoice line's OWN product
+                                      - the master goods physically going out
+                                      (JobWorkItem.product_id, the source
+                                      side);
+      "Require OutPut After Jobwork"  the jobbed product those goods are
+                                      being converted INTO
+                                      (JobWorkItem.to_product_id), listed
+                                      with each of its designs and the job
+                                      quantity expected back.
+
+    Note the direction: it is the invoice that carries the master product and
+    the job work that names the jobbed one - NOT Product.master_product_id,
+    which points the other way and is not what this document follows."""
+
+    def __init__(self, job_out_repo: JobOutRepository, purchase_invoice_repo: PurchaseInvoiceRepository,
+                 product_repo: ProductRepository, company_repo: CompanyRepository,
+                 packing_list_repo: PackingListRepository,
+                 purchase_order_repo: Optional[PurchaseOrderRepository] = None,
+                 version_service: Optional["DocumentVersionService"] = None,
+                 job_work_repo: Optional[JobWorkRepository] = None,
+                 transporter_repo: Optional[TransporterRepositoryBase] = None):
+        self.job_out_repo = job_out_repo
+        self.purchase_invoice_repo = purchase_invoice_repo
+        self.product_repo = product_repo
+        # The job work behind this invoice: the ONLY place that knows which
+        # jobbed product each dispatched product becomes, and with which
+        # designs - see _jobbed_map.
+        self.job_work_repo = job_work_repo
+        # Our own letterhead, and the Dispatch From block when the form's
+        # "dispatched from our own warehouse" box is ticked.
+        self.company_repo = company_repo
+        # The invoice's own packing list, for the per-design breakdown under
+        # each goods line.
+        self.packing_list_repo = packing_list_repo
+        # For the sheet's PURCHASE ORDER NO/DATE cells - a purchase invoice
+        # doesn't carry those itself, they come from whichever purchase
+        # order(s) it was raised against.
+        self.purchase_order_repo = purchase_order_repo
+        # Resolves a TRANSPORT NAME off the typed Transport GSTIN when the
+        # name itself wasn't filled in - see _transporter_name.
+        self.transporter_repo = transporter_repo
+        self.version_service = version_service
+
+    # ---- reads --------------------------------------------------
+    def get(self, job_out_id: int, company_id: int) -> JobOut:
+        job_out = self.job_out_repo.get_by_id(job_out_id)
+        if not job_out or job_out.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's job out exists.
+            raise NotFoundError(f"Job out #{job_out_id} not found.")
+        return job_out
+
+    def list_all(self, company_id: int) -> List[JobOut]:
+        return self.job_out_repo.list_all(company_id)
+
+    def list_for_purchase_invoice(self, purchase_invoice_id: Optional[int], company_id: int) -> List[JobOut]:
+        """Every job out dispatched against this purchase invoice, newest
+        first. company_id is re-checked here because the caller passes an id
+        taken straight off an invoice."""
+        if not purchase_invoice_id:
+            return []
+        return [jo for jo in self.job_out_repo.list_for_purchase_invoice(purchase_invoice_id)
+                if jo.company_id == company_id]
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, job_out: JobOut, current_user: User):
+        if current_user.is_admin:
+            return
+        if job_out.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage job outs you created yourself.")
+
+    # ---- the printed sheet, assembled live off the purchase invoice --------
+    def _resolve_purchase_invoice(self, purchase_invoice_id, company_id: int) -> PurchaseInvoice:
+        """Only ever accept a purchase invoice from this same company - this
+        is the one id a job out is posted with, and every figure on the sheet
+        is read through it."""
+        try:
+            resolved_id = int(purchase_invoice_id) if purchase_invoice_id else None
+        except (TypeError, ValueError):
+            resolved_id = None
+        if resolved_id is None:
+            raise ValidationError("A job out must be raised against a purchase invoice.")
+        purchase_invoice = self.purchase_invoice_repo.get_by_id(resolved_id)
+        if not purchase_invoice or purchase_invoice.company_id != company_id:
+            raise ValidationError("That purchase invoice could not be found.")
+        return purchase_invoice
+
+    def _jobbed_map(self, purchase_invoice: PurchaseInvoice, company_id: int) -> dict:
+        """product_key of the DISPATCHED product -> {output_name, hsn_code,
+        designs: [{design_name, quantity, unit}]}, read off the job work(s)
+        this purchase invoice was raised against.
+
+        A job work line is exactly this document's two columns already: its
+        `product_id` is the master going out (which is what the purchase
+        invoice itself is billed for), and its `to_product_id` is the jobbed
+        product expected back, tagged with one design. Several job work lines
+        normally share one source product - one per design - so they collapse
+        into a single goods row carrying a design list.
+
+        The per-design figure is `source_quantity`, NOT `job_quantity`. Read
+        JobWorkService._build_items: source_quantity is fetched off the
+        proforma invoice's packing list keyed on the TO PRODUCT (the jobbed
+        one) plus design - it is literally the jobbed product's boxes per
+        design, which is what this column reports. job_quantity is the
+        derived ceil(converted + extra) dispatch figure and belongs to the
+        job work's own arithmetic, not here. The job work form labels them
+        "Jobed Qty" and "Job Quantity" respectively.
+
+        Empty when the invoice has no linked job work (a challan raised off
+        a plain purchase-order invoice), which prints the output column
+        blank."""
+        result: dict = {}
+        if not self.job_work_repo:
+            return result
+        for jw_id in purchase_invoice.job_work_ids or []:
+            job_work = self.job_work_repo.get_by_id(jw_id)
+            if not job_work or job_work.company_id != company_id:
+                continue
+            for item in job_work.items:
+                key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+                entry = result.setdefault(key, {
+                    "output_name": item.to_product_name, "hsn_code": item.hsn_code,
+                    "output_designs": [],
+                })
+                # First line to name an output product wins; a later blank
+                # one shouldn't blank the column back out.
+                if not entry["output_name"] and item.to_product_name:
+                    entry["output_name"] = item.to_product_name
+                if not entry["hsn_code"] and item.hsn_code:
+                    entry["hsn_code"] = item.hsn_code
+                design_name = (item.design_name or "").strip()
+                if not design_name:
+                    continue
+                existing = next(
+                    (d for d in entry["output_designs"]
+                     if _normalize_name(d["design_name"]) == _normalize_name(design_name)), None
+                )
+                if existing:
+                    existing["quantity"] += item.source_quantity or 0
+                else:
+                    entry["output_designs"].append({
+                        "design_name": design_name,
+                        "quantity": item.source_quantity or 0,
+                        "unit": item.unit or "BOX",
+                    })
+        return result
+
+    def _dispatch_designs(self, purchase_invoice: PurchaseInvoice, company_id: int) -> dict:
+        """product_key -> [{design_name, quantity, unit}, ...] off this
+        purchase invoice's OWN packing list(s) - the designs actually going
+        out, printed as small print under the DISPATCH column so the challan
+        names them rather than only a product total.
+
+        Same {design_name, quantity, unit} shape _jobbed_map emits for the
+        output column, so the sheet renders both lists through one macro.
+        Empty for a purchase invoice with no packing list yet, which prints
+        the dispatched product name on its own."""
+        details: dict = {}
+        packing_lists = [pl for pl in self.packing_list_repo.list_for_purchase_invoice(purchase_invoice.id)
+                         if pl.company_id == company_id]
+        for packing_list in packing_lists:
+            for item in packing_list.items:
+                key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+                design_name = (item.design_name or "").strip()
+                if not design_name:
+                    continue
+                rows = details.setdefault(key, [])
+                existing = next((r for r in rows if _normalize_name(r["design_name"]) == _normalize_name(design_name)), None)
+                if existing:
+                    existing["quantity"] += item.quantity_boxes or 0
+                else:
+                    rows.append({
+                        "design_name": design_name,
+                        "quantity": item.quantity_boxes or 0,
+                        "unit": item.quantity_unit or "BOX",
+                    })
+        return details
+
+    def _receiver_party(self, purchase_invoice: PurchaseInvoice, company_id: int) -> Optional[dict]:
+        """The Job Manufacturer (Receiver) block: the MANUFACTURER named on
+        the job work this invoice was raised against - the party the goods
+        physically go to for the work.
+
+        Deliberately not the purchase invoice's seller, which is a different
+        party: a job work carries both a FROM SELLER (whose goods go out, and
+        who bills us - so they become the invoice's seller) and a JOB
+        MANUFACTURER (who does the work). The challan is addressed to the
+        manufacturer, while the seller is who it dispatches FROM.
+
+        None when no linked job work names one, which build_sheet falls back
+        from - a challan raised off a plain purchase-order invoice has no job
+        manufacturer to name, so the seller is the best available party."""
+        if not self.job_work_repo:
+            return None
+        for jw_id in purchase_invoice.job_work_ids or []:
+            job_work = self.job_work_repo.get_by_id(jw_id)
+            if not job_work or job_work.company_id != company_id:
+                continue
+            if (job_work.manufacturer_name or "").strip():
+                return {
+                    "name": job_work.manufacturer_name,
+                    "address": job_work.manufacturer_address,
+                    "gstin": job_work.manufacturer_gstin,
+                }
+        return None
+
+    def _transporter_name(self, job_out: JobOut, purchase_invoice: PurchaseInvoice,
+                          company_id: int) -> str:
+        """The TRANSPORT NAME printed on the challan, in order of preference:
+
+          1. what was typed on this job out;
+          2. the name of whichever transporter in the directory carries the
+             typed Transport GSTIN - the form offers that GSTIN as a datalist
+             off the same directory, so a challan filled in that way already
+             identifies the transporter without the name being retyped;
+          3. the purchase invoice's own transporter_name.
+
+        Steps 2 and 3 are why a job out saved before this field existed still
+        prints a name rather than a blank row."""
+        typed = (job_out.transporter_name or "").strip()
+        if typed:
+            return typed
+        gstin = (job_out.transport_gstin or "").strip()
+        if gstin and self.transporter_repo:
+            for transporter in self.transporter_repo.list_all(company_id):
+                if (transporter.gstin_transporter_no or "").strip().upper() == gstin.upper():
+                    return transporter.name
+        return (purchase_invoice.transporter_name or "").strip()
+
+    def _order_references(self, purchase_invoice: PurchaseInvoice) -> list:
+        """[{number, date}] for the sheet's PURCHASE ORDER NO/DATE cells.
+
+        Reads BOTH origins a purchase invoice can have, because a job work
+        already numbers itself as a purchase order (JobWorkService.
+        _generate_number mints PO{YYYYMMDD}{seq} off the shared daily
+        counter) and prints as one. An invoice raised against a job work has
+        an empty purchase_order_ids, so looking only at real purchase orders
+        - as this did at first - left the cells blank on exactly the invoices
+        a job out is normally raised from."""
+        refs = []
+        if self.purchase_order_repo:
+            for po_id in purchase_invoice.purchase_order_ids or []:
+                purchase_order = self.purchase_order_repo.get_by_id(po_id)
+                if purchase_order and purchase_order.company_id == purchase_invoice.company_id:
+                    refs.append({"number": purchase_order.po_number, "date": purchase_order.po_date})
+        if self.job_work_repo:
+            for jw_id in purchase_invoice.job_work_ids or []:
+                job_work = self.job_work_repo.get_by_id(jw_id)
+                if job_work and job_work.company_id == purchase_invoice.company_id:
+                    refs.append({"number": job_work.job_work_number, "date": job_work.job_work_date})
+        return refs
+
+    def build_sheet(self, job_out: JobOut, company_id: int) -> dict:
+        """Everything the print template needs, resolved fresh off the
+        purchase invoice this job out points at. Returns:
+
+          company           our own letterhead (always ours, top of sheet)
+          purchase_invoice  the source invoice
+          receiver          {name, address, gstin} - the Job Manufacturer
+                            block: the linked job work's MANUFACTURER, the
+                            party the goods are sent to for the work (see
+                            _receiver_party)
+          dispatch_from     {name, address, gstin} - the purchase invoice's
+                            own SELLER, who the goods leave from, or our own
+                            company when the job out's dispatch_from_company
+                            box was ticked (they left our warehouse instead)
+          goods             one row per purchase invoice line. Each of the
+                            two Description columns carries its own product
+                            name AND its own design list, read from a
+                            different document:
+                              dispatch_name / dispatch_designs - the
+                                invoice's own product line, broken down by
+                                the invoice's OWN packing list
+                              output_name / output_designs - the jobbed
+                                product off the linked job work, broken down
+                                by that job work's design lines
+                            plus hsn_code, boxes, quantity_unit, rate and
+                            taxable_value, all from the invoice line
+          totals            {taxable, igst, cgst, sgst, invoice_value}
+          order_refs        [{number, date}] for the PURCHASE ORDER NO/DATE
+                            cells - a linked job work counts as one, since
+                            it numbers and prints as a purchase order
+          transporter_name  the TRANSPORT NAME cell, typed or resolved
+        """
+        purchase_invoice = self._resolve_purchase_invoice(job_out.purchase_invoice_id, company_id)
+        company = self.company_repo.get(company_id) if self.company_repo else None
+        jobbed = self._jobbed_map(purchase_invoice, company_id)
+        dispatch_designs = self._dispatch_designs(purchase_invoice, company_id)
+
+        # The invoice's seller: who the goods leave FROM, and who billed us.
+        seller = {
+            "name": purchase_invoice.seller_name,
+            "address": purchase_invoice.seller_address,
+            "gstin": purchase_invoice.seller_gstin,
+        }
+        # Who the goods go TO - the job work's manufacturer. Falls back to
+        # the seller only when no job work names one.
+        receiver = self._receiver_party(purchase_invoice, company_id) or seller
+        if job_out.dispatch_from_company and company:
+            dispatch_from = {
+                "name": company.company_name, "address": company.address, "gstin": company.gstin,
+            }
+        else:
+            dispatch_from = seller
+
+        goods = []
+        for item in purchase_invoice.items:
+            key = _product_key({"product_id": item.product_id, "product_name": item.product_name})
+            entry = jobbed.get(key, {})
+            goods.append({
+                "sr_no": item.sr_no,
+                # What physically goes OUT: the invoice's own product line,
+                # broken down by the invoice's own packing list.
+                "dispatch_name": item.product_name,
+                "dispatch_designs": dispatch_designs.get(key, []),
+                # What is expected BACK: the jobbed product the linked job
+                # work converts it into, broken down by that job work's own
+                # design lines. Both blank when nothing links them - the
+                # output product exists ONLY on the job work, never on the
+                # purchase invoice.
+                "output_name": entry.get("output_name") or "",
+                "output_designs": entry.get("output_designs", []),
+                "hsn_code": item.hsn_code or entry.get("hsn_code"),
+                "boxes": item.quantity_boxes,
+                "quantity_unit": item.price_per or "BOX",
+                "quantity_value": item.quantity_value,
+                "unit": item.unit,
+                "rate": item.price_inr,
+                "taxable_value": item.total_inr,
+            })
+
+        taxable = round(sum(item.total_inr or 0 for item in purchase_invoice.items), 2)
+        totals = {
+            "taxable": taxable,
+            "igst": purchase_invoice.igst_amount or 0,
+            "cgst": purchase_invoice.cgst_amount or 0,
+            "sgst": purchase_invoice.sgst_amount or 0,
+        }
+        totals["invoice_value"] = round(
+            taxable + totals["igst"] + totals["cgst"] + totals["sgst"], 2
+        )
+        return {
+            "company": company,
+            "purchase_invoice": purchase_invoice,
+            "receiver": receiver,
+            "dispatch_from": dispatch_from,
+            "goods": goods,
+            "totals": totals,
+            "order_refs": self._order_references(purchase_invoice),
+            "transporter_name": self._transporter_name(job_out, purchase_invoice, company_id),
+        }
+
+    # ---- prefill from the purchase invoice the button was pressed on -------
+    def build_prefill_from_purchase_invoice(self, purchase_invoice: PurchaseInvoice) -> dict:
+        """Caller must have already loaded `purchase_invoice` via
+        PurchaseInvoiceService.get(id, current_user.company_id), so cross-
+        company ownership is verified before we get here. Only the transport
+        block carries over (the supplier's own transporter, and its single
+        vehicle if it has exactly one) - the challan number, its date and the
+        e-way bill are the whole point of the form and are typed."""
+        return {
+            "purchase_invoice_id": purchase_invoice.id,
+            "delivery_challan_date": date.today().isoformat(),
+            "transporter_name": purchase_invoice.transporter_name or "",
+            "vehicle_no": (purchase_invoice.vehicle_numbers[0]
+                           if len(purchase_invoice.vehicle_numbers or []) == 1 else ""),
+            "remarks": purchase_invoice.remarks,
+        }
+
+    # ---- validation --------------------------------------------------
+    def _build_header(self, current_user: User, fields: dict, job_out_id: Optional[int] = None) -> JobOut:
+        delivery_challan_no = (fields.get("delivery_challan_no") or "").strip()
+        if not delivery_challan_no:
+            raise ValidationError("Delivery challan no is compulsory.")
+        purchase_invoice = self._resolve_purchase_invoice(
+            fields.get("purchase_invoice_id"), current_user.company_id
+        )
+        # UNIQUE (company_id, delivery_challan_no) would otherwise surface as
+        # a raw IntegrityError; catch it here where we can name the clash.
+        clash = self.job_out_repo.find_by_challan_no(current_user.company_id, delivery_challan_no)
+        if clash and clash.id != job_out_id:
+            raise ValidationError(
+                f"Delivery challan no {delivery_challan_no} is already used by another job out."
+            )
+        return JobOut(
+            id=None, company_id=current_user.company_id, purchase_invoice_id=purchase_invoice.id,
+            delivery_challan_no=delivery_challan_no,
+            delivery_challan_date=(fields.get("delivery_challan_date") or "").strip() or date.today().isoformat(),
+            created_by=current_user.id,
+            dispatch_from_company=str(fields.get("dispatch_from_company") or "").lower() in ("1", "true", "on", "yes"),
+            transporter_name=(fields.get("transporter_name") or "").strip() or None,
+            transport_gstin=(fields.get("transport_gstin") or "").strip() or None,
+            lr_no=(fields.get("lr_no") or "").strip() or None,
+            vehicle_no=(fields.get("vehicle_no") or "").strip() or None,
+            eway_bill_no=(fields.get("eway_bill_no") or "").strip() or None,
+            eway_bill_date=(fields.get("eway_bill_date") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+        )
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict) -> JobOut:
+        job_out = self._build_header(current_user, fields)
+        created = self.job_out_repo.create(job_out)
+        if self.version_service:
+            self.version_service.record("job_out", created, current_user.id)
+        return created
+
+    def update(self, current_user: User, job_out_id: int, fields: dict) -> JobOut:
+        existing = self.get(job_out_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        job_out = self._build_header(current_user, fields, job_out_id=job_out_id)
+        self.job_out_repo.update(job_out_id, job_out)
+        updated = self.get(job_out_id, current_user.company_id)
+        if self.version_service:
+            self.version_service.record("job_out", updated, current_user.id)
+        return updated
+
+    def delete(self, current_user: User, job_out_id: int) -> None:
+        existing = self.get(job_out_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self.job_out_repo.delete(job_out_id)
+
+
+# ============================================================
+# JOB IN SERVICE
+# ============================================================
+class JobInService:
+    """The JOB IN sheet - "JOBWORK INWARD CHALLAN / RETURN", raised against
+    ONE job out when jobbed goods come back from the manufacturer.
+
+    The mirror of JobOutService, and deliberately different in one respect:
+    a job in STORES its line items. What actually came back is typed at the
+    door and this document is the only record of it, so there is nothing to
+    derive it from - whereas a job out derives its entire sheet off its
+    purchase invoice. Those stored per-design quantities are what ADDS stock
+    for the jobbed product (JobInRepository.received_back_totals_by_design),
+    completing the cycle a job out starts by deducting the master's designs.
+
+    Everything else the sheet prints - our own company as the receiver, the
+    Job Manufacturer (Sender), our own DC number/date and the purchase
+    invoice reference - is read live off the job out, which in turn reads it
+    off its purchase invoice and job work. See build_sheet."""
+
+    def __init__(self, job_in_repo: JobInRepository, job_out_service: "JobOutService",
+                 product_repo: ProductRepository, design_repo: DesignRepository,
+                 company_repo: CompanyRepository,
+                 version_service: Optional["DocumentVersionService"] = None):
+        self.job_in_repo = job_in_repo
+        # Reused wholesale rather than re-deriving the chain: the job out
+        # already resolves the manufacturer, the purchase invoice and the
+        # jobbed product's expected designs.
+        self.job_out_service = job_out_service
+        self.product_repo = product_repo
+        self.design_repo = design_repo
+        self.company_repo = company_repo
+        self.version_service = version_service
+
+    # ---- reads --------------------------------------------------
+    def get(self, job_in_id: int, company_id: int) -> JobIn:
+        job_in = self.job_in_repo.get_by_id(job_in_id)
+        if not job_in or job_in.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's job in exists.
+            raise NotFoundError(f"Job in #{job_in_id} not found.")
+        return job_in
+
+    def list_all(self, company_id: int) -> List[JobIn]:
+        return self.job_in_repo.list_all(company_id)
+
+    def list_for_job_out(self, job_out_id: Optional[int], company_id: int) -> List[JobIn]:
+        """Every job in received against this job out, newest first."""
+        if not job_out_id:
+            return []
+        return [ji for ji in self.job_in_repo.list_for_job_out(job_out_id)
+                if ji.company_id == company_id]
+
+    # ---- permission --------------------------------------------------
+    def _assert_can_modify(self, job_in: JobIn, current_user: User):
+        if current_user.is_admin:
+            return
+        if job_in.created_by != current_user.id:
+            raise PermissionDeniedError("You can only manage job ins you created yourself.")
+
+    # ---- the printed sheet --------------------------------------------------
+    def _resolve_job_out(self, job_out_id, company_id: int) -> JobOut:
+        try:
+            resolved_id = int(job_out_id) if job_out_id else None
+        except (TypeError, ValueError):
+            resolved_id = None
+        if resolved_id is None:
+            raise ValidationError("A job in must be received against a job out.")
+        try:
+            return self.job_out_service.get(resolved_id, company_id)
+        except NotFoundError:
+            raise ValidationError("That job out could not be found.")
+
+    def build_sheet(self, job_in: JobIn, company_id: int) -> dict:
+        """Everything the print template needs. Returns:
+
+          company     our own letterhead - and also the RECEIVER block, since
+                      the goods are coming back to us
+          job_out     the challan these goods went out on (its
+                      delivery_challan_no/date print as DELIVERY CHALLAN
+                      NO/DATE, distinct from the manufacturer's own
+                      jw_delivery_challan_no on the job in itself)
+          sender      {name, address, gstin} - the Job Manufacturer (Sender),
+                      i.e. the party the job out was addressed TO
+          purchase_invoice  for the PURCHASE INVOICE NO/DATE cells
+        """
+        job_out = self.job_out_service.get(job_in.job_out_id, company_id)
+        out_sheet = self.job_out_service.build_sheet(job_out, company_id)
+        return {
+            "company": self.company_repo.get(company_id) if self.company_repo else None,
+            "job_out": job_out,
+            # The job out's RECEIVER is this document's SENDER - the goods
+            # are coming back from whoever they were sent to.
+            "sender": out_sheet["receiver"],
+            "purchase_invoice": out_sheet["purchase_invoice"],
+        }
+
+    # ---- prefill from the job out the button was pressed on ----------------
+    def build_prefill_from_job_out(self, job_out: JobOut, company_id: int) -> dict:
+        """Caller must have already loaded `job_out` via JobOutService.get(id,
+        company_id), so ownership is verified before we get here.
+
+        The lines come back prefilled with the jobbed product and one row per
+        design at the quantity EXPECTED back (the job out sheet's own output
+        designs), for the receiver to correct to what actually arrived. The
+        transport block carries over from the job out as a starting point -
+        goods often return with the same transporter - and the stock inward
+        number/date are typed."""
+        sheet = self.job_out_service.build_sheet(job_out, company_id)
+        rows = []
+        for goods in sheet["goods"]:
+            if not goods["output_name"]:
+                continue
+            for design in goods["output_designs"]:
+                rows.append({
+                    "product_name": goods["output_name"],
+                    "hsn_code": goods["hsn_code"] or "",
+                    "design_name": design["design_name"],
+                    "quantity_boxes": design["quantity"],
+                })
+        return {
+            "job_out_id": job_out.id,
+            "stock_inward_date": date.today().isoformat(),
+            "transporter_name": sheet.get("transporter_name") or "",
+            "transport_gstin": job_out.transport_gstin or "",
+            "lr_no": job_out.lr_no or "",
+            "vehicle_no": job_out.vehicle_no or "",
+            "items": rows,
+        }
+
+    def jobbed_products_for_job_out(self, job_out: JobOut, company_id: int) -> list:
+        """[{id, name, hsn_code, alt_qty, qty_unit, unit, designs:[{id, name}]}]
+        - the jobbed products this job out sends for conversion, each with its
+        full catalog design list, so the form's "add design" picker offers
+        every design of the product rather than only the ones expected back."""
+        sheet = self.job_out_service.build_sheet(job_out, company_id)
+        result = []
+        seen = set()
+        for goods in sheet["goods"]:
+            name = goods["output_name"]
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            product = self._product_by_name(name, company_id)
+            designs = self.design_repo.list_for_product(product.id) if product else []
+            result.append({
+                "id": product.id if product else "",
+                "name": name,
+                "hsn_code": (product.hsn_code if product else goods["hsn_code"]) or "",
+                "alt_qty": (product.alternate_quantity if product else "") or "",
+                "qty_unit": (product.quantity_unit if product else "BOX") or "BOX",
+                "unit": (product.alternate_quantity_unit if product else "") or "",
+                "designs": [{"id": d.id, "name": d.design_name} for d in designs],
+            })
+        return result
+
+    def _product_by_name(self, product_name: str, company_id: int):
+        """The jobbed product is named on the job work's design lines rather
+        than carried as an id through the job out (whose sheet is derived),
+        so it's resolved back to the catalog by name here - the same
+        normalized match the packing list prefills use."""
+        if not product_name:
+            return None
+        target = _normalize_name(product_name)
+        for product in self.product_repo.list_all(company_id):
+            if _normalize_name(product.product_name) == target:
+                return product
+        return None
+
+    # ---- validation --------------------------------------------------
+    def _build_items(self, company_id: int, raw_items: list) -> List[JobInItem]:
+        """One row per design received back. Boxes are typed; Alt Qty is
+        derived from the catalog product's alternate_quantity and persisted,
+        so the sheet always agrees with what was saved.
+
+        A design that can't be resolved in the catalog is kept as a plain
+        name: the row still prints, it just never moves stock (design_id is
+        what stock keys on) - the same rule packing list lines follow."""
+        items = []
+        for i, raw in enumerate(raw_items, start=1):
+            product_name = (raw.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            design_name = (raw.get("design_name") or "").strip()
+            try:
+                quantity_boxes = float(raw.get("quantity_boxes") or 0)
+            except ValueError:
+                raise ValidationError(f"Row {i} ('{design_name or product_name}'): quantity must be a number.")
+            if quantity_boxes < 0:
+                raise ValidationError(f"Row {i} ('{design_name or product_name}'): quantity can't be negative.")
+
+            # Only ever trust a product/design from this same company - same
+            # trust boundary as JobWorkService._build_items.
+            product = None
+            product_id = None
+            if raw.get("product_id"):
+                try:
+                    candidate = self.product_repo.get_by_id(int(raw["product_id"]))
+                except (TypeError, ValueError):
+                    candidate = None
+                if candidate and candidate.company_id == company_id:
+                    product, product_id = candidate, candidate.id
+            if product is None:
+                product = self._product_by_name(product_name, company_id)
+                product_id = product.id if product else None
+            if product:
+                product_name = product.product_name
+
+            design_id = None
+            if raw.get("design_id"):
+                try:
+                    design = self.design_repo.get_by_id(int(raw["design_id"]))
+                except (TypeError, ValueError):
+                    design = None
+                # The design must belong to THIS product - a job in is a
+                # stock document, so a cross-product design id here would
+                # credit the wrong product's stock (exactly the mismatch the
+                # packing list prefills already suffer from).
+                if design and product_id and design.product_id == product_id:
+                    design_id = design.id
+                    design_name = design.design_name
+            if design_id is None and design_name and product_id:
+                for design in self.design_repo.list_for_product(product_id):
+                    if _normalize_name(design.design_name) == _normalize_name(design_name):
+                        design_id = design.id
+                        design_name = design.design_name
+                        break
+
+            quantity_value = 0.0
+            if product and product.alternate_quantity:
+                try:
+                    quantity_value = round(quantity_boxes * float(product.alternate_quantity), 2)
+                except (TypeError, ValueError):
+                    quantity_value = 0.0
+
+            items.append(JobInItem(
+                id=None, job_in_id=None, sr_no=len(items) + 1,
+                product_id=product_id, product_name=product_name,
+                hsn_code=(product.hsn_code if product else (raw.get("hsn_code") or "").strip()) or None,
+                design_id=design_id, design_name=design_name or None,
+                quantity_boxes=quantity_boxes,
+                quantity_unit=(product.quantity_unit if product else "BOX") or "BOX",
+                quantity_value=quantity_value,
+                unit=(product.alternate_quantity_unit if product else "SQM") or "SQM",
+            ))
+        if not items:
+            raise ValidationError("At least one product line is compulsory.")
+        return items
+
+    def _build_header(self, current_user: User, fields: dict, items: List[JobInItem],
+                      job_in_id: Optional[int] = None) -> JobIn:
+        stock_inward_no = (fields.get("stock_inward_no") or "").strip()
+        if not stock_inward_no:
+            raise ValidationError("Stock inward no is compulsory.")
+        job_out = self._resolve_job_out(fields.get("job_out_id"), current_user.company_id)
+        clash = self.job_in_repo.find_by_inward_no(current_user.company_id, stock_inward_no)
+        if clash and clash.id != job_in_id:
+            raise ValidationError(
+                f"Stock inward no {stock_inward_no} is already used by another job in."
+            )
+        return JobIn(
+            id=None, company_id=current_user.company_id, job_out_id=job_out.id,
+            stock_inward_no=stock_inward_no,
+            stock_inward_date=(fields.get("stock_inward_date") or "").strip() or date.today().isoformat(),
+            created_by=current_user.id,
+            jw_delivery_challan_no=(fields.get("jw_delivery_challan_no") or "").strip() or None,
+            jw_delivery_challan_date=(fields.get("jw_delivery_challan_date") or "").strip() or None,
+            transporter_name=(fields.get("transporter_name") or "").strip() or None,
+            transport_gstin=(fields.get("transport_gstin") or "").strip() or None,
+            lr_no=(fields.get("lr_no") or "").strip() or None,
+            vehicle_no=(fields.get("vehicle_no") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+            items=items,
+        )
+
+    # ---- writes --------------------------------------------------
+    def create(self, current_user: User, fields: dict, raw_items: list) -> JobIn:
+        items = self._build_items(current_user.company_id, raw_items)
+        job_in = self._build_header(current_user, fields, items)
+        created = self.job_in_repo.create(job_in)
+        if self.version_service:
+            self.version_service.record("job_in", created, current_user.id)
+        return created
+
+    def update(self, current_user: User, job_in_id: int, fields: dict, raw_items: list) -> JobIn:
+        existing = self.get(job_in_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        items = self._build_items(current_user.company_id, raw_items)
+        job_in = self._build_header(current_user, fields, items, job_in_id=job_in_id)
+        self.job_in_repo.update(job_in_id, job_in)
+        updated = self.get(job_in_id, current_user.company_id)
+        if self.version_service:
+            self.version_service.record("job_in", updated, current_user.id)
+        return updated
+
+    def delete(self, current_user: User, job_in_id: int) -> None:
+        existing = self.get(job_in_id, current_user.company_id)
+        self._assert_can_modify(existing, current_user)
+        self.job_in_repo.delete(job_in_id)
 
 
 # ============================================================
@@ -6783,10 +7645,12 @@ class ProformaFulfilmentService:
 
     def __init__(self, proforma_invoice_repo: ProformaInvoiceRepository,
                  packing_list_repo: PackingListRepository,
-                 purchase_order_repo: PurchaseOrderRepository):
+                 purchase_order_repo: PurchaseOrderRepository,
+                 job_work_repo: "JobWorkRepository"):
         self.proforma_invoice_repo = proforma_invoice_repo
         self.packing_list_repo = packing_list_repo
         self.purchase_order_repo = purchase_order_repo
+        self.job_work_repo = job_work_repo
 
     # ---- the core comparison --------------------------------------------------
     def design_status_map(self, company_id: int, proforma_invoice_ids: List[int]) -> dict:
@@ -6810,16 +7674,30 @@ class ProformaFulfilmentService:
         for row in placed_rows:
             placed_index[(row["pi_id"], _design_key(row))] = row
 
+        # A design sent out for job work instead of a straight purchase is
+        # just as "handled" as one placed on a PO - it shouldn't keep
+        # showing up as still to be ordered. A job work line never carries a
+        # catalog design_id (matched by name only, see JobWorkItem's own
+        # docstring), so this is keyed by (product, normalized design name)
+        # rather than _design_key's id-preferring match.
+        job_placed_index = {}
+        for row in self.job_work_repo.source_design_totals_for_proforma(company_id, ids):
+            key = (row["pi_id"], _product_key(row), _normalize_name(row["design_name"]))
+            job_placed_index[key] = row
+
         result = {pi_id: {"designs": [], "pending": [], "over_ordered": [],
                           "placed_count": 0, "is_fully_placed": True}
                   for pi_id in ids}
         for row in required_rows:
             pi_id = row["pi_id"]
             placed = placed_index.get((pi_id, _design_key(row)))
+            job_placed = job_placed_index.get(
+                (pi_id, _product_key(row), _normalize_name(row["design_name"]))
+            )
             required_boxes = row["boxes"] or 0
             required_quantity = row["quantity"] or 0
-            placed_boxes = (placed["boxes"] if placed else 0) or 0
-            placed_quantity = (placed["quantity"] if placed else 0) or 0
+            placed_boxes = ((placed["boxes"] if placed else 0) or 0) + ((job_placed["boxes"] if job_placed else 0) or 0)
+            placed_quantity = ((placed["quantity"] if placed else 0) or 0) + ((job_placed["quantity"] if job_placed else 0) or 0)
 
             # Which column decides "done" - boxes when the invoice's packing
             # list stated them, otherwise the alternate quantity.
