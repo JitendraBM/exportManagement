@@ -781,12 +781,15 @@ class Product:
     igst_percent: Optional[float] = None
     sgst_percent: Optional[float] = None
     cgst_percent: Optional[float] = None
+    price_usd: Optional[float] = None
     quantity_unit: str = "PCS"  # what `quantity` is measured in
     quantity: Optional[str] = None  # per-box quantity (e.g. pcs per box)
     alternate_quantity_unit: str = "SQM"  # what `alternate_quantity` is measured in; prefills document lines' Unit column
     alternate_quantity: Optional[str] = None  # per-box quantity, drives the Boxes x AltQty auto-calc
     net_weight_kg: Optional[float] = None    # net weight per box (KG) - drives the packing list's Boxes x weight auto-calc
     gross_weight_kg: Optional[float] = None  # gross weight per box (KG) - same auto-calc as net_weight_kg
+    is_job_work_product: bool = False  # ticked on the product form: this product is made via job work off master_product_id
+    master_product_id: Optional[int] = None  # the product this one is job-worked from, when is_job_work_product is set
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -802,12 +805,15 @@ class Product:
             igst_percent=row["igst_percent"],
             sgst_percent=row["sgst_percent"],
             cgst_percent=row["cgst_percent"],
+            price_usd=row["price_usd"] if "price_usd" in row.keys() else None,
             quantity_unit=row["quantity_unit"] if "quantity_unit" in row.keys() else "PCS",
             quantity=row["quantity"] if "quantity" in row.keys() else None,
             alternate_quantity_unit=row["alternate_quantity_unit"] if "alternate_quantity_unit" in row.keys() else "SQM",
             alternate_quantity=row["alternate_quantity"] if "alternate_quantity" in row.keys() else None,
             net_weight_kg=row["net_weight_kg"] if "net_weight_kg" in row.keys() else None,
             gross_weight_kg=row["gross_weight_kg"] if "gross_weight_kg" in row.keys() else None,
+            is_job_work_product=bool(row["is_job_work_product"]) if "is_job_work_product" in row.keys() else False,
+            master_product_id=row["master_product_id"] if "master_product_id" in row.keys() else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -1840,6 +1846,190 @@ class PurchaseInvoice:
             - self.discount_amount + self.round_off,
             2,
         )
+
+
+@dataclass
+class JobOut:
+    """The JOB OUT sheet - "DELIVERY CHALLAN FOR JOBWORK", the paper that
+    physically travels with goods going out to a job manufacturer. Raised
+    off ONE purchase invoice and printed from it.
+
+    Deliberately the thinnest document in this app: it stores ONLY what is
+    actually typed at dispatch time (this challan's own number/date, the
+    transport block, the e-way bill). Every other thing the sheet prints -
+    the receiver party, the goods lines, HSN/qty/rate/taxable value and the
+    whole tax footer - is read LIVE off purchase_invoice_id when the sheet
+    renders (see JobOutService.build_sheet), NOT snapshotted here. That is
+    the opposite of the snapshot convention every other document in this
+    app follows, and it is intentional: a challan is a dispatch note against
+    an invoice that already exists, so it should always agree with that
+    invoice rather than preserve a stale copy of it.
+
+    `dispatch_from_company` is the form's one "which address" switch: False
+    prints the purchase invoice's own SELLER as the Dispatch From block,
+    True prints our own company (the goods left our warehouse instead). The
+    letterhead stays our own company either way - only that block swaps."""
+    id: Optional[int]
+    company_id: int
+    purchase_invoice_id: int
+    delivery_challan_no: str
+    delivery_challan_date: str
+    created_by: int
+    dispatch_from_company: bool = False
+    # Blank falls back, at render time only, to the transporter holding
+    # transport_gstin and then to the purchase invoice's own transporter_name
+    # - see JobOutService._transporter_name.
+    transporter_name: Optional[str] = None
+    transport_gstin: Optional[str] = None
+    lr_no: Optional[str] = None
+    vehicle_no: Optional[str] = None
+    eway_bill_no: Optional[str] = None
+    eway_bill_date: Optional[str] = None
+    remarks: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None            # populated by joined queries only
+    purchase_invoice_number: Optional[str] = None    # populated by joined queries only
+    seller_name: Optional[str] = None                # populated by joined queries only
+
+    @staticmethod
+    def from_row(row) -> "JobOut":
+        return JobOut(
+            id=row["id"],
+            company_id=row["company_id"],
+            purchase_invoice_id=row["purchase_invoice_id"],
+            delivery_challan_no=row["delivery_challan_no"],
+            delivery_challan_date=row["delivery_challan_date"],
+            dispatch_from_company=bool(row["dispatch_from_company"]),
+            transporter_name=row["transporter_name"] if "transporter_name" in row.keys() else None,
+            transport_gstin=row["transport_gstin"],
+            lr_no=row["lr_no"],
+            vehicle_no=row["vehicle_no"],
+            eway_bill_no=row["eway_bill_no"],
+            eway_bill_date=row["eway_bill_date"],
+            remarks=row["remarks"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
+            purchase_invoice_number=(
+                row["purchase_invoice_number"] if "purchase_invoice_number" in row.keys() else None
+            ),
+            seller_name=row["seller_name"] if "seller_name" in row.keys() else None,
+        )
+
+
+@dataclass
+class JobInItem:
+    """One DESIGN received back on a job in. `product_id`/`product_name` name
+    the jobbed product (the job work's to_product - what the challan's single
+    Description column reads), and `design_id` is what stock is keyed on: a
+    row without one still prints but never moves stock, the same rule
+    PackingListItem follows.
+
+    `quantity_value` is the Alt Qty column, computed server-side as
+    quantity_boxes x products.alternate_quantity and persisted (same
+    treatment PurchaseInvoiceItem.total_inr gets) rather than recomputed at
+    render time, so a printed sheet can't disagree with what was saved."""
+    id: Optional[int]
+    job_in_id: Optional[int]
+    sr_no: int
+    product_name: str
+    product_id: Optional[int] = None
+    hsn_code: Optional[str] = None
+    design_id: Optional[int] = None
+    design_name: Optional[str] = None
+    quantity_boxes: float = 0
+    quantity_unit: str = "BOX"   # the boxes' unit (products.quantity_unit)
+    quantity_value: float = 0    # Alt Qty
+    unit: str = "SQM"            # Alt Qty's unit (products.alternate_quantity_unit)
+
+    @staticmethod
+    def from_row(row) -> "JobInItem":
+        return JobInItem(
+            id=row["id"],
+            job_in_id=row["job_in_id"],
+            sr_no=row["sr_no"],
+            product_id=row["product_id"],
+            product_name=row["product_name"],
+            hsn_code=row["hsn_code"],
+            design_id=row["design_id"],
+            design_name=row["design_name"],
+            quantity_boxes=row["quantity_boxes"],
+            quantity_unit=row["quantity_unit"],
+            quantity_value=row["quantity_value"],
+            unit=row["unit"],
+        )
+
+
+@dataclass
+class JobIn:
+    """The JOB IN sheet - "JOBWORK INWARD CHALLAN / RETURN", raised against
+    ONE job out when jobbed goods come back from the manufacturer. The mirror
+    of JobOut, with one deliberate difference: a job in DOES carry its own
+    line items. What actually came back is typed at the door and this is the
+    only record of it - there is no upstream document to derive it from the
+    way a job out derives its whole sheet off its purchase invoice.
+
+    Those per-design quantities are what ADDS stock for the jobbed product,
+    completing the cycle a job out starts by deducting the master's designs.
+    A job out can have several job ins (goods return in lots), so stock
+    accrues per job in.
+
+    Everything else the sheet prints - our own receiver block, the Job
+    Manufacturer (Sender), our own DC number/date and the purchase invoice
+    reference - is read live off job_out_id at render time; see
+    JobInService.build_sheet."""
+    id: Optional[int]
+    company_id: int
+    job_out_id: int
+    stock_inward_no: str
+    stock_inward_date: str
+    created_by: int
+    # The job manufacturer's OWN challan for the return leg - their
+    # paperwork, not ours (ours is the job out's delivery_challan_no).
+    jw_delivery_challan_no: Optional[str] = None
+    jw_delivery_challan_date: Optional[str] = None
+    transporter_name: Optional[str] = None
+    transport_gstin: Optional[str] = None
+    lr_no: Optional[str] = None
+    vehicle_no: Optional[str] = None
+    remarks: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None        # populated by joined queries only
+    delivery_challan_no: Optional[str] = None    # populated by joined queries only (the job out's)
+    items: List[JobInItem] = field(default_factory=list)
+
+    @staticmethod
+    def from_row(row) -> "JobIn":
+        return JobIn(
+            id=row["id"],
+            company_id=row["company_id"],
+            job_out_id=row["job_out_id"],
+            stock_inward_no=row["stock_inward_no"],
+            stock_inward_date=row["stock_inward_date"],
+            jw_delivery_challan_no=row["jw_delivery_challan_no"],
+            jw_delivery_challan_date=row["jw_delivery_challan_date"],
+            transporter_name=row["transporter_name"],
+            transport_gstin=row["transport_gstin"],
+            lr_no=row["lr_no"],
+            vehicle_no=row["vehicle_no"],
+            remarks=row["remarks"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by_name=row["created_by_name"] if "created_by_name" in row.keys() else None,
+            delivery_challan_no=row["delivery_challan_no"] if "delivery_challan_no" in row.keys() else None,
+        )
+
+    @property
+    def total_boxes(self) -> float:
+        return sum(item.quantity_boxes or 0 for item in self.items)
+
+    @property
+    def total_quantity(self) -> float:
+        return sum(item.quantity_value or 0 for item in self.items)
 
 
 @dataclass

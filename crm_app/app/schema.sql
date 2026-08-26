@@ -528,6 +528,7 @@ CREATE TABLE IF NOT EXISTS products (
     igst_percent        REAL,           -- the only tax input; SGST/CGST are stored as half of it
     sgst_percent        REAL,
     cgst_percent        REAL,
+    price_usd           REAL,           -- price for the product
     quantity_unit       TEXT NOT NULL DEFAULT 'PCS',   -- what `quantity` is measured in
     quantity            TEXT,           -- per-box quantity (e.g. pcs per box)
     alternate_quantity_unit TEXT NOT NULL DEFAULT 'SQM',  -- what `alternate_quantity` is measured in; prefills document lines' Unit column
@@ -535,6 +536,8 @@ CREATE TABLE IF NOT EXISTS products (
     weight_class        TEXT,
     net_weight_kg       REAL,           -- net weight per box (KG); drives the packing list's Boxes x weight auto-calc
     gross_weight_kg     REAL,           -- gross weight per box (KG); same auto-calc as net_weight_kg
+    is_job_work_product INTEGER NOT NULL DEFAULT 0,  -- ticked on the product form: this product is made via job work off a master product
+    master_product_id   INTEGER REFERENCES products(id) ON DELETE SET NULL,  -- the product this one is job-worked from, when is_job_work_product is set
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1456,6 +1459,115 @@ CREATE TABLE IF NOT EXISTS job_work_products (
 );
 
 -- ============================================================
+-- JOB OUTS  ("DELIVERY CHALLAN FOR JOBWORK" - the sheet that physically
+-- accompanies goods going out to a job manufacturer, raised off ONE
+-- purchase invoice and printed from it. Deliberately holds nothing but the
+-- handful of figures that are typed at dispatch time: the challan's own
+-- number/date, the transport block and the e-way bill. Everything else on
+-- the printed sheet - the receiver party, the goods lines (master product
+-- dispatched -> jobbed product expected back), HSN/qty/rate/taxable value
+-- and the whole tax footer - is read LIVE off purchase_invoice_id at render
+-- time rather than snapshotted here, so a corrected purchase invoice is
+-- reflected on its challan without re-keying it (see JobOutService.
+-- build_sheet). One challan per dispatch: a purchase invoice can have
+-- several.
+--
+-- dispatch_from_company is the one "which address" switch on the form:
+-- 0 (default) prints the purchase invoice's own SELLER as the Dispatch From
+-- block, 1 prints our own company (the goods left our warehouse instead).
+-- The letterhead at the top of the sheet is always our own company either
+-- way - only that one block swaps.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS job_outs (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id            INTEGER NOT NULL REFERENCES tenants(id),
+    purchase_invoice_id   INTEGER NOT NULL REFERENCES purchase_invoices(id),
+    -- The document's own identifier, typed rather than generated: a delivery
+    -- challan number is the supplier-facing reference the goods travel under,
+    -- so it is never auto-minted the way purchase_invoice_number is.
+    delivery_challan_no   TEXT NOT NULL,
+    delivery_challan_date TEXT NOT NULL,
+    dispatch_from_company INTEGER NOT NULL DEFAULT 0,   -- 1 = dispatched from our own company/warehouse
+    transporter_name      TEXT,           -- blank falls back to the transporter holding transport_gstin, then the purchase invoice's own
+    transport_gstin       TEXT,
+    lr_no                 TEXT,
+    vehicle_no            TEXT,
+    eway_bill_no          TEXT,
+    eway_bill_date        TEXT,
+    remarks               TEXT,
+    created_by            INTEGER NOT NULL REFERENCES users(id),
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, delivery_challan_no)
+);
+
+-- ============================================================
+-- JOB INS  ("JOBWORK INWARD CHALLAN / RETURN" - the sheet that receives
+-- jobbed goods back from a job manufacturer, raised against ONE job out.
+-- The mirror of job_outs, with one crucial difference: a job in DOES store
+-- its own line items (job_in_items below), because what actually comes back
+-- is typed at the door and is the ONLY record of it - there is no upstream
+-- document to derive it from the way a job out derives its whole sheet off
+-- its purchase invoice.
+--
+-- Those stored per-design quantities are what ADDS stock for the jobbed
+-- product (see PackingListRepository.received_back_totals_by_design and
+-- InventoryService): job out deducts the master's designs, job in adds the
+-- jobbed product's. A job out can have several job ins - goods come back in
+-- lots - so stock accrues per job in rather than per job out.
+--
+-- The header's own typed fields are the stock inward number/date, the
+-- manufacturer's own challan (jw_delivery_challan_no/date - their paperwork,
+-- not ours) and the transport block. Everything else the sheet prints - our
+-- own receiver block, the Job Manufacturer (Sender), our DC number/date and
+-- the purchase invoice reference - is read live off job_out_id at render
+-- time, exactly as a job out reads its own invoice.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS job_ins (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id               INTEGER NOT NULL REFERENCES tenants(id),
+    job_out_id               INTEGER NOT NULL REFERENCES job_outs(id),
+    -- Typed, not generated - same reasoning as job_outs.delivery_challan_no.
+    stock_inward_no          TEXT NOT NULL,
+    stock_inward_date        TEXT NOT NULL,
+    -- The job manufacturer's OWN delivery challan for the return leg, as
+    -- printed on whatever paperwork arrived with the goods.
+    jw_delivery_challan_no   TEXT,
+    jw_delivery_challan_date TEXT,
+    transporter_name         TEXT,
+    transport_gstin          TEXT,
+    lr_no                    TEXT,
+    vehicle_no               TEXT,
+    remarks                  TEXT,
+    created_by               INTEGER NOT NULL REFERENCES users(id),
+    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, stock_inward_no)
+);
+
+-- One row per DESIGN received back. product_id/product_name name the jobbed
+-- product (the job work's to_product - what the challan's one Description
+-- column reads); design_id is what stock is keyed on, so a row without one
+-- prints but never moves stock, the same rule packing_list_items follow.
+-- quantity_value is the Alt Qty column, derived as
+-- quantity_boxes x products.alternate_quantity and persisted, so a printed
+-- sheet can't disagree with what was saved.
+CREATE TABLE IF NOT EXISTS job_in_items (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_in_id          INTEGER NOT NULL REFERENCES job_ins(id) ON DELETE CASCADE,
+    sr_no              INTEGER NOT NULL,
+    product_id         INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name       TEXT NOT NULL,
+    hsn_code           TEXT,
+    design_id          INTEGER REFERENCES designs(id) ON DELETE SET NULL,
+    design_name        TEXT,
+    quantity_boxes     REAL NOT NULL DEFAULT 0,
+    quantity_unit      TEXT NOT NULL DEFAULT 'BOX',   -- the boxes' unit (products.quantity_unit)
+    quantity_value     REAL NOT NULL DEFAULT 0,       -- Alt Qty
+    unit               TEXT NOT NULL DEFAULT 'SQM'    -- Alt Qty's unit (products.alternate_quantity_unit)
+);
+
+-- ============================================================
 -- DOCUMENT VERSIONS  (append-only history for quotations, proforma
 -- invoices and packing lists. Every create/update snapshots the full
 -- header+items state of the document as JSON under the next version
@@ -1513,6 +1625,9 @@ CREATE INDEX IF NOT EXISTS idx_purchase_orders_created_by ON purchase_orders(cre
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_date ON purchase_orders(po_date);
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoices_company ON purchase_invoices(company_id);
+CREATE INDEX IF NOT EXISTS idx_job_outs_purchase_invoice ON job_outs(purchase_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_job_ins_job_out ON job_ins(job_out_id);
+CREATE INDEX IF NOT EXISTS idx_job_in_items_job_in ON job_in_items(job_in_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoices_created_by ON purchase_invoices(created_by);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoices_date ON purchase_invoices(invoice_date);
 CREATE INDEX IF NOT EXISTS idx_purchase_invoices_po ON purchase_invoices(purchase_order_id);

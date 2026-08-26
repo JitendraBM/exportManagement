@@ -21,7 +21,7 @@ from app.models import (
     PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, MiscCountry, MiscUnit, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
     PurchaseOrder, PurchaseOrderItem,
-    JobWork, JobWorkItem, JobWorkProduct,
+    JobWork, JobWorkItem, JobWorkProduct, JobOut, JobIn, JobInItem,
     PurchaseInvoice, PurchaseInvoiceItem,
     ExportInvoice, ExportInvoiceItem,
     ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
@@ -1537,14 +1537,14 @@ class ProductRepository:
         new_id = self.db.execute(
             """INSERT INTO products
                (company_id, category_id, product_name, description, hsn_code,
-                igst_percent, sgst_percent, cgst_percent,
+                igst_percent, sgst_percent, cgst_percent, price_usd,
                 quantity_unit, quantity, alternate_quantity_unit, alternate_quantity,
-                net_weight_kg, gross_weight_kg)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                net_weight_kg, gross_weight_kg, is_job_work_product, master_product_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (product.company_id, product.category_id, product.product_name, product.description,
-             product.hsn_code, product.igst_percent, product.sgst_percent, product.cgst_percent,
+             product.hsn_code, product.igst_percent, product.sgst_percent, product.cgst_percent, product.price_usd,
              product.quantity_unit, product.quantity, product.alternate_quantity_unit, product.alternate_quantity,
-             product.net_weight_kg, product.gross_weight_kg),
+             product.net_weight_kg, product.gross_weight_kg, int(product.is_job_work_product), product.master_product_id),
         )
         return self.get_by_id(new_id)
 
@@ -1797,6 +1797,14 @@ def _cascade_delete_purchase_invoice(conn, purchase_invoice_id: int) -> None:
         "SELECT supplier_pdf_path FROM purchase_invoices WHERE id = ?", (purchase_invoice_id,)
     ).fetchone()
     conn.execute("DELETE FROM packing_lists WHERE purchase_invoice_id = ?", (purchase_invoice_id,))
+    # A job out reads its whole sheet live off this invoice, so it can't
+    # outlive it - there'd be nothing left to render. A job in reads its own
+    # off the job out for the same reason, so it goes first.
+    conn.execute(
+        "DELETE FROM job_ins WHERE job_out_id IN "
+        "(SELECT id FROM job_outs WHERE purchase_invoice_id = ?)", (purchase_invoice_id,)
+    )
+    conn.execute("DELETE FROM job_outs WHERE purchase_invoice_id = ?", (purchase_invoice_id,))
     conn.execute("DELETE FROM purchase_invoices WHERE id = ?", (purchase_invoice_id,))
     if row:
         _delete_purchase_invoice_pdf_files([row["supplier_pdf_path"]])
@@ -3221,6 +3229,37 @@ class JobWorkRepository:
         )
         return {row["proforma_invoice_id"]: row["cnt"] for row in rows}
 
+    def source_design_totals_for_proforma(self, company_id: int, proforma_invoice_ids: List[int]) -> List[dict]:
+        """What's already been sent out for job work, per (invoice, design) -
+        the job-work analogue of PackingListRepository.
+        design_totals_for_linked_purchase_orders, so
+        ProformaFulfilmentService.design_status_map can treat a design
+        already handed off for conversion the same as one already placed on
+        a purchase order: no longer "still to be ordered". Read straight off
+        job_work_items' own to_product_id/design_name/source_quantity - a
+        job work never gets a packing list of its own on the SOURCE side, so
+        there is no packing-list row to total here. Keyed by to_product_id/
+        to_product_name (the invoice's OWN product being converted, see
+        JobWorkService's own docstring) - design_id is never set on a job
+        work line (matched by name only), so callers must join on the
+        design NAME, not _design_key's id-preferring match."""
+        if not proforma_invoice_ids:
+            return []
+        placeholders = ",".join("?" for _ in proforma_invoice_ids)
+        rows = self.db.query(
+            f"""SELECT jw.proforma_invoice_id AS pi_id,
+                       jwi.to_product_id AS product_id, jwi.to_product_name AS product_name,
+                       jwi.design_name AS design_name,
+                       COALESCE(SUM(jwi.source_quantity), 0) AS boxes,
+                       0 AS quantity, MIN(jwi.unit) AS unit
+                FROM job_work_items jwi
+                JOIN job_works jw ON jw.id = jwi.job_work_id
+                WHERE jw.company_id = ? AND jw.proforma_invoice_id IN ({placeholders})
+                GROUP BY pi_id, jwi.to_product_id, jwi.to_product_name, jwi.design_name""",
+            (company_id, *proforma_invoice_ids),
+        )
+        return [dict(r) for r in rows]
+
     def create(self, job_work: JobWork) -> JobWork:
         new_id = self.db.execute(
             """INSERT INTO job_works
@@ -3605,6 +3644,228 @@ class PurchaseInvoiceRepository:
             _cascade_delete_purchase_invoice(conn, purchase_invoice_id)
 
 
+class JobOutRepository:
+    """Persistence for the JOB OUT sheet (the delivery challan for jobwork).
+    A header-only table - no line items at all, because a job out reads its
+    goods lines live off its purchase invoice at render time rather than
+    snapshotting them (see models.JobOut). No number sequence either: the
+    delivery challan number is typed, not minted."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    _SELECT = """
+        SELECT jo.*, u.full_name AS created_by_name,
+               pinv.purchase_invoice_number AS purchase_invoice_number,
+               pinv.seller_name AS seller_name
+        FROM job_outs jo
+        JOIN users u ON u.id = jo.created_by
+        JOIN purchase_invoices pinv ON pinv.id = jo.purchase_invoice_id
+    """
+
+    def get_by_id(self, job_out_id: int) -> Optional[JobOut]:
+        row = self.db.query_one(self._SELECT + " WHERE jo.id = ?", (job_out_id,))
+        return JobOut.from_row(row) if row else None
+
+    def list_all(self, company_id: int) -> List[JobOut]:
+        rows = self.db.query(
+            self._SELECT + " WHERE jo.company_id = ? "
+                           "ORDER BY jo.delivery_challan_date DESC, jo.id DESC",
+            (company_id,),
+        )
+        return [JobOut.from_row(r) for r in rows]
+
+    def list_for_purchase_invoice(self, purchase_invoice_id: int) -> List[JobOut]:
+        """Every job out dispatched against one purchase invoice, newest
+        first - one invoice's goods can go out in more than one lot."""
+        rows = self.db.query(
+            self._SELECT + " WHERE jo.purchase_invoice_id = ? ORDER BY jo.id DESC",
+            (purchase_invoice_id,),
+        )
+        return [JobOut.from_row(r) for r in rows]
+
+    def find_by_challan_no(self, company_id: int, delivery_challan_no: str) -> Optional[JobOut]:
+        """Backs the friendly duplicate-number message in JobOutService -
+        the UNIQUE (company_id, delivery_challan_no) constraint would
+        otherwise surface as a raw IntegrityError."""
+        row = self.db.query_one(
+            self._SELECT + " WHERE jo.company_id = ? AND jo.delivery_challan_no = ?",
+            (company_id, delivery_challan_no),
+        )
+        return JobOut.from_row(row) if row else None
+
+    def create(self, job_out: JobOut) -> JobOut:
+        new_id = self.db.execute(
+            """INSERT INTO job_outs
+               (company_id, purchase_invoice_id, delivery_challan_no, delivery_challan_date,
+                dispatch_from_company, transporter_name, transport_gstin, lr_no, vehicle_no,
+                eway_bill_no, eway_bill_date, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_out.company_id, job_out.purchase_invoice_id, job_out.delivery_challan_no,
+             job_out.delivery_challan_date, int(job_out.dispatch_from_company),
+             job_out.transporter_name, job_out.transport_gstin, job_out.lr_no, job_out.vehicle_no,
+             job_out.eway_bill_no, job_out.eway_bill_date, job_out.remarks, job_out.created_by),
+        )
+        return self.get_by_id(new_id)
+
+    def update(self, job_out_id: int, job_out: JobOut) -> None:
+        self.db.execute(
+            """UPDATE job_outs SET purchase_invoice_id = ?, delivery_challan_no = ?,
+                                   delivery_challan_date = ?, dispatch_from_company = ?,
+                                   transporter_name = ?, transport_gstin = ?, lr_no = ?, vehicle_no = ?,
+                                   eway_bill_no = ?, eway_bill_date = ?, remarks = ?,
+                                   updated_at = datetime('now')
+               WHERE id = ?""",
+            (job_out.purchase_invoice_id, job_out.delivery_challan_no, job_out.delivery_challan_date,
+             int(job_out.dispatch_from_company), job_out.transporter_name, job_out.transport_gstin,
+             job_out.lr_no, job_out.vehicle_no, job_out.eway_bill_no, job_out.eway_bill_date,
+             job_out.remarks, job_out_id),
+        )
+
+    def delete(self, job_out_id: int) -> None:
+        """A job out owns no child rows of its own, but a job in receives
+        AGAINST one and reads its whole sheet off it, so those are cascaded
+        the same way a purchase invoice cascades its job outs."""
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM job_ins WHERE job_out_id = ?", (job_out_id,))
+            conn.execute("DELETE FROM job_outs WHERE id = ?", (job_out_id,))
+
+
+class JobInRepository:
+    """Persistence for the JOB IN sheet (the jobwork inward challan). Unlike
+    JobOutRepository this one owns line items, because what came back is
+    typed rather than derived - see models.JobIn."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    _SELECT = """
+        SELECT ji.*, u.full_name AS created_by_name,
+               jo.delivery_challan_no AS delivery_challan_no
+        FROM job_ins ji
+        JOIN users u ON u.id = ji.created_by
+        JOIN job_outs jo ON jo.id = ji.job_out_id
+    """
+
+    def get_by_id(self, job_in_id: int) -> Optional[JobIn]:
+        row = self.db.query_one(self._SELECT + " WHERE ji.id = ?", (job_in_id,))
+        if not row:
+            return None
+        job_in = JobIn.from_row(row)
+        item_rows = self.db.query(
+            "SELECT * FROM job_in_items WHERE job_in_id = ? ORDER BY sr_no", (job_in_id,)
+        )
+        job_in.items = [JobInItem.from_row(r) for r in item_rows]
+        return job_in
+
+    def list_all(self, company_id: int) -> List[JobIn]:
+        rows = self.db.query(
+            self._SELECT + " WHERE ji.company_id = ? "
+                           "ORDER BY ji.stock_inward_date DESC, ji.id DESC",
+            (company_id,),
+        )
+        return [JobIn.from_row(r) for r in rows]
+
+    def list_for_job_out(self, job_out_id: int) -> List[JobIn]:
+        """Every job in received against one job out, newest first - goods
+        come back in lots, so there can be several."""
+        rows = self.db.query(
+            self._SELECT + " WHERE ji.job_out_id = ? ORDER BY ji.id DESC", (job_out_id,)
+        )
+        return [JobIn.from_row(r) for r in rows]
+
+    def find_by_inward_no(self, company_id: int, stock_inward_no: str) -> Optional[JobIn]:
+        """Backs the friendly duplicate-number message in JobInService - the
+        UNIQUE (company_id, stock_inward_no) constraint would otherwise
+        surface as a raw IntegrityError."""
+        row = self.db.query_one(
+            self._SELECT + " WHERE ji.company_id = ? AND ji.stock_inward_no = ?",
+            (company_id, stock_inward_no),
+        )
+        return JobIn.from_row(row) if row else None
+
+    def received_back_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} received back from job work -
+        the Job In side of stock, in the same shape
+        PackingListRepository.bought_totals_by_design returns so
+        InventoryService can add it straight on.
+
+        This is what puts the JOBBED product into stock, completing the cycle
+        a job out starts by deducting the master's designs. Summed across
+        every job in, so several partial returns against one job out
+        accumulate correctly. `pcs` is always 0 - a job in counts boxes and
+        an alternate quantity, not pieces."""
+        rows = self.db.query(
+            """SELECT i.design_id AS design_id,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(p.alternate_quantity_unit) AS unit,
+                      MIN(p.quantity_unit) AS qty_unit
+               FROM job_ins ji
+               JOIN job_in_items i ON i.job_in_id = ji.id
+               JOIN designs d ON d.id = i.design_id
+               JOIN products p ON p.id = d.product_id
+               WHERE ji.company_id = ?
+                 AND i.design_id IS NOT NULL
+               GROUP BY i.design_id""",
+            (company_id,),
+        )
+        return {r["design_id"]: {"boxes": r["boxes"], "pcs": 0,
+                                 "quantity": r["quantity"], "unit": r["unit"],
+                                 "qty_unit": r["qty_unit"]}
+                for r in rows}
+
+    def create(self, job_in: JobIn) -> JobIn:
+        new_id = self.db.execute(
+            """INSERT INTO job_ins
+               (company_id, job_out_id, stock_inward_no, stock_inward_date,
+                jw_delivery_challan_no, jw_delivery_challan_date,
+                transporter_name, transport_gstin, lr_no, vehicle_no, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_in.company_id, job_in.job_out_id, job_in.stock_inward_no,
+             job_in.stock_inward_date, job_in.jw_delivery_challan_no,
+             job_in.jw_delivery_challan_date, job_in.transporter_name,
+             job_in.transport_gstin, job_in.lr_no, job_in.vehicle_no,
+             job_in.remarks, job_in.created_by),
+        )
+        self._replace_items(new_id, job_in.items)
+        return self.get_by_id(new_id)
+
+    def update(self, job_in_id: int, job_in: JobIn) -> None:
+        self.db.execute(
+            """UPDATE job_ins SET job_out_id = ?, stock_inward_no = ?, stock_inward_date = ?,
+                                  jw_delivery_challan_no = ?, jw_delivery_challan_date = ?,
+                                  transporter_name = ?, transport_gstin = ?, lr_no = ?,
+                                  vehicle_no = ?, remarks = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (job_in.job_out_id, job_in.stock_inward_no, job_in.stock_inward_date,
+             job_in.jw_delivery_challan_no, job_in.jw_delivery_challan_date,
+             job_in.transporter_name, job_in.transport_gstin, job_in.lr_no,
+             job_in.vehicle_no, job_in.remarks, job_in_id),
+        )
+        self._replace_items(job_in_id, job_in.items)
+
+    def _replace_items(self, job_in_id: int, items: List[JobInItem]) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM job_in_items WHERE job_in_id = ?", (job_in_id,))
+            for item in items:
+                conn.execute(
+                    """INSERT INTO job_in_items
+                       (job_in_id, sr_no, product_id, product_name, hsn_code,
+                        design_id, design_name, quantity_boxes, quantity_unit,
+                        quantity_value, unit)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job_in_id, item.sr_no, item.product_id, item.product_name,
+                     item.hsn_code, item.design_id, item.design_name,
+                     item.quantity_boxes, item.quantity_unit, item.quantity_value, item.unit),
+                )
+
+    def delete(self, job_in_id: int) -> None:
+        """job_in_items cascade on the FK. Deleting a job in takes its stock
+        back out, since stock is summed live off these rows."""
+        self.db.execute("DELETE FROM job_ins WHERE id = ?", (job_in_id,))
+
+
 class PackingListRepository:
     """Mirrors ProformaInvoiceRepository layer-for-layer: header + line
     items, day-scoped number sequence, reference-only lead link."""
@@ -3831,34 +4092,97 @@ class PackingListRepository:
         source_purchase_order_ids); without it the answer would be every
         design ever bought for that product across every order, which lists
         designs that were never on this shipment. Only falls back to
-        company-wide when the caller can't resolve any source PO at all."""
+        company-wide when the caller can't resolve any source PO at all.
+
+        Reads the same receipt event as bought_totals_by_design (the purchase
+        INVOICE's packing list, see _RECEIVED_ORIGIN) so this allocation check
+        and the Inventory screens can't disagree about how much of a design
+        came in. The PO scoping above still applies, resolved one step further
+        along: the purchase invoices raised against those purchase orders,
+        via either purchase_invoices.purchase_order_id or the
+        purchase_invoice_purchase_order_links table for a multi-PO invoice."""
         if not product_id:
             return []
         sql = f"""SELECT {self._DESIGN_TOTALS_COLUMNS}
                   FROM packing_lists pl
                   JOIN packing_list_items i ON i.packing_list_id = pl.id
-                  WHERE pl.company_id = ? AND pl.purchase_order_id IS NOT NULL
+                  WHERE pl.company_id = ? AND {self._RECEIVED_ORIGIN}
                     AND i.product_id = ? AND i.design_id IS NOT NULL"""
         params: list = [company_id, product_id]
         if purchase_order_ids:
-            sql += f" AND pl.purchase_order_id IN ({','.join('?' for _ in purchase_order_ids)})"
+            placeholders = ",".join("?" for _ in purchase_order_ids)
+            sql += f""" AND pl.purchase_invoice_id IN (
+                          SELECT pinv.id FROM purchase_invoices pinv
+                           WHERE pinv.purchase_order_id IN ({placeholders})
+                          UNION
+                          SELECT l.purchase_invoice_id
+                            FROM purchase_invoice_purchase_order_links l
+                           WHERE l.purchase_order_id IN ({placeholders}))"""
+            params.extend(purchase_order_ids)
             params.extend(purchase_order_ids)
         sql += """ GROUP BY i.product_id, i.product_name, i.design_id, i.design_name
                    ORDER BY i.design_name"""
         return [dict(r) for r in self.db.query(sql, tuple(params))]
 
-    # ---- inventory (designs bought = placed on a purchase order's, or a job
-    # work's, packing list) ----
-    # A packing list carrying a purchase_order_id is a PO's packing list: the
-    # goods we've bought in. A job work is now treated the same way (it prints
-    # as a purchase order, see JobWorkService), so its own packing list
-    # (job_work_id set instead) counts toward stock the same way. Summed per
-    # design, that's everything purchased; sales (yet to be modelled) will
-    # subtract from the same totals later.
+    # ---- inventory (designs received = listed on a PURCHASE INVOICE's own
+    # packing list) ----
+    # Stock per design is: everything received (bought_totals_by_design), less
+    # everything sent back out for job work (dispatched_totals_by_design),
+    # less everything sold (ExportInvoiceRepository.sold_totals_by_design).
+    # The goods-received event is the PURCHASE INVOICE's own packing list -
+    # shared by bought_totals_by_design and design_totals_for_product so the
+    # Inventory screens and the export allocation check can never drift apart.
+    _RECEIVED_ORIGIN = "pl.purchase_invoice_id IS NOT NULL"
+
     def bought_totals_by_design(self, company_id: int) -> dict:
-        """design_id -> {boxes, pcs, quantity} bought across every purchase
-        order's or job work's packing list. Rows with no design_id (hand-typed
-        lines) are skipped - stock is only tracked for real catalog designs."""
+        """design_id -> {boxes, pcs, quantity} received across every PURCHASE
+        INVOICE's packing list. Rows with no design_id (hand-typed lines) are
+        skipped - stock is only tracked for real catalog designs.
+
+        The purchase invoice is the receipt event, and a purchase order's or
+        job work's own packing list is deliberately NOT counted: the same
+        goods are normally listed on both (an invoice raised from a PO copies
+        that PO's packing list wholesale, and a job-work-sourced invoice has a
+        job work packing list beside its own), so counting either as well
+        would double every purchase. Goods ordered but not yet invoiced simply
+        aren't in stock yet, which is the intended reading."""
+        rows = self.db.query(
+            f"""SELECT i.design_id AS design_id,
+                      COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
+                      COALESCE(SUM(i.pcs), 0) AS pcs,
+                      COALESCE(SUM(i.quantity_value), 0) AS quantity,
+                      MIN(p.alternate_quantity_unit) AS unit,
+                      MIN(p.quantity_unit) AS qty_unit
+               FROM packing_lists pl
+               JOIN packing_list_items i ON i.packing_list_id = pl.id
+               JOIN designs d ON d.id = i.design_id
+               JOIN products p ON p.id = d.product_id
+               WHERE pl.company_id = ?
+                 AND {self._RECEIVED_ORIGIN}
+                 AND i.design_id IS NOT NULL
+               GROUP BY i.design_id""",
+            (company_id,),
+        )
+        return {r["design_id"]: {"boxes": r["boxes"], "pcs": r["pcs"],
+                                 "quantity": r["quantity"], "unit": r["unit"],
+                                 "qty_unit": r["qty_unit"]}
+                for r in rows}
+
+    def dispatched_totals_by_design(self, company_id: int) -> dict:
+        """design_id -> {boxes, pcs, quantity} sent back out for job work -
+        the Job Out side of stock, in the same shape bought_totals_by_design
+        returns so InventoryService can net one straight off the other.
+
+        Counted per PURCHASE INVOICE THAT HAS AT LEAST ONE JOB OUT, not per
+        job out. A job out stores no per-design quantities of its own (its
+        whole sheet is derived live off its invoice - see models.JobOut), so
+        deducting once per challan would deduct the invoice's full quantity
+        again for every extra lot it goes out in. Keying on the invoice makes
+        the total always right; the cost is that the timing is coarse - the
+        invoice's goods are treated as dispatched in full as soon as the
+        first challan exists, rather than lot by lot. Storing per-design
+        quantities on the job out is what would make partial dispatch exact,
+        and that belongs with the Job In work rather than here."""
         rows = self.db.query(
             """SELECT i.design_id AS design_id,
                       COALESCE(SUM(i.quantity_boxes), 0) AS boxes,
@@ -3871,8 +4195,10 @@ class PackingListRepository:
                JOIN designs d ON d.id = i.design_id
                JOIN products p ON p.id = d.product_id
                WHERE pl.company_id = ?
-                 AND (pl.purchase_order_id IS NOT NULL OR pl.job_work_id IS NOT NULL)
+                 AND pl.purchase_invoice_id IS NOT NULL
                  AND i.design_id IS NOT NULL
+                 AND EXISTS (SELECT 1 FROM job_outs jo
+                              WHERE jo.purchase_invoice_id = pl.purchase_invoice_id)
                GROUP BY i.design_id""",
             (company_id,),
         )

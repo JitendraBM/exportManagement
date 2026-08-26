@@ -5,12 +5,18 @@ Inventory: the same catalog browser as Products (categories -> products ->
 sub categories -> designs), but read-only and focused on stock on hand. The
 design tables gain a "current stock" column, and a design's page drops the
 Product tax/packing block in favour of an Inventory block plus a
-Purchase/Sale history of every time it was bought (placed on a purchase
-order's packing list) or sold (not modelled yet).
+Purchase/Sale history of every time it was received or sold.
+
+Stock per design is everything RECEIVED (listed on a purchase invoice's own
+packing list), less everything DISPATCHED back out for job work (belonging to
+an invoice that has a Job Out challan against it), less everything SOLD
+(allocated on an export invoice's Designs Packing List). Goods coming back
+from job work aren't modelled yet - that's the Job In document, still to be
+built. See InventoryService for the arithmetic.
 
 Everyone signed in can browse; nothing here is editable (stock is derived
-from the purchase-order packing lists, so it's maintained through the
-Documents pipeline, not typed in here).
+from the documents themselves, so it's maintained through the Documents
+pipeline, not typed in here).
 """
 
 from flask import Blueprint, render_template, current_app, g, abort, request
