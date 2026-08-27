@@ -25,7 +25,7 @@ from app.repositories import (
     QuotationRepository, ProformaInvoiceRepository, PurchaseOrderRepository, JobWorkRepository,
     PurchaseInvoiceRepository, JobOutRepository, JobInRepository,
     ExportInvoiceRepository, ExportPackingListRepository, ExportDesignsPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    PackingListRepository, LoadingPlanningRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
 )
 from app.services import (
@@ -33,7 +33,7 @@ from app.services import (
     CommunicationService, StatsService, CompanyService, ReportService, ProductService,
     QuotationService, ProformaInvoiceService, PurchaseOrderService, JobWorkService, PurchaseInvoiceService,
     JobOutService, JobInService,
-    ExportInvoiceService, ExportPackingListService, PackingListService, BackupService,
+    ExportInvoiceService, ExportPackingListService, PackingListService, LoadingPlanningService, BackupService,
     DocumentVersionService, ProformaFulfilmentService,
     InventoryService, PermitService, BookingDetailService, MiscListService,
 )
@@ -78,6 +78,7 @@ class ServiceContainer:
             db, self.export_invoice_repo, self.export_packing_list_repo
         )
         self.packing_list_repo = PackingListRepository(db)
+        self.loading_planning_repo = LoadingPlanningRepository(db)
         self.document_version_repo = DocumentVersionRepository(db)
         self.permit_repo = PermitRepository(db)
         self.booking_detail_repo = BookingDetailRepository(db)
@@ -177,6 +178,16 @@ class ServiceContainer:
             self.quotation_repo, self.purchase_order_repo, self.proforma_fulfilment_service,
             self.purchase_invoice_repo, self.job_work_repo,
         )
+        # Loading Planning. Wired after packing_list_repo because its whole
+        # reason for existing is that hop: it traces a proforma invoice
+        # through its purchase orders to THOSE ORDERS' packing lists, which
+        # is the only place the design split lives (a PO orders 1268 boxes of
+        # a product; its packing list says those are four designs of 317).
+        self.loading_planning_service = LoadingPlanningService(
+            self.loading_planning_repo, self.proforma_invoice_repo, self.purchase_order_repo,
+            self.packing_list_repo, self.booking_detail_repo, self.product_repo,
+            self.product_pallet_type_repo,
+        )
         self.purchase_invoice_service = PurchaseInvoiceService(
             self.purchase_invoice_repo, self.product_repo, self.lead_repo, self.purchase_order_repo,
             self.document_version_service, self.party_repos, self.supplier_repo,
@@ -204,6 +215,7 @@ class ServiceContainer:
         self.export_packing_list_service = ExportPackingListService(
             self.export_packing_list_repo, self.export_invoice_repo, self.product_repo, self.category_repo,
             self.design_repo, self.packing_list_repo, self.export_designs_packing_list_repo,
+            self.job_in_repo,
         )
         self.export_invoice_service = ExportInvoiceService(
             self.export_invoice_repo, self.product_repo, self.lead_repo, self.proforma_invoice_repo,
@@ -211,6 +223,7 @@ class ServiceContainer:
             self.document_version_service, self.party_repos,
             Config.EXPORT_INVOICE_UPLOAD_FOLDER, Config.ALLOWED_DOCUMENT_EXTENSIONS,
             self.export_packing_list_service, self.misc_list_service,
+            self.job_work_repo, self.job_out_repo, self.job_in_repo, self.job_out_service,
         )
         self.backup_service = BackupService(
             db, Config.DATABASE_PATH,
@@ -311,6 +324,7 @@ def create_app(config_class=Config) -> Flask:
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
     from app.routes.booking_details import booking_details_bp
+    from app.routes.loading_plannings import loading_plannings_bp
     from app.routes.quotations import quotations_bp
     from app.routes.proforma_invoices import proforma_invoices_bp
     from app.routes.purchase_orders import purchase_orders_bp
@@ -351,6 +365,7 @@ def create_app(config_class=Config) -> Flask:
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)
     app.register_blueprint(booking_details_bp)
+    app.register_blueprint(loading_plannings_bp)
     app.register_blueprint(quotations_bp)
     app.register_blueprint(proforma_invoices_bp)
     app.register_blueprint(purchase_orders_bp)

@@ -83,7 +83,7 @@
         <tr>
           <td class="text-sm">{{ num(stock_history.po_boxes) }}{% if stock_history.po_qty_unit %} {{ stock_history.po_qty_unit }}{% endif %}</td>
           <td class="text-sm">{{ num(stock_history.received_boxes) }}{% if stock_history.received_qty_unit %} {{ stock_history.received_qty_unit }}{% endif %}</td>
-          <td class="text-sm">{{ num(stock_history.po_remain_boxes) }}{% if stock_history.po_qty_unit %} {{ stock_history.po_qty_unit }}{% endif %}</td>
+          <td class="text-sm">{{ num(stock_history.po_remain_boxes) if stock_history.po_remain_boxes is not none else '—' }}{% if stock_history.po_qty_unit and stock_history.po_remain_boxes is not none %} {{ stock_history.po_qty_unit }}{% endif %}</td>
           <td class="text-sm">{{ num(stock_history.dispatched_boxes) }}{% if stock_history.dispatched_qty_unit %} {{ stock_history.dispatched_qty_unit }}{% endif %}</td>
           <td class="text-sm">{{ num(stock_history.sale_boxes) }}{% if stock_history.sale_qty_unit %} {{ stock_history.sale_qty_unit }}{% endif %}</td>
           <td class="text-sm">{{ num(stock_history.stock_boxes) }}{% if stock_history.stock_qty_unit %} {{ stock_history.stock_qty_unit }}{% endif %}</td>
@@ -92,7 +92,7 @@
       </tbody>
     </table>
   </div>
-  <div class="text-sm text-soft" style="margin-top:.5rem;">PO Qty and Sale Qty only count Purchase Order / Export Invoice lines that were tagged with this design when saved. PO Remain Qty is what's been ordered but not yet invoiced. Dispatched Qty is stock sent back out on a Job Out challan.</div>
+  <div class="text-sm text-soft" style="margin-top:.5rem;">PO Qty and Sale Qty only count Purchase Order / Export Invoice lines that were tagged with this design when saved. PO Remain Qty is what's been ordered but not yet invoiced; it shows &mdash; when the design's stock was received through job work rather than a purchase order. Dispatched Qty is stock sent back out on a Job Out challan.</div>
 </div>
 
 <div class="card">

@@ -821,20 +821,33 @@ class Product:
 
 @dataclass
 class ProductPalletType:
-    """One named pallet storage option of a product (e.g. "pine pallet"
-    holding 31 boxes). A product can carry any number of these; every
-    product ALSO implicitly offers "loose" (goods sold unpalletised, zero
-    pallets), which is never stored. The alternate quantity one pallet
-    holds is always derived - boxes_per_pallet x the product's per-box
-    alternate_quantity - so it can't drift when the product spec changes."""
+    """One named packing option of a product (e.g. "pine pallet" holding 31
+    boxes, or a "CTN" holding 30 pieces). A product can carry any number of
+    these; every product ALSO implicitly offers "loose" (goods sold
+    unpalletised, zero pallets), which is never stored. The alternate
+    quantity one pallet holds is always derived - boxes_per_pallet x the
+    product's per-box alternate_quantity - so it can't drift when the
+    product spec changes.
+
+    `unit_kind` says which LEVEL of packing this is: a 'carton' is an inner
+    box that then goes ON a pallet, a 'pallet' is what a forklift moves into
+    the container. Tiles have no carton level (boxes sit straight on the
+    pallet); hardware goes pieces -> carton -> pallet. Loading Planning is
+    the only thing that reads it - see LoadingPlanningPallet.gross_weight_kg
+    for how the two tares stack."""
     id: Optional[int]
     company_id: int
     product_id: int
     name: str
     boxes_per_pallet: float
     weight_kg: Optional[float] = None
+    unit_kind: str = "pallet"  # 'pallet' | 'carton'
     sort_order: int = 0
     created_at: Optional[str] = None
+
+    @property
+    def is_carton(self) -> bool:
+        return (self.unit_kind or "pallet") == "carton"
 
     @staticmethod
     def from_row(row) -> "ProductPalletType":
@@ -845,6 +858,7 @@ class ProductPalletType:
             name=row["name"],
             boxes_per_pallet=row["boxes_per_pallet"],
             weight_kg=row["weight_kg"] if "weight_kg" in row.keys() else None,
+            unit_kind=(row["unit_kind"] if "unit_kind" in row.keys() else None) or "pallet",
             sort_order=row["sort_order"],
             created_at=row["created_at"],
         )
@@ -2604,6 +2618,10 @@ class ExportInvoice(CifMoneyLadder):
     examination_date: Optional[str] = None
     location_code_08b: Optional[str] = None
     booking_no: Optional[str] = None
+    # The Booking Detail the 11B rows were copied from. booking_no is what
+    # prints; this is the durable link, so the invoice still says WHICH
+    # booking it was built from after a renumber. The rows stay a snapshot.
+    booking_detail_id: Optional[int] = None
     vessel_name: Optional[str] = None  # vessel or flight name
     voyage_no: Optional[str] = None
     # Both print together in the "Vessel / Flight Name & No" cell of both
@@ -2654,6 +2672,7 @@ class ExportInvoice(CifMoneyLadder):
     container_details: List[dict] = field(default_factory=list)  # [{container_type, container_no, line_seal_no, rfid_seal_no, vehicle_no, lr_no, transporter_name, max_permitted_weight, tare_weight_kg, gross_weight, net_weight}]
     purchase_details: List[dict] = field(default_factory=list)  # [{supplier_gstin, supplier_invoice_no, supplier_name, purchase_type, epcg_number, epcg_date}]
     product_sources: List[dict] = field(default_factory=list)  # [{product_name, po_number, quantity_boxes}] - which PO(s) each goods line's boxes came from
+    job_ins: List[dict] = field(default_factory=list)  # [{manufacturer_name, manufacturer_gstin, job_out_challan_no, jw_challan_no, jw_challan_date, stock_inward_no, stock_inward_date}] - job ins whose returned goods were merged into the Products card; display only, never printed
     linked_proformas: List[dict] = field(default_factory=list)  # [{id, invoice_number, invoice_date}] joined for display
     computed_subtotal_usd: Optional[float] = None  # precomputed by list queries that don't load items
 
@@ -2711,6 +2730,7 @@ class ExportInvoice(CifMoneyLadder):
             examination_date=g("examination_date"),
             location_code_08b=g("location_code_08b"),
             booking_no=g("booking_no"),
+            booking_detail_id=g("booking_detail_id"),
             vessel_name=g("vessel_name"),
             voyage_no=g("voyage_no"),
             eway_bill_no=g("eway_bill_no"),
@@ -3342,6 +3362,367 @@ class ExportDesignsPackingList:
     @property
     def total_quantity(self) -> float:
         return sum(c["total_quantity"] for c in self.printed_containers)
+
+
+@dataclass
+class LoadingPlanningItem:
+    """One goods line on a Loading Planning, at DESIGN level.
+
+    Loaded by tracing a proforma invoice through its purchase orders to THOSE
+    ORDERS' packing lists - a PO orders 1268 boxes of a product, and its
+    packing list is what says those 1268 are four designs of 317. When a PO
+    has no packing list to explode, the PO's own product line comes through
+    with design_id/design_name NULL.
+
+    `net_weight_kg` is PER box/pc (a snapshot of products.net_weight_kg), not
+    the line total - it has to be per-unit, because a line is split across
+    several cartons and pallets in quantities nobody knows at load time.
+    `price_usd` is the PI's own quoted rate, matched by product_id."""
+    id: Optional[int]
+    loading_planning_id: Optional[int]
+    sr_no: int
+    product_name: str
+    proforma_invoice_id: Optional[int] = None
+    purchase_order_id: Optional[int] = None
+    po_number: Optional[str] = None
+    product_id: Optional[int] = None
+    design_id: Optional[int] = None
+    design_name: Optional[str] = None
+    hsn_code: Optional[str] = None
+    quantity_boxes: float = 0
+    quantity_unit: str = "PCS"
+    quantity_value: float = 0
+    unit: str = "SQM"
+    net_weight_kg: Optional[float] = None
+    price_usd: float = 0
+    total_usd: float = 0
+
+    @property
+    def label(self) -> str:
+        """How the line names itself in the packing cards' pickers."""
+        return f"{self.product_name} - {self.design_name}" if self.design_name else self.product_name
+
+    @property
+    def total_net_weight_kg(self) -> float:
+        """What the whole line weighs, goods only - no carton or pallet tare."""
+        return (self.net_weight_kg or 0) * (self.quantity_boxes or 0)
+
+    @staticmethod
+    def from_row(row) -> "LoadingPlanningItem":
+        keys = row.keys()
+        return LoadingPlanningItem(
+            id=row["id"],
+            loading_planning_id=row["loading_planning_id"],
+            sr_no=row["sr_no"],
+            product_name=row["product_name"],
+            proforma_invoice_id=row["proforma_invoice_id"],
+            purchase_order_id=row["purchase_order_id"],
+            po_number=row["po_number"],
+            product_id=row["product_id"],
+            design_id=row["design_id"],
+            design_name=row["design_name"],
+            hsn_code=row["hsn_code"],
+            quantity_boxes=row["quantity_boxes"] or 0,
+            quantity_unit=row["quantity_unit"] or "PCS",
+            quantity_value=row["quantity_value"] or 0,
+            unit=row["unit"] or "SQM",
+            net_weight_kg=row["net_weight_kg"] if "net_weight_kg" in keys else None,
+            price_usd=row["price_usd"] or 0,
+            total_usd=row["total_usd"] or 0,
+        )
+
+
+@dataclass
+class LoadingPlanningCarton:
+    """One physical carton on a Loading Planning - the OPTIONAL inner packing
+    level, which then goes on a pallet.
+
+    Tiles never have one (boxes sit straight on the pallet); hardware does:
+    45 + 45 PCS at 30/CTN packs as two full cartons plus one holding 15 of
+    each, which is why `contents` is a list rather than a single line. A
+    carton with pallet_no None has been built but not yet placed."""
+    id: Optional[int]
+    loading_planning_id: Optional[int]
+    carton_no: int
+    carton_type_id: Optional[int] = None
+    carton_type_name: Optional[str] = None
+    capacity_boxes: Optional[float] = None
+    tare_weight_kg: Optional[float] = None
+    pallet_no: Optional[int] = None
+    contents: List[dict] = field(default_factory=list)  # [{item_sr_no, quantity_boxes}]
+
+    @property
+    def packed_boxes(self) -> float:
+        return sum((c.get("quantity_boxes") or 0) for c in self.contents)
+
+    @property
+    def is_part_filled(self) -> bool:
+        """Flagged on the form: the carton nobody has finished deciding about."""
+        return bool(self.capacity_boxes) and self.packed_boxes < self.capacity_boxes
+
+    @staticmethod
+    def from_row(row) -> "LoadingPlanningCarton":
+        return LoadingPlanningCarton(
+            id=row["id"],
+            loading_planning_id=row["loading_planning_id"],
+            carton_no=row["carton_no"],
+            carton_type_id=row["carton_type_id"],
+            carton_type_name=row["carton_type_name"],
+            capacity_boxes=row["capacity_boxes"],
+            tare_weight_kg=row["tare_weight_kg"],
+            pallet_no=row["pallet_no"],
+        )
+
+
+@dataclass
+class LoadingPlanningPallet:
+    """One physical pallet on a Loading Planning - what a forklift moves into
+    the container, and the unit containers are packed with.
+
+    A pallet's goods are its `contents` (boxes placed directly on it, the
+    tiles case) PLUS whatever its `cartons` hold (the hardware case); it may
+    carry both. That is what lets one weight rule cover every case:
+
+        gross = contents net + carton tare + pallet tare
+
+    which is exactly what PO20260827001's tiles want - (32 x 27) + 0 + 20 =
+    884kg - and what PO20260827002's hardware wants - 44.325 + (3 x 0.3) + 20
+    = 65.225kg. `container_sr_no` None means built but not yet loaded."""
+    id: Optional[int]
+    loading_planning_id: Optional[int]
+    pallet_no: int
+    pallet_type_id: Optional[int] = None
+    pallet_type_name: Optional[str] = None
+    capacity_boxes: Optional[float] = None
+    tare_weight_kg: Optional[float] = None
+    container_sr_no: Optional[int] = None
+    contents: List[dict] = field(default_factory=list)  # [{item_sr_no, quantity_boxes}] placed DIRECTLY on the pallet
+    cartons: List[LoadingPlanningCarton] = field(default_factory=list)  # populated by the service, not the row
+
+    @property
+    def direct_boxes(self) -> float:
+        return sum((c.get("quantity_boxes") or 0) for c in self.contents)
+
+    @property
+    def packed_boxes(self) -> float:
+        """Everything on the pallet, whether it went through a carton or not."""
+        return self.direct_boxes + sum(c.packed_boxes for c in self.cartons)
+
+    @property
+    def carton_tare_kg(self) -> float:
+        return sum((c.tare_weight_kg or 0) for c in self.cartons)
+
+    @property
+    def is_part_filled(self) -> bool:
+        """Only meaningful for a pallet loaded directly with boxes - a pallet
+        carrying cartons has no capacity, since how many fit is the
+        operator's call, not a rule."""
+        return bool(self.capacity_boxes) and self.direct_boxes < self.capacity_boxes
+
+    def net_weight_kg(self, items_by_sr: dict) -> float:
+        """Goods only. Needs the plan's items to know what a box weighs, so
+        it takes them rather than being a bare property."""
+        total = 0.0
+        for row in self.contents:
+            item = items_by_sr.get(row.get("item_sr_no"))
+            if item:
+                total += (item.net_weight_kg or 0) * (row.get("quantity_boxes") or 0)
+        for carton in self.cartons:
+            for row in carton.contents:
+                item = items_by_sr.get(row.get("item_sr_no"))
+                if item:
+                    total += (item.net_weight_kg or 0) * (row.get("quantity_boxes") or 0)
+        return total
+
+    def gross_weight_kg(self, items_by_sr: dict) -> float:
+        """The rule the whole document is built around."""
+        return self.net_weight_kg(items_by_sr) + self.carton_tare_kg + (self.tare_weight_kg or 0)
+
+    @staticmethod
+    def from_row(row) -> "LoadingPlanningPallet":
+        return LoadingPlanningPallet(
+            id=row["id"],
+            loading_planning_id=row["loading_planning_id"],
+            pallet_no=row["pallet_no"],
+            pallet_type_id=row["pallet_type_id"],
+            pallet_type_name=row["pallet_type_name"],
+            capacity_boxes=row["capacity_boxes"],
+            tare_weight_kg=row["tare_weight_kg"],
+            container_sr_no=row["container_sr_no"],
+        )
+
+
+@dataclass
+class LoadingPlanning:
+    """The LOADING PLANNING document: which goods physically go in which
+    container, worked out before the export invoice is cut.
+
+    Nothing else in the app answers that. A purchase order knows what was
+    bought, its packing list knows the design split, and a booking knows the
+    containers - but `packing_list_items.pallets` is stored as
+    boxes/box_per_pallet, a DECIMAL, and 9.91 pallets or 1.5 cartons is not
+    a thing anyone can ship. So this document makes cartons and pallets real
+    numbered objects that a human fills by hand, then assigns those pallets
+    whole to the booking's containers.
+
+    Container rows are a SNAPSHOT of the chosen booking, same treatment every
+    other imported party detail gets, so editing the booking later can't
+    rewrite a finished plan."""
+    id: Optional[int]
+    company_id: int
+    created_by: int
+    loading_planning_number: str
+    loading_planning_date: str
+    booking_detail_id: Optional[int] = None
+    booking_no: Optional[str] = None
+    vessel_name: Optional[str] = None
+    voyage_no: Optional[str] = None
+    transporter_name: Optional[str] = None
+    remarks: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    created_by_name: Optional[str] = None  # populated by joined queries only
+    item_count: Optional[int] = None  # list-view only
+    pallet_count: Optional[int] = None  # list-view only
+    proforma_invoice_ids: List[int] = field(default_factory=list)
+    proforma_invoice_numbers: List[str] = field(default_factory=list)
+    items: List[LoadingPlanningItem] = field(default_factory=list)
+    containers: List[dict] = field(default_factory=list)  # snapshot of the booking's 11B rows
+    cartons: List[LoadingPlanningCarton] = field(default_factory=list)
+    pallets: List[LoadingPlanningPallet] = field(default_factory=list)
+
+    @property
+    def items_by_sr(self) -> dict:
+        return {i.sr_no: i for i in self.items}
+
+    @property
+    def total_boxes(self) -> float:
+        return sum((i.quantity_boxes or 0) for i in self.items)
+
+    @property
+    def total_net_weight_kg(self) -> float:
+        return sum(i.total_net_weight_kg for i in self.items)
+
+    @property
+    def line_balances(self) -> List[dict]:
+        """Per goods line: how much is planned, how much has actually been
+        packed (in a carton or straight onto a pallet), and what is left.
+
+        `left` must reach 0 for the plan to be complete - but a non-zero
+        left is a WARNING, never a refusal to save. Unlike the export packing
+        list's container split, a loading plan is legitimately worked on over
+        several sittings."""
+        packed = {i.sr_no: 0.0 for i in self.items}
+        for carton in self.cartons:
+            for row in carton.contents:
+                sr = row.get("item_sr_no")
+                if sr in packed:
+                    packed[sr] += row.get("quantity_boxes") or 0
+        for pallet in self.pallets:
+            for row in pallet.contents:
+                sr = row.get("item_sr_no")
+                if sr in packed:
+                    packed[sr] += row.get("quantity_boxes") or 0
+        out = []
+        for item in self.items:
+            done = packed.get(item.sr_no, 0.0)
+            out.append({
+                "sr_no": item.sr_no,
+                "label": item.label,
+                "quantity_unit": item.quantity_unit,
+                "planned": item.quantity_boxes or 0,
+                "packed": done,
+                "left": round((item.quantity_boxes or 0) - done, 3),
+            })
+        return out
+
+    @property
+    def is_fully_packed(self) -> bool:
+        return bool(self.items) and all(abs(b["left"]) < 0.001 for b in self.line_balances)
+
+    @property
+    def container_summary(self) -> List[dict]:
+        """One row per container plus a final "unassigned" row, carrying the
+        VGM check the loading bay actually cares about: a container's own
+        tare plus everything stacked in it, against what it is allowed to
+        weigh. `over_weight` turns the row red on the form and prints a
+        warning - it never blocks a save."""
+        by_sr = self.items_by_sr
+        cartons_by_pallet: dict = {}
+        for carton in self.cartons:
+            cartons_by_pallet.setdefault(carton.pallet_no, []).append(carton)
+        rows = []
+        for container in self.containers:
+            sr = container.get("sr_no")
+            pallets = [p for p in self.pallets if p.container_sr_no == sr]
+            for pallet in pallets:
+                pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
+            cargo = sum(p.gross_weight_kg(by_sr) for p in pallets)
+            container_tare = container.get("tare_weight_kg") or 0
+            vgm = cargo + container_tare
+            try:
+                max_weight = float(container.get("max_permitted_weight") or 0)
+            except (TypeError, ValueError):
+                max_weight = 0
+            rows.append({
+                "sr_no": sr,
+                "container_no": container.get("container_no"),
+                "container_type": container.get("container_type"),
+                "pallet_count": len(pallets),
+                "boxes": sum(p.packed_boxes for p in pallets),
+                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in pallets),
+                "carton_tare_kg": sum(p.carton_tare_kg for p in pallets),
+                "pallet_tare_kg": sum((p.tare_weight_kg or 0) for p in pallets),
+                "cargo_weight_kg": cargo,
+                "container_tare_kg": container_tare,
+                "vgm_kg": vgm,
+                "max_permitted_weight": max_weight,
+                "headroom_kg": (max_weight - vgm) if max_weight else None,
+                "over_weight": bool(max_weight and vgm > max_weight),
+            })
+        loose = [p for p in self.pallets if p.container_sr_no is None]
+        if loose:
+            for pallet in loose:
+                pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
+            rows.append({
+                "sr_no": None,
+                "container_no": "Unassigned",
+                "container_type": None,
+                "pallet_count": len(loose),
+                "boxes": sum(p.packed_boxes for p in loose),
+                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in loose),
+                "carton_tare_kg": sum(p.carton_tare_kg for p in loose),
+                "pallet_tare_kg": sum((p.tare_weight_kg or 0) for p in loose),
+                "cargo_weight_kg": sum(p.gross_weight_kg(by_sr) for p in loose),
+                "container_tare_kg": 0,
+                "vgm_kg": None,
+                "max_permitted_weight": 0,
+                "headroom_kg": None,
+                "over_weight": False,
+            })
+        return rows
+
+    @staticmethod
+    def from_row(row) -> "LoadingPlanning":
+        keys = row.keys()
+        return LoadingPlanning(
+            id=row["id"],
+            company_id=row["company_id"],
+            created_by=row["created_by"],
+            loading_planning_number=row["loading_planning_number"],
+            loading_planning_date=row["loading_planning_date"],
+            booking_detail_id=row["booking_detail_id"],
+            booking_no=row["booking_no"],
+            vessel_name=row["vessel_name"],
+            voyage_no=row["voyage_no"],
+            transporter_name=row["transporter_name"],
+            remarks=row["remarks"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by_name=row["created_by_name"] if "created_by_name" in keys else None,
+            item_count=row["item_count"] if "item_count" in keys else None,
+            pallet_count=row["pallet_count"] if "pallet_count" in keys else None,
+        )
 
 
 @dataclass

@@ -53,7 +53,12 @@ def list_inventory(category_id=None):
         stock_by_design = container.inventory_service.stock_by_design(g.user.company_id)
         for design in search_results["designs"]:
             design["stock"] = stock_by_design.get(
-                design["id"], {"boxes": 0, "pcs": 0, "quantity": 0, "unit": None}
+                design["id"],
+                {"boxes": 0, "pcs": 0, "quantity": 0,
+                 "dispatched_boxes": 0, "dispatched_quantity": 0,
+                 "sold_boxes": 0, "sold_quantity": 0,
+                 "net_boxes": 0, "net_pcs": 0, "net_quantity": 0,
+                 "unit": None, "qty_unit": None},
             )
     return render_template("inventory/list.html", categories=subcategories, products=products,
                            current_category=current_category, breadcrumb=breadcrumb, in_stock=in_stock,
