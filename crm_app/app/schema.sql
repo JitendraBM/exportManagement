@@ -542,11 +542,20 @@ CREATE TABLE IF NOT EXISTS products (
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Named pallet storage options for one product (e.g. "pine pallet" holding
--- 31 boxes). Every product also implicitly has a "loose" option - goods
--- sold unpalletised, zero pallets - which is NOT stored here. The alternate
--- quantity a pallet holds is never stored: it's always derived as
--- boxes_per_pallet x the product's per-box alternate_quantity.
+-- Named packing options for one product (e.g. "pine pallet" holding 31
+-- boxes, or a "CTN" holding 30 pieces). Every product also implicitly has a
+-- "loose" option - goods sold unpalletised, zero pallets - which is NOT
+-- stored here. The alternate quantity a pallet holds is never stored: it's
+-- always derived as boxes_per_pallet x the product's per-box
+-- alternate_quantity.
+--
+-- `unit_kind` says which LEVEL of packing a row describes, which matters
+-- once goods are actually packed (see loading_planning_cartons vs
+-- loading_planning_pallets): a 'carton' is an inner box that then goes ON a
+-- pallet, a 'pallet' is what a forklift moves into the container. Tiles have
+-- no carton level - boxes sit straight on the pallet - while hardware goes
+-- pieces -> carton -> pallet. Both tares add up the same way, so one rule
+-- covers both: pallet gross = contents net + carton tare + pallet tare.
 CREATE TABLE IF NOT EXISTS product_pallet_types (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id          INTEGER NOT NULL REFERENCES tenants(id),
@@ -554,6 +563,7 @@ CREATE TABLE IF NOT EXISTS product_pallet_types (
     name                TEXT NOT NULL,
     boxes_per_pallet    REAL NOT NULL,
     weight_kg           REAL,
+    unit_kind           TEXT NOT NULL DEFAULT 'pallet',  -- 'pallet' | 'carton'
     sort_order          INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1051,6 +1061,11 @@ CREATE TABLE IF NOT EXISTS export_invoices (
     shipping_bill_date          TEXT,          -- Annexure-C header: Shipping Bill Date
     currency_code               TEXT,          -- snapshot of the misc_currencies row picked on the form
     currency_symbol             TEXT,          -- (name + symbol, so a later edit of the list can't rewrite a printed invoice)
+    -- Both "generated from" references only. The 11B rows and the goods/split
+    -- they seed are SNAPSHOTS taken when picked, so editing the booking or
+    -- the plan afterwards can't rewrite an already-issued invoice.
+    booking_detail_id           INTEGER REFERENCES booking_details(id),
+    loading_planning_id         INTEGER REFERENCES loading_plannings(id),
     created_by                  INTEGER NOT NULL REFERENCES users(id),
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1172,6 +1187,25 @@ CREATE TABLE IF NOT EXISTS export_invoice_product_sources (
     quantity_boxes           REAL NOT NULL DEFAULT 0
 );
 
+-- One row per Job In whose returned ("jobbed") goods were imported into this
+-- export invoice, found by walking each linked proforma invoice -> its job
+-- works -> their purchase invoices -> job outs -> job ins (see
+-- ExportInvoiceService.build_prefill_from_proformas). Snapshotted at import
+-- time, display only: a form/traceability aid that mirrors
+-- export_invoice_product_sources and never prints on the sheet or annexure.
+CREATE TABLE IF NOT EXISTS export_invoice_job_ins (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    export_invoice_id        INTEGER NOT NULL REFERENCES export_invoices(id) ON DELETE CASCADE,
+    sr_no                    INTEGER NOT NULL,
+    manufacturer_name        TEXT,
+    manufacturer_gstin       TEXT,
+    job_out_challan_no       TEXT,          -- our delivery challan the goods went out on
+    jw_challan_no            TEXT,          -- the job manufacturer's own return challan
+    jw_challan_date          TEXT,
+    stock_inward_no          TEXT,
+    stock_inward_date        TEXT
+);
+
 -- ============================================================
 -- EXPORT PACKING LISTS  (header + allocation lines, number generated as
 -- EXPPL{YYYYMMDD}{seq-of-that-day} per company. The customs-facing EXPORT
@@ -1271,6 +1305,165 @@ CREATE TABLE IF NOT EXISTS export_packing_list_item_designs (
     quantity_boxes           REAL NOT NULL DEFAULT 0,
     quantity_value           REAL NOT NULL DEFAULT 0,
     unit                     TEXT
+);
+
+-- ============================================================
+-- LOADING PLANNING  (number generated as LP{YYYYMMDD}{seq-of-that-day} per
+-- company. The document that answers the one question nothing else in the
+-- app does: which goods physically go in which container.)
+--
+-- It sits between the purchase side and the export invoice, and is built in
+-- three passes:
+--
+--   1. GOODS. Reference proforma invoices are ticked the same way the Export
+--      Invoice's own card ticks them, but the trace runs one hop
+--      differently: each PI -> its purchase orders -> THOSE ORDERS' packing
+--      lists, so the lines come out at DESIGN level. A PO orders 1268 boxes
+--      of a product; its packing list is what says those 1268 are four
+--      designs of 317. ExportInvoiceService.build_prefill_from_proformas
+--      merges to product level (it walks PI -> PO -> purchase invoice
+--      instead), which is right for an invoice and useless for loading.
+--      Prices come from the PI's own quoted price_usd matched by product_id;
+--      a PO with no packing list falls back to its own product lines.
+--
+--   2. PACKING, by hand. `packing_list_items.pallets` has always been stored
+--      as boxes/box_per_pallet, a DECIMAL - and 9.91 pallets or 1.5 cartons
+--      is not a thing anyone can ship. Here a carton and a pallet are real
+--      NUMBERED objects that may hold any mix of designs and products: 317
+--      boxes at 32/pallet is nine full pallets plus one holding 29, and
+--      45 + 45 PCS at 30/CTN is best packed as two full cartons plus one
+--      mixed 15+15, all three sitting on a single pallet. No rule can decide
+--      that last part, which is the whole reason this is manual.
+--
+--      The carton level is OPTIONAL - tiles sit straight on the pallet
+--      (loading_planning_pallet_contents), hardware goes through cartons
+--      first (loading_planning_cartons.pallet_no) - and a pallet may carry
+--      both. That is what lets one weight rule cover every case:
+--
+--          pallet gross = contents net + carton tare + pallet tare
+--
+--   3. CONTAINERS. Pallets are assigned WHOLE to containers copied off a
+--      Booking Detail; a container's VGM is its pallets' gross plus its own
+--      tare. Going over max_permitted_weight is a WARNING, never a refusal:
+--      unlike the export packing list's container split, a loading plan may
+--      legitimately be saved half-built.
+--
+-- carton_no/pallet_no/item_sr_no/container_sr_no are NATURAL keys, not FKs
+-- to row ids, for the same reason export_packing_list_item_designs keys on
+-- (invoice_item_sr_no, container_sr_no): every child list is wholesale
+-- deleted and re-inserted on save, so an FK to an id would lose the lot.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS loading_plannings (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id              INTEGER NOT NULL REFERENCES tenants(id),
+    loading_planning_number TEXT NOT NULL,
+    loading_planning_date   TEXT NOT NULL,
+    -- "Generated from" reference; the container rows below are a snapshot,
+    -- so editing the booking afterwards can't rewrite a finished plan.
+    booking_detail_id       INTEGER REFERENCES booking_details(id) ON DELETE SET NULL,
+    booking_no              TEXT,
+    vessel_name             TEXT,
+    voyage_no               TEXT,
+    transporter_name        TEXT,
+    remarks                 TEXT,
+    created_by              INTEGER NOT NULL REFERENCES users(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (company_id, loading_planning_number)
+);
+
+-- Which proforma invoices this plan loads from - many-to-many, exactly like
+-- export_invoice_proforma_links, since one booking's containers can carry
+-- several PIs.
+CREATE TABLE IF NOT EXISTS loading_planning_proforma_links (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    proforma_invoice_id INTEGER NOT NULL REFERENCES proforma_invoices(id) ON DELETE CASCADE,
+    UNIQUE (loading_planning_id, proforma_invoice_id)
+);
+
+-- One goods line per DESIGN (per purchase order), snapshotted at load time.
+CREATE TABLE IF NOT EXISTS loading_planning_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    sr_no               INTEGER NOT NULL,
+    proforma_invoice_id INTEGER REFERENCES proforma_invoices(id) ON DELETE SET NULL,
+    purchase_order_id   INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL,
+    po_number           TEXT,                            -- provenance, kept even if the PO is deleted
+    product_id          INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name        TEXT NOT NULL,
+    design_id           INTEGER REFERENCES designs(id) ON DELETE SET NULL,
+    design_name         TEXT,                            -- NULL when the PO had no packing list to explode
+    hsn_code            TEXT,
+    quantity_boxes      REAL NOT NULL DEFAULT 0,         -- what has to be packed
+    quantity_unit       TEXT NOT NULL DEFAULT 'PCS',
+    quantity_value      REAL NOT NULL DEFAULT 0,
+    unit                TEXT NOT NULL DEFAULT 'SQM',
+    net_weight_kg       REAL,                            -- PER box/pc, off products.net_weight_kg
+    price_usd           REAL NOT NULL DEFAULT 0,         -- the PI's own quoted rate, matched by product_id
+    total_usd           REAL NOT NULL DEFAULT 0
+);
+
+-- The physical containers, copied off the chosen booking. Same columns as
+-- export_invoice_container_details / booking_detail_container_details.
+CREATE TABLE IF NOT EXISTS loading_planning_containers (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id   INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    sr_no                 INTEGER NOT NULL,
+    container_type        TEXT,
+    container_no          TEXT,
+    line_seal_no          TEXT,
+    rfid_seal_no          TEXT,
+    vehicle_no            TEXT,
+    lr_no                 TEXT,
+    transporter_name      TEXT,
+    max_permitted_weight  TEXT,
+    tare_weight_kg        REAL
+);
+
+-- The OPTIONAL inner level: a carton holding pieces, which then goes on a
+-- pallet. pallet_no NULL = built but not yet placed on one.
+CREATE TABLE IF NOT EXISTS loading_planning_cartons (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    carton_no           INTEGER NOT NULL,
+    carton_type_id      INTEGER REFERENCES product_pallet_types(id) ON DELETE SET NULL,
+    carton_type_name    TEXT,                            -- snapshot, e.g. 'CTN'
+    capacity_boxes      REAL,                            -- seeded from the type, overridable per carton
+    tare_weight_kg      REAL,                            -- ditto
+    pallet_no           INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS loading_planning_carton_contents (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    carton_no           INTEGER NOT NULL,
+    item_sr_no          INTEGER NOT NULL,
+    quantity_boxes      REAL NOT NULL DEFAULT 0
+);
+
+-- What a forklift moves into the container. container_sr_no NULL = built but
+-- not yet loaded. capacity_boxes is NULL for a pallet carrying cartons -
+-- there is deliberately no cartons-per-pallet limit, the operator decides.
+CREATE TABLE IF NOT EXISTS loading_planning_pallets (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    pallet_no           INTEGER NOT NULL,
+    pallet_type_id      INTEGER REFERENCES product_pallet_types(id) ON DELETE SET NULL,
+    pallet_type_name    TEXT,                            -- snapshot, e.g. 'Pallet' / 'JUNGLE KHATLI'
+    capacity_boxes      REAL,
+    tare_weight_kg      REAL,
+    container_sr_no     INTEGER
+);
+
+-- Boxes placed DIRECTLY on a pallet, with no carton in between (the tiles
+-- case). A pallet's contents are these rows plus whatever its cartons hold.
+CREATE TABLE IF NOT EXISTS loading_planning_pallet_contents (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    loading_planning_id INTEGER NOT NULL REFERENCES loading_plannings(id) ON DELETE CASCADE,
+    pallet_no           INTEGER NOT NULL,
+    item_sr_no          INTEGER NOT NULL,
+    quantity_boxes      REAL NOT NULL DEFAULT 0
 );
 
 -- ============================================================
@@ -1648,6 +1841,16 @@ CREATE INDEX IF NOT EXISTS idx_export_invoice_product_sources_invoice ON export_
 CREATE INDEX IF NOT EXISTS idx_export_packing_lists_company ON export_packing_lists(company_id);
 CREATE INDEX IF NOT EXISTS idx_export_packing_lists_invoice ON export_packing_lists(export_invoice_id);
 CREATE INDEX IF NOT EXISTS idx_export_packing_list_items_list ON export_packing_list_items(export_packing_list_id);
+CREATE INDEX IF NOT EXISTS idx_loading_plannings_company ON loading_plannings(company_id);
+CREATE INDEX IF NOT EXISTS idx_loading_plannings_date ON loading_plannings(loading_planning_date);
+CREATE INDEX IF NOT EXISTS idx_loading_plannings_booking ON loading_plannings(booking_detail_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_proforma_links_plan ON loading_planning_proforma_links(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_items_plan ON loading_planning_items(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_containers_plan ON loading_planning_containers(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_cartons_plan ON loading_planning_cartons(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_carton_contents_plan ON loading_planning_carton_contents(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_pallets_plan ON loading_planning_pallets(loading_planning_id);
+CREATE INDEX IF NOT EXISTS idx_loading_planning_pallet_contents_plan ON loading_planning_pallet_contents(loading_planning_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_company ON packing_lists(company_id);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_created_by ON packing_lists(created_by);
 CREATE INDEX IF NOT EXISTS idx_packing_lists_date ON packing_lists(packing_list_date);

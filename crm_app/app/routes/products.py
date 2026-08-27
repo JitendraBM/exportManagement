@@ -39,11 +39,16 @@ def _pallet_type_rows(form) -> list:
     names = form.getlist("pallet_type_name[]")
     boxes = form.getlist("pallet_type_boxes[]")
     weights = form.getlist("pallet_type_weight[]")
+    # Which LEVEL of packing the row is - a carton goes on a pallet, a pallet
+    # goes in the container. Only Loading Planning reads it; a form that
+    # doesn't post it (the quick-create panels) leaves it to default.
+    kinds = form.getlist("pallet_type_unit_kind[]")
     return [
         {
             "name": names[i],
             "boxes_per_pallet": boxes[i] if i < len(boxes) else "",
             "weight_kg": weights[i] if i < len(weights) else "",
+            "unit_kind": kinds[i] if i < len(kinds) else "",
         }
         for i in range(len(names))
     ]

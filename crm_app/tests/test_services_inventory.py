@@ -319,6 +319,27 @@ def test_stock_history_summary_agrees_with_stock_by_design(container, seed, cata
     assert summary["stock_alt_qty"] == stock["net_quantity"]
 
 
+def test_stock_history_po_remain_is_blank_when_stock_came_from_job_work(
+        container, seed, catalog, purchase_invoice):
+    """A design whose only receipt is a Job In has no purchase order behind it,
+    so PO Remain Qty must read blank (None) rather than a negative number."""
+    product, _ = catalog
+    jobbed = container.product_service.create_design(
+        current_user=seed.admin, product_id=product.id, folder_id=None,
+        design_name="ATLANTA DARK GREY", description="", price_usd="",
+        alt_text="", photo_file=None, dimension_photo_file=None,
+    )
+    _plant_packing_list(container, seed, catalog, "PL-PINV", 100,
+                        purchase_invoice_id=purchase_invoice.id)
+    job_out = _job_out(container, seed, purchase_invoice, "DC-1")
+    _job_in(container, seed, job_out, "STINW-1", product, jobbed, 62)
+
+    summary = container.inventory_service.stock_history_summary(seed.company_id, jobbed.id)
+    assert summary["po_boxes"] == 0
+    assert summary["received_boxes"] == 62
+    assert summary["po_remain_boxes"] is None
+
+
 def test_in_stock_designs_reports_the_same_numbers(container, seed, catalog, purchase_invoice):
     _, design = catalog
     _plant_packing_list(container, seed, catalog, "PL-PINV", 100,

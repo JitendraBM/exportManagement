@@ -41,6 +41,7 @@ from app.models import (
     ExportInvoice, ExportInvoiceItem, EXPORT_TAX_MODES, EXPORT_TAX_MODE_IGST, EXPORT_TAX_MODE_LUT,
     EXPORT_LOADING_TYPES, EXPORT_LOADING_SELF_SEALING,
     ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
+    LoadingPlanning, LoadingPlanningItem, LoadingPlanningCarton, LoadingPlanningPallet,
 )
 from app.repositories import (
     TenantRepository, UserRepositoryBase, LeadRepositoryBase, PartyRepositoryBase, SupplierRepositoryBase,
@@ -51,7 +52,7 @@ from app.repositories import (
     JobOutRepository, JobInRepository,
     PurchaseInvoiceRepository,
     ExportInvoiceRepository, ExportPackingListRepository,
-    PackingListRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
+    PackingListRepository, LoadingPlanningRepository, DocumentVersionRepository, PermitRepository, BookingDetailRepository, MiscCurrencyRepository, MiscNatureOfContractRepository,
     MiscPortOfLoadingRepository, MiscContainerTypeRepository, MiscHsnCodeRepository, MiscCountryRepository, MiscUnitRepository,
 )
 from app.database import Database, SCHEMA_VERSION
@@ -1787,16 +1788,27 @@ class ProductService:
         half = round(igst / 2, 2) if igst is not None else None
         return {"igst_percent": igst, "sgst_percent": half, "cgst_percent": half}
 
+    PACKING_UNIT_KINDS = ("pallet", "carton")
+
     def _parse_pallet_types(self, pallet_types: Optional[list]) -> List[ProductPalletType]:
         """Validates the raw name/boxes pairs submitted by the product form
         into ProductPalletType rows. Rows left entirely blank are skipped;
         a row with only one half filled in is an error. 'loose' is reserved
-        for the built-in no-pallet option every product already has."""
+        for the built-in no-pallet option every product already has.
+
+        `unit_kind` says which LEVEL of packing the row describes - a 'carton'
+        is an inner box that then goes on a pallet, a 'pallet' is what a
+        forklift moves. Only Loading Planning reads it; anything else that
+        doesn't say defaults to 'pallet', which is what every row was
+        implicitly treated as before this existed."""
         parsed = []
         for i, raw in enumerate(pallet_types or [], start=1):
             name = (raw.get("name") or "").strip()
             boxes_raw = (raw.get("boxes_per_pallet") or "").strip()
             weight_raw = (raw.get("weight_kg") or "").strip()
+            unit_kind = (raw.get("unit_kind") or "").strip().lower() or "pallet"
+            if unit_kind not in self.PACKING_UNIT_KINDS:
+                unit_kind = "pallet"
             if not name and not boxes_raw and not weight_raw:
                 continue
             if not name:
@@ -1822,6 +1834,7 @@ class ProductService:
                     raise ValidationError(f"Pallet type '{name}': weight cannot be negative.")
             parsed.append(ProductPalletType(
                 id=None, company_id=0, product_id=0, name=name, boxes_per_pallet=boxes, weight_kg=weight,
+                unit_kind=unit_kind,
             ))
         return parsed
 
@@ -2394,7 +2407,7 @@ class InventoryService:
             "po_qty_unit": ordered["qty_unit"] or stock["qty_unit"],
             "received_boxes": stock["boxes"],
             "received_qty_unit": stock["qty_unit"],
-            "po_remain_boxes": ordered["boxes"] - stock["boxes"],
+            "po_remain_boxes": (ordered["boxes"] - stock["boxes"]) if ordered["boxes"] else None,
             "dispatched_boxes": stock["dispatched_boxes"],
             "dispatched_qty_unit": stock["qty_unit"],
             "sale_boxes": stock["sold_boxes"],
@@ -5394,7 +5407,11 @@ class ExportInvoiceService:
                  party_repos: Optional[dict] = None, upload_folder: str = "",
                  allowed_extensions: set = frozenset(),
                  export_packing_list_service: Optional["ExportPackingListService"] = None,
-                 misc_list_service: Optional["MiscListService"] = None):
+                 misc_list_service: Optional["MiscListService"] = None,
+                 job_work_repo: Optional["JobWorkRepository"] = None,
+                 job_out_repo: Optional["JobOutRepository"] = None,
+                 job_in_repo: Optional["JobInRepository"] = None,
+                 job_out_service: Optional["JobOutService"] = None):
         self.export_invoice_repo = export_invoice_repo
         self.product_repo = product_repo
         self.lead_repo = lead_repo
@@ -5402,6 +5419,15 @@ class ExportInvoiceService:
         self.purchase_order_repo = purchase_order_repo
         self.purchase_invoice_repo = purchase_invoice_repo
         self.company_repo = company_repo
+        # Optional, wired in production: the chain that pulls returned
+        # ("jobbed") goods into the Products card and the Job In details card -
+        # each linked PI -> its job works -> their purchase invoices -> job
+        # outs -> job ins. Unwired (tests that don't need it) just skips that
+        # part of the prefill.
+        self.job_work_repo = job_work_repo
+        self.job_out_repo = job_out_repo
+        self.job_in_repo = job_in_repo
+        self.job_out_service = job_out_service
         self.version_service = version_service
         self.party_repos = party_repos
         self.upload_folder = upload_folder
@@ -5607,6 +5633,70 @@ class ExportInvoiceService:
                 source_label = po.po_number if po else f"{full_pinv.invoice_number} (no PO)"
                 line["sources"][source_label] = line["sources"].get(source_label, 0) + (it.quantity_boxes or 0)
 
+        # Job work leg: goods sent out for conversion come back on a JOB IN,
+        # never on a purchase invoice reachable through a purchase order - the
+        # job-work purchase invoice links straight to the job work
+        # (purchase_invoice_job_work_links). Walk each linked PI -> its job
+        # works -> their purchase invoices -> job outs -> job ins: list one
+        # row per job in for the read-only "Job In details" card, and merge
+        # every job in's returned design lines into the SAME `merged` goods
+        # dict - one aggregated line per jobbed product, boxes/qty summed
+        # across every design and every return lot. Price is still taken from
+        # price_by_product in the items loop below (the PI's quoted USD rate,
+        # matched by product_id), 0 when the jobbed product was not itself a
+        # quoted line. Display only, like product_sources - never printed.
+        job_ins = []
+        if self.job_work_repo and self.job_out_repo and self.job_in_repo:
+            seen_job_in_ids = set()
+            manufacturer_by_job_out = {}
+            for pi in proformas:
+                for jw in self.job_work_repo.list_for_proforma(pi.id):
+                    if jw.company_id != company_id:
+                        continue
+                    for jw_pinv in self.purchase_invoice_repo.list_for_job_work(jw.id):
+                        if jw_pinv.company_id != company_id:
+                            continue
+                        for jo in self.job_out_repo.list_for_purchase_invoice(jw_pinv.id):
+                            if jo.company_id != company_id:
+                                continue
+                            for ji in self.job_in_repo.list_for_job_out(jo.id):
+                                if ji.company_id != company_id or ji.id in seen_job_in_ids:
+                                    continue
+                                seen_job_in_ids.add(ji.id)
+                                if jo.id not in manufacturer_by_job_out:
+                                    receiver = {}
+                                    if self.job_out_service:
+                                        try:
+                                            receiver = self.job_out_service.build_sheet(
+                                                jo, company_id).get("receiver") or {}
+                                        except Exception:
+                                            receiver = {}
+                                    manufacturer_by_job_out[jo.id] = receiver
+                                receiver = manufacturer_by_job_out[jo.id]
+                                job_ins.append({
+                                    "manufacturer_name": receiver.get("name") or jo.seller_name,
+                                    "manufacturer_gstin": receiver.get("gstin"),
+                                    "job_out_challan_no": jo.delivery_challan_no,
+                                    "jw_challan_no": ji.jw_delivery_challan_no,
+                                    "jw_challan_date": ji.jw_delivery_challan_date,
+                                    "stock_inward_no": ji.stock_inward_no,
+                                    "stock_inward_date": ji.stock_inward_date,
+                                })
+                                full_ji = self.job_in_repo.get_by_id(ji.id) or ji
+                                label = (f"JOB IN {ji.stock_inward_no}" if ji.stock_inward_no
+                                         else f"JOB IN #{ji.id}")
+                                for it in full_ji.items:
+                                    key = it.product_id if it.product_id is not None else it.product_name
+                                    line = merged.get(key)
+                                    if line is None:
+                                        line = {"product_id": it.product_id, "product_name": it.product_name,
+                                                "hsn_code": it.hsn_code, "unit": it.unit,
+                                                "quantity_boxes": 0.0, "quantity_value": 0.0, "sources": {}}
+                                        merged[key] = line
+                                    line["quantity_boxes"] += it.quantity_boxes or 0
+                                    line["quantity_value"] += it.quantity_value or 0
+                                    line["sources"][label] = line["sources"].get(label, 0) + (it.quantity_boxes or 0)
+
         items = []
         product_sources = []
         for line in merged.values():
@@ -5685,7 +5775,7 @@ class ExportInvoiceService:
         if has_exemption_purchase:
             fields["tax_mode"] = EXPORT_TAX_MODE_LUT
         return {"fields": fields, "items": items, "purchase_details": purchase_details,
-                "product_sources": product_sources}
+                "product_sources": product_sources, "job_ins": job_ins}
 
     def _product_igst_percent(self, product_id, company_id: int) -> float:
         if not product_id:
@@ -5793,6 +5883,18 @@ class ExportInvoiceService:
                     if pinv.company_id == company_id and pinv.purchase_type == "exemption":
                         return True
         return False
+
+    @staticmethod
+    def _optional_int(raw) -> Optional[int]:
+        """A posted id, or None when it's blank/unparseable - the form can
+        legitimately have no booking picked."""
+        text = (str(raw) if raw is not None else "").strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
 
     def _build_header(self, current_user: User, fields: dict, items: List[ExportInvoiceItem],
                        invoice_id: Optional[int] = None) -> ExportInvoice:
@@ -5922,6 +6024,11 @@ class ExportInvoiceService:
             examination_date=(fields.get("examination_date") or "").strip() or None,
             location_code_08b=(fields.get("location_code_08b") or "").strip() or None,
             booking_no=(fields.get("booking_no") or "").strip() or None,
+            # The booking's own id alongside the number it prints - the number
+            # can be re-typed or a booking renumbered, so this is what still
+            # says which Booking Detail the 11B rows were copied from. The
+            # rows themselves stay a snapshot.
+            booking_detail_id=self._optional_int(fields.get("booking_detail_id")),
             vessel_name=(fields.get("vessel_name") or "").strip() or None,
             voyage_no=(fields.get("voyage_no") or "").strip() or None,
             issuing_authority=(fields.get("issuing_authority") or "").strip() or None,
@@ -5947,6 +6054,7 @@ class ExportInvoiceService:
         invoice.container_details = self._clean_container_details(fields.get("container_details_list"))
         invoice.purchase_details = self._clean_purchase_details(fields.get("purchase_details"))
         invoice.product_sources = self._clean_product_sources(fields.get("product_sources"))
+        invoice.job_ins = self._clean_job_ins(fields.get("job_ins"))
         return invoice
 
     def _clean_proforma_ids(self, raw_ids, company_id: int) -> List[int]:
@@ -6044,6 +6152,21 @@ class ExportInvoiceService:
             if product_name and po_number:
                 rows.append({"product_name": product_name, "po_number": po_number,
                             "quantity_boxes": quantity_boxes})
+        return rows
+
+    @staticmethod
+    def _clean_job_ins(raw) -> List[dict]:
+        """The read-only "Job In details" breakdown - which job in(s) the
+        returned/jobbed goods were imported from - round-tripped as hidden
+        fields so it survives a save/reopen, exactly like _clean_product_sources.
+        Display only, never printed."""
+        keys = ("manufacturer_name", "manufacturer_gstin", "job_out_challan_no",
+                "jw_challan_no", "jw_challan_date", "stock_inward_no", "stock_inward_date")
+        rows = []
+        for r in raw or []:
+            values = {k: (r.get(k) or "").strip() or None for k in keys}
+            if any(values.values()):
+                rows.append(values)
         return rows
 
     # ---- shipping bill PDF storage --------------------------------------------------
@@ -6357,17 +6480,21 @@ class ExportPackingListService:
                  category_repo: Optional[CategoryRepository] = None,
                  design_repo: Optional[DesignRepository] = None,
                  packing_list_repo: Optional[PackingListRepository] = None,
-                 designs_packing_list_repo: Optional["ExportDesignsPackingListRepository"] = None):
+                 designs_packing_list_repo: Optional["ExportDesignsPackingListRepository"] = None,
+                 job_in_repo: Optional["JobInRepository"] = None):
         self.export_packing_list_repo = export_packing_list_repo
         self.export_invoice_repo = export_invoice_repo
         self.product_repo = product_repo
         self.category_repo = category_repo
-        # All three are only used by the Designs Packing List (the design
+        # All four are only used by the Designs Packing List (the design
         # allocation and the document it becomes) - the container split
-        # itself needs none of them, so they stay optional.
+        # itself needs none of them, so they stay optional. job_in_repo lets
+        # the allocation reference also offer designs that only entered stock
+        # through a job-work return (a Job In), never a purchase invoice.
         self.design_repo = design_repo
         self.packing_list_repo = packing_list_repo
         self.designs_packing_list_repo = designs_packing_list_repo
+        self.job_in_repo = job_in_repo
 
     # ---- reads --------------------------------------------------
     def get(self, packing_list_id: int, company_id: int) -> ExportPackingList:
@@ -6433,6 +6560,41 @@ class ExportPackingListService:
         return self.designs_packing_list_repo.list_all(company_id) if self.designs_packing_list_repo else []
 
     # ---- Designs Packing List (per-line design allocation) --------------------------------------------------
+    def _received_design_totals(self, company_id: int, product_id: int,
+                                export_invoice_id: int) -> List[dict]:
+        """Every design received for one product on this shipment, merged
+        across both ways goods come in: bought against a purchase invoice
+        (PackingListRepository.design_totals_for_product, scoped to this
+        export invoice's source purchase orders) and returned from job work
+        on a Job In (JobInRepository.returned_design_totals_for_product,
+        scoped to its source job works). Rows are keyed by design and their
+        boxes/qty summed, so a design that came in both ways totals
+        correctly. The one shared source for reference_designs and
+        save_design_allocation, so the form and the save-time cap can never
+        disagree about how much of a design came in."""
+        if not self.packing_list_repo or not product_id:
+            return []
+        source_po_ids = self.export_invoice_repo.source_purchase_order_ids(
+            export_invoice_id, company_id
+        )
+        merged: dict = {}
+        for r in self.packing_list_repo.design_totals_for_product(
+                company_id, int(product_id), source_po_ids):
+            merged[r["design_id"]] = dict(r)
+        if self.job_in_repo:
+            job_work_ids = self.export_invoice_repo.source_job_work_ids(
+                export_invoice_id, company_id
+            )
+            for r in self.job_in_repo.returned_design_totals_for_product(
+                    company_id, int(product_id), job_work_ids):
+                existing = merged.get(r["design_id"])
+                if existing is None:
+                    merged[r["design_id"]] = dict(r)
+                else:
+                    existing["boxes"] = (existing.get("boxes") or 0) + (r.get("boxes") or 0)
+                    existing["quantity"] = (existing.get("quantity") or 0) + (r.get("quantity") or 0)
+        return list(merged.values())
+
     def reference_designs(self, company_id: int, packing_list: ExportPackingList) -> dict:
         """(invoice_item_sr_no, container_sr_no) -> the design rows this
         specific container/line's allocation form should offer: every design
@@ -6451,9 +6613,6 @@ class ExportPackingListService:
           nothing left of it to load)."""
         if not self.packing_list_repo:
             return {}
-        source_po_ids = self.export_invoice_repo.source_purchase_order_ids(
-            packing_list.export_invoice_id, company_id
-        )
         by_product: dict = {}
         # Total already allocated per design, across every container on this
         # invoice - what "remaining" is measured against.
@@ -6470,8 +6629,8 @@ class ExportPackingListService:
                 reference[key] = []
                 continue
             if item.product_id not in by_product:
-                by_product[item.product_id] = self.packing_list_repo.design_totals_for_product(
-                    company_id, int(item.product_id), source_po_ids
+                by_product[item.product_id] = self._received_design_totals(
+                    company_id, int(item.product_id), packing_list.export_invoice_id
                 )
             on_this_line = {d.design_id: d.quantity_boxes or 0 for d in item.designs if d.design_id}
             rows = []
@@ -6515,13 +6674,10 @@ class ExportPackingListService:
                     claimed_elsewhere[d.design_id] = claimed_elsewhere.get(d.design_id, 0) + (d.quantity_boxes or 0)
         received_by_design = {}
         if self.packing_list_repo and line.product_id:
-            source_po_ids = self.export_invoice_repo.source_purchase_order_ids(
-                packing_list.export_invoice_id, company_id
-            )
             received_by_design = {
                 r["design_id"]: (r.get("boxes") or 0)
-                for r in self.packing_list_repo.design_totals_for_product(
-                    company_id, int(line.product_id), source_po_ids
+                for r in self._received_design_totals(
+                    company_id, int(line.product_id), packing_list.export_invoice_id
                 )
             }
 
@@ -7892,6 +8048,494 @@ class ProformaFulfilmentService:
                 "has_packing_list": has_packing_list,
             })
         return reminders
+
+
+# ============================================================
+# LOADING PLANNING SERVICE
+# ============================================================
+class LoadingPlanningService:
+    """The document that works out which goods physically go in which
+    container, before the export invoice is cut.
+
+    Two things here are deliberately unlike their Export Invoice cousins:
+
+    * `build_prefill_from_proformas` traces PI -> purchase orders -> THOSE
+      ORDERS' PACKING LISTS, where ExportInvoiceService's method of the same
+      name traces PI -> purchase orders -> purchase invoices and merges to
+      product level. Both are right for their own document: an invoice bills
+      a product, but a container is loaded design by design. A PO orders 1268
+      boxes of one product; only its packing list knows those are four
+      designs of 317.
+
+    * every packing check is a WARNING, never a ValidationError. A loading
+      plan is worked on across sittings - goods loaded today, pallets built
+      tomorrow, containers assigned when the booking firms up - so a
+      half-built plan must save. ExportPackingListService.build_items takes
+      the opposite line about its own container split, because an invoice
+      that doesn't add up cannot be issued at all."""
+
+    def __init__(self, loading_planning_repo: LoadingPlanningRepository,
+                 proforma_invoice_repo: ProformaInvoiceRepository,
+                 purchase_order_repo: PurchaseOrderRepository,
+                 packing_list_repo: PackingListRepository,
+                 booking_detail_repo: BookingDetailRepository,
+                 product_repo: ProductRepository,
+                 pallet_type_repo: ProductPalletTypeRepository):
+        self.loading_planning_repo = loading_planning_repo
+        self.proforma_invoice_repo = proforma_invoice_repo
+        self.purchase_order_repo = purchase_order_repo
+        self.packing_list_repo = packing_list_repo
+        self.booking_detail_repo = booking_detail_repo
+        self.product_repo = product_repo
+        self.pallet_type_repo = pallet_type_repo
+
+    # ---- reads --------------------------------------------------
+    def get(self, loading_planning_id: int, company_id: int) -> LoadingPlanning:
+        plan = self.loading_planning_repo.get_by_id(loading_planning_id)
+        if not plan or plan.company_id != company_id:
+            # 404, not 403 - don't reveal that another company's plan exists.
+            raise NotFoundError(f"Loading planning #{loading_planning_id} not found.")
+        return plan
+
+    def list_all(self, company_id: int) -> List[LoadingPlanning]:
+        return self.loading_planning_repo.list_all(company_id)
+
+    def next_number(self, company_id: int, planning_date: str) -> str:
+        return self.loading_planning_repo.next_number(company_id, planning_date)
+
+    # ---- loading goods from the selected proforma invoices ------------
+    def _load_proformas(self, proforma_ids: list, company_id: int) -> List[ProformaInvoice]:
+        """Load only the proforma invoices that belong to this company - a
+        crafted id in the request can never pull another company's PI in."""
+        result = []
+        for pid in dict.fromkeys(proforma_ids or []):
+            try:
+                pi = self.proforma_invoice_repo.get_by_id(int(pid))
+            except (TypeError, ValueError):
+                continue
+            if pi and pi.company_id == company_id:
+                result.append(pi)
+        return result
+
+    def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
+        """Trace each selected PI through its purchase orders and pull in the
+        goods lines actually bought on those orders, priced at the PI's own
+        quoted USD rate.
+
+        The design split comes from each PO's own packing list, which is the
+        only place it exists: a purchase order line says "1268 boxes of
+        GVT/PGVT 600X1200", and its packing list is what says those 1268 are
+        ARKOSE/ATLANTA/ARTISTIC/BELLY at 317 each. A PO with no packing list
+        yet falls back to its own product lines, which come through with no
+        design - still loadable, just coarser.
+
+        The USD rate is matched by product_id against the PI's own quoted
+        lines (`pi.items`, the typed FOB rate - not `printed_items`, whose
+        CIF view would fold the PI's charges into a per-unit figure this
+        document has no use for). No match leaves the rate at 0 to be typed."""
+        proformas = self._load_proformas(proforma_ids, company_id)
+
+        items: List[LoadingPlanningItem] = []
+        sr = 0
+        for pi in proformas:
+            rate_by_product = {}
+            for it in pi.items:
+                if it.product_id is not None and it.product_id not in rate_by_product:
+                    rate_by_product[it.product_id] = it.price_usd or 0
+
+            for po in self.purchase_order_repo.list_for_proforma(pi.id):
+                if po.company_id != company_id:
+                    continue
+                packing_lists = [pl for pl in self.packing_list_repo.list_for_purchase_order(po.id)
+                                 if pl.company_id == company_id]
+                lines = []
+                for pl in packing_lists:
+                    for pli in pl.items:
+                        lines.append({
+                            "product_id": pli.product_id, "product_name": pli.product_name,
+                            "design_id": pli.design_id, "design_name": pli.design_name,
+                            "hsn_code": pli.hsn_code, "quantity_boxes": pli.quantity_boxes or 0,
+                            "quantity_unit": pli.quantity_unit or "PCS",
+                            "quantity_value": pli.quantity_value or 0, "unit": pli.unit or "SQM",
+                        })
+                if not lines:
+                    # No packing list for this PO - take what it ordered, at
+                    # product level, with no design to split by. list_for_proforma
+                    # returns header rows only, so the PO has to be re-fetched
+                    # to see its lines (same reason ExportInvoiceService
+                    # re-fetches each purchase invoice by id).
+                    full_po = self.purchase_order_repo.get_by_id(po.id) or po
+                    for poi in full_po.items:
+                        lines.append({
+                            "product_id": poi.product_id, "product_name": poi.product_name,
+                            "design_id": poi.design_id, "design_name": poi.design_name,
+                            "hsn_code": poi.hsn_code, "quantity_boxes": poi.quantity_boxes or 0,
+                            "quantity_unit": poi.quantity_unit or "PCS",
+                            "quantity_value": poi.quantity_value or 0, "unit": poi.unit or "SQM",
+                        })
+
+                for line in lines:
+                    sr += 1
+                    price = rate_by_product.get(line["product_id"], 0) or 0
+                    boxes = line["quantity_boxes"] or 0
+                    product = self.product_repo.get_by_id(line["product_id"]) if line["product_id"] else None
+                    items.append(LoadingPlanningItem(
+                        id=None, loading_planning_id=None, sr_no=sr,
+                        proforma_invoice_id=pi.id, purchase_order_id=po.id, po_number=po.po_number,
+                        product_id=line["product_id"], product_name=line["product_name"],
+                        design_id=line["design_id"], design_name=line["design_name"],
+                        hsn_code=line["hsn_code"], quantity_boxes=boxes,
+                        quantity_unit=line["quantity_unit"], quantity_value=line["quantity_value"],
+                        unit=line["unit"],
+                        # Per box/pc, not the line total - a line gets split
+                        # across cartons and pallets in quantities nobody
+                        # knows yet.
+                        net_weight_kg=(product.net_weight_kg if product else None),
+                        price_usd=price, total_usd=round(price * boxes, 2),
+                    ))
+
+        return {
+            "items": [dataclasses.asdict(i) for i in items],
+            "packing_types": self.packing_types_for_items(company_id, items),
+        }
+
+    def packing_types_for_items(self, company_id: int, items: List[LoadingPlanningItem]) -> dict:
+        """What the carton and pallet pickers offer, scoped to the products
+        these goods lines actually mention. Split by unit_kind, because the
+        two levels are picked separately: a CTN is an inner box that goes ON
+        a pallet, a JUNGLE KHATLI is the pallet itself."""
+        product_ids = [i.product_id for i in items if i.product_id]
+        out: dict = {}
+        for pt in self.pallet_type_repo.list_for_products(company_id, product_ids):
+            bucket = out.setdefault(str(pt.product_id), {"carton": [], "pallet": []})
+            bucket["carton" if pt.is_carton else "pallet"].append({
+                "id": pt.id, "name": pt.name,
+                "boxes_per_pallet": pt.boxes_per_pallet, "weight_kg": pt.weight_kg,
+            })
+        return out
+
+    # ---- auto-build --------------------------------------------------
+    def auto_build_packing(self, company_id: int, items: List[LoadingPlanningItem]) -> dict:
+        """Do the boring 90% of the packing, and leave the judgement calls.
+
+        Per goods line: fill whole units up to the packing type's capacity,
+        then emit ONE part-filled unit for the remainder. Part units are
+        flagged, never merged - merging is exactly the decision a person has
+        to make. 317 boxes at 32/pallet becomes nine full pallets plus one
+        holding 29; 45 PCS at 30/CTN becomes one full carton plus one holding
+        15, and whether that 15 shares a carton with another product's 15 is
+        not something a rule can know.
+
+        When a product has a carton type, its goods go into cartons and those
+        cartons onto one pallet per product; otherwise boxes sit directly on
+        pallets. There is deliberately no cartons-per-pallet capacity."""
+        types = self.packing_types_for_items(company_id, items)
+        cartons: List[LoadingPlanningCarton] = []
+        pallets: List[LoadingPlanningPallet] = []
+        carton_no = pallet_no = 0
+
+        for item in items:
+            bucket = types.get(str(item.product_id)) or {}
+            carton_type = (bucket.get("carton") or [None])[0]
+            pallet_type = (bucket.get("pallet") or [None])[0]
+            remaining = item.quantity_boxes or 0
+            if remaining <= 0:
+                continue
+
+            if carton_type:
+                capacity = carton_type["boxes_per_pallet"] or remaining
+                pallet_no += 1
+                pallets.append(LoadingPlanningPallet(
+                    id=None, loading_planning_id=None, pallet_no=pallet_no,
+                    pallet_type_id=(pallet_type or {}).get("id"),
+                    pallet_type_name=(pallet_type or {}).get("name") or "Pallet",
+                    capacity_boxes=None,  # cartons-per-pallet is the operator's call
+                    tare_weight_kg=(pallet_type or {}).get("weight_kg"),
+                ))
+                while remaining > 0:
+                    take = min(capacity, remaining)
+                    carton_no += 1
+                    cartons.append(LoadingPlanningCarton(
+                        id=None, loading_planning_id=None, carton_no=carton_no,
+                        carton_type_id=carton_type["id"], carton_type_name=carton_type["name"],
+                        capacity_boxes=capacity, tare_weight_kg=carton_type["weight_kg"],
+                        pallet_no=pallet_no,
+                        contents=[{"item_sr_no": item.sr_no, "quantity_boxes": take}],
+                    ))
+                    remaining = round(remaining - take, 3)
+            else:
+                capacity = (pallet_type or {}).get("boxes_per_pallet") or remaining
+                while remaining > 0:
+                    take = min(capacity, remaining)
+                    pallet_no += 1
+                    pallets.append(LoadingPlanningPallet(
+                        id=None, loading_planning_id=None, pallet_no=pallet_no,
+                        pallet_type_id=(pallet_type or {}).get("id"),
+                        pallet_type_name=(pallet_type or {}).get("name") or "Pallet",
+                        capacity_boxes=capacity, tare_weight_kg=(pallet_type or {}).get("weight_kg"),
+                        contents=[{"item_sr_no": item.sr_no, "quantity_boxes": take}],
+                    ))
+                    remaining = round(remaining - take, 3)
+
+        return {
+            "cartons": [self._carton_json(c) for c in cartons],
+            "pallets": [self._pallet_json(p) for p in pallets],
+        }
+
+    @staticmethod
+    def _carton_json(carton: LoadingPlanningCarton) -> dict:
+        return {
+            "carton_no": carton.carton_no, "carton_type_id": carton.carton_type_id,
+            "carton_type_name": carton.carton_type_name, "capacity_boxes": carton.capacity_boxes,
+            "tare_weight_kg": carton.tare_weight_kg, "pallet_no": carton.pallet_no,
+            "contents": carton.contents,
+        }
+
+    @staticmethod
+    def _pallet_json(pallet: LoadingPlanningPallet) -> dict:
+        return {
+            "pallet_no": pallet.pallet_no, "pallet_type_id": pallet.pallet_type_id,
+            "pallet_type_name": pallet.pallet_type_name, "capacity_boxes": pallet.capacity_boxes,
+            "tare_weight_kg": pallet.tare_weight_kg, "container_sr_no": pallet.container_sr_no,
+            "contents": pallet.contents,
+        }
+
+    # ---- booking --------------------------------------------------
+    def booking_snapshot(self, booking_detail_id: int, company_id: int) -> dict:
+        """The containers a plan (or an export invoice) copies off a booking.
+
+        A copy, not a live link: the 11B rows are a snapshot from the moment
+        the booking is picked, so editing the booking afterwards can't
+        rewrite a finished plan. The transporter is booking-level and gets
+        stamped onto every row, since that is how Booking Detail records it."""
+        booking = self.booking_detail_repo.get_by_id(booking_detail_id)
+        if not booking or booking.company_id != company_id:
+            raise NotFoundError(f"Booking detail #{booking_detail_id} not found.")
+        return {
+            "booking_no": booking.booking_no,
+            "vessel_name": booking.vessel_name,
+            "voyage_no": booking.voyage_no,
+            "transporter_name": booking.transporter_name,
+            "container_summary": [dict(c) for c in booking.containers],
+            "containers": [{
+                "container_type": cd.get("container_type"),
+                "container_no": cd.get("container_no"),
+                "line_seal_no": cd.get("line_seal_no"),
+                "rfid_seal_no": cd.get("rfid_seal_no"),
+                "vehicle_no": cd.get("vehicle_no"),
+                "lr_no": cd.get("lr_no"),
+                "transporter_name": booking.transporter_name,
+                "max_permitted_weight": cd.get("max_permitted_weight"),
+                "tare_weight_kg": cd.get("tare_weight_kg"),
+            } for cd in booking.container_details],
+        }
+
+    # ---- validation --------------------------------------------------
+    def _build(self, current_user: User, fields: dict, existing: Optional[LoadingPlanning] = None) -> LoadingPlanning:
+        planning_date = (fields.get("loading_planning_date") or "").strip()
+        if not planning_date:
+            raise ValidationError("Loading planning date is required.")
+
+        booking_detail_id = None
+        raw_booking = (fields.get("booking_detail_id") or "").strip()
+        if raw_booking:
+            try:
+                booking_detail_id = int(raw_booking)
+            except (TypeError, ValueError):
+                raise ValidationError("Pick a booking from the list.")
+            booking = self.booking_detail_repo.get_by_id(booking_detail_id)
+            if not booking or booking.company_id != current_user.company_id:
+                raise ValidationError("Pick a booking from the list.")
+
+        number = existing.loading_planning_number if existing else (
+            (fields.get("loading_planning_number") or "").strip()
+            or self.next_number(current_user.company_id, planning_date)
+        )
+        return LoadingPlanning(
+            id=existing.id if existing else None,
+            company_id=current_user.company_id,
+            created_by=existing.created_by if existing else current_user.id,
+            loading_planning_number=number,
+            loading_planning_date=planning_date,
+            booking_detail_id=booking_detail_id,
+            booking_no=(fields.get("booking_no") or "").strip() or None,
+            vessel_name=(fields.get("vessel_name") or "").strip() or None,
+            voyage_no=(fields.get("voyage_no") or "").strip() or None,
+            transporter_name=(fields.get("transporter_name") or "").strip() or None,
+            remarks=(fields.get("remarks") or "").strip() or None,
+        )
+
+    @staticmethod
+    def _to_float(raw, label: str) -> Optional[float]:
+        text = (str(raw) if raw is not None else "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            raise ValidationError(f"{label} must be a number.")
+
+    @staticmethod
+    def _clean_proforma_ids(raw) -> List[int]:
+        out = []
+        for value in raw or []:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return list(dict.fromkeys(out))
+
+    def _clean_items(self, raw) -> List[LoadingPlanningItem]:
+        items = []
+        for i, r in enumerate(raw or [], start=1):
+            name = (r.get("product_name") or "").strip()
+            if not name:
+                continue
+            boxes = self._to_float(r.get("quantity_boxes"), "Goods: quantity") or 0
+            price = self._to_float(r.get("price_usd"), "Goods: price") or 0
+            items.append(LoadingPlanningItem(
+                id=None, loading_planning_id=None, sr_no=i, product_name=name,
+                proforma_invoice_id=self._optional_int(r.get("proforma_invoice_id")),
+                purchase_order_id=self._optional_int(r.get("purchase_order_id")),
+                po_number=(r.get("po_number") or "").strip() or None,
+                product_id=self._optional_int(r.get("product_id")),
+                design_id=self._optional_int(r.get("design_id")),
+                design_name=(r.get("design_name") or "").strip() or None,
+                hsn_code=(r.get("hsn_code") or "").strip() or None,
+                quantity_boxes=boxes,
+                quantity_unit=(r.get("quantity_unit") or "PCS").strip() or "PCS",
+                quantity_value=self._to_float(r.get("quantity_value"), "Goods: alt quantity") or 0,
+                unit=(r.get("unit") or "SQM").strip() or "SQM",
+                net_weight_kg=self._to_float(r.get("net_weight_kg"), "Goods: net weight"),
+                price_usd=price, total_usd=round(price * boxes, 2),
+            ))
+        return items
+
+    @staticmethod
+    def _optional_int(raw) -> Optional[int]:
+        text = (str(raw) if raw is not None else "").strip()
+        if not text or text.lower() in ("none", "null"):
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _clean_containers(self, raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            values = {k: (r.get(k) or "").strip() or None
+                      for k in ("container_type", "container_no", "line_seal_no", "rfid_seal_no",
+                                "vehicle_no", "lr_no", "transporter_name", "max_permitted_weight")}
+            values["tare_weight_kg"] = self._to_float(r.get("tare_weight_kg"), "Container details: tare weight")
+            if any(v is not None for v in values.values()):
+                rows.append(values)
+        return rows
+
+    def _clean_cartons(self, raw) -> List[LoadingPlanningCarton]:
+        cartons = []
+        for r in raw or []:
+            no = self._optional_int(r.get("carton_no"))
+            if not no:
+                continue
+            cartons.append(LoadingPlanningCarton(
+                id=None, loading_planning_id=None, carton_no=no,
+                carton_type_id=self._optional_int(r.get("carton_type_id")),
+                carton_type_name=(r.get("carton_type_name") or "").strip() or None,
+                capacity_boxes=self._to_float(r.get("capacity_boxes"), "Carton: capacity"),
+                tare_weight_kg=self._to_float(r.get("tare_weight_kg"), "Carton: tare weight"),
+                pallet_no=self._optional_int(r.get("pallet_no")),
+                contents=self._clean_contents(r.get("contents")),
+            ))
+        return cartons
+
+    def _clean_pallets(self, raw) -> List[LoadingPlanningPallet]:
+        pallets = []
+        for r in raw or []:
+            no = self._optional_int(r.get("pallet_no"))
+            if not no:
+                continue
+            pallets.append(LoadingPlanningPallet(
+                id=None, loading_planning_id=None, pallet_no=no,
+                pallet_type_id=self._optional_int(r.get("pallet_type_id")),
+                pallet_type_name=(r.get("pallet_type_name") or "").strip() or None,
+                capacity_boxes=self._to_float(r.get("capacity_boxes"), "Pallet: capacity"),
+                tare_weight_kg=self._to_float(r.get("tare_weight_kg"), "Pallet: tare weight"),
+                container_sr_no=self._optional_int(r.get("container_sr_no")),
+                contents=self._clean_contents(r.get("contents")),
+            ))
+        return pallets
+
+    def _clean_contents(self, raw) -> List[dict]:
+        rows = []
+        for r in raw or []:
+            sr = self._optional_int(r.get("item_sr_no"))
+            qty = self._to_float(r.get("quantity_boxes"), "Packed quantity") or 0
+            if sr and qty > 0:
+                rows.append({"item_sr_no": sr, "quantity_boxes": qty})
+        return rows
+
+    def packing_warnings(self, plan: LoadingPlanning) -> List[str]:
+        """Everything that doesn't add up, phrased for the operator - and
+        returned rather than raised, because none of it stops a save.
+
+        A plan is legitimately built over several sittings: goods loaded
+        today, pallets built tomorrow, containers assigned when the booking
+        firms up. Refusing to save an incomplete one would just mean losing
+        the work."""
+        warnings = []
+        for balance in plan.line_balances:
+            left = balance["left"]
+            if abs(left) < 0.001:
+                continue
+            if left > 0:
+                warnings.append(
+                    f"{balance['label']}: {left:g} {balance['quantity_unit']} still to be packed."
+                )
+            else:
+                warnings.append(
+                    f"{balance['label']}: {abs(left):g} {balance['quantity_unit']} MORE packed than planned."
+                )
+        for row in plan.container_summary:
+            if row.get("over_weight"):
+                warnings.append(
+                    f"Container {row['container_no']}: VGM {row['vgm_kg']:,.0f} kg is over the "
+                    f"{row['max_permitted_weight']:,.0f} kg permitted."
+                )
+        loose = [p for p in plan.pallets if p.container_sr_no is None]
+        if loose and plan.containers:
+            warnings.append(f"{len(loose)} pallet(s) not yet assigned to a container.")
+        return warnings
+
+    # ---- writes --------------------------------------------------
+    def _assemble(self, plan: LoadingPlanning, proforma_ids, items, containers,
+                  cartons, pallets) -> LoadingPlanning:
+        plan.proforma_invoice_ids = self._clean_proforma_ids(proforma_ids)
+        plan.items = self._clean_items(items)
+        plan.containers = self._clean_containers(containers)
+        plan.cartons = self._clean_cartons(cartons)
+        plan.pallets = self._clean_pallets(pallets)
+        return plan
+
+    def create(self, current_user: User, fields: dict, proforma_ids: list, items: list,
+               containers: list, cartons: list, pallets: list) -> LoadingPlanning:
+        plan = self._build(current_user, fields)
+        self._assemble(plan, proforma_ids, items, containers, cartons, pallets)
+        return self.loading_planning_repo.create(plan)
+
+    def update(self, loading_planning_id: int, current_user: User, fields: dict, proforma_ids: list,
+               items: list, containers: list, cartons: list, pallets: list) -> LoadingPlanning:
+        existing = self.get(loading_planning_id, current_user.company_id)
+        plan = self._build(current_user, fields, existing=existing)
+        self._assemble(plan, proforma_ids, items, containers, cartons, pallets)
+        self.loading_planning_repo.update(loading_planning_id, plan)
+        return self.get(loading_planning_id, current_user.company_id)
+
+    def delete(self, loading_planning_id: int, current_user: User) -> None:
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can delete a loading planning.")
+        self.get(loading_planning_id, current_user.company_id)  # 404s if missing/another company's
+        self.loading_planning_repo.delete(loading_planning_id)
 
 
 # ============================================================
