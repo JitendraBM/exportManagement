@@ -1,0 +1,152 @@
+{# The printed packing plan: what the packing floor works from.
+
+   Two tables, exactly the two the spreadsheet this replaces had.
+
+   PACKING AUTO FILLED is one row per produced batch, with the arithmetic
+   nobody should do by hand - 317 boxes at 32/pallet is 9.91 PLT, of which
+   nine are real and hold 288 - and the pallet numbers those nine take.
+
+   PACKING REMAIN BY MANUAL is NOT a second stored list: it is derived from
+   the same rows (plan.remain_rows), being every batch that did not divide
+   exactly. A batch that did - 160 at 32 is five pallets and nothing over -
+   is simply absent from it. #}
+{% set numbers = plan.packing_numbers %}
+
+<div class="sheet">
+  <h2 class="sheet-title">PACKING PLANNING</h2>
+
+  <table class="sheet-table">
+    <tr>
+      <td><strong>No.</strong> {{ plan.packing_planning_number }}</td>
+      <td><strong>Date</strong> {{ plan.packing_planning_date }}</td>
+      <td><strong>Total units planned</strong> {{ plan.total_units }}</td>
+    </tr>
+    {% if plan.proforma_invoice_numbers %}
+    <tr><td colspan="3"><strong>Proforma invoices</strong> {{ plan.proforma_invoice_numbers | join(', ') }}</td></tr>
+    {% endif %}
+    {% if plan.remarks %}<tr><td colspan="3"><strong>Remarks</strong> {{ plan.remarks }}</td></tr>{% endif %}
+  </table>
+
+  <h3>PACKING AUTO FILLED</h3>
+  <table class="sheet-table">
+    <thead>
+      <tr>
+        <th>SR NO</th>
+        <th>DESCRIPTION OF GOODS</th>
+        <th>MODEL NO OR NAME</th>
+        <th>BATCH NO</th>
+        <th>MANF. DATE</th>
+        <th class="num">PRODUCTION READY QTY</th>
+        <th class="num">AS PER PL PACKING</th>
+        <th class="num">ACTUAL PACKING</th>
+        <th class="num">QTY</th>
+        <th class="num">PACKING NO START FROM</th>
+        <th class="num">END NUMBER</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in plan.items %}
+      {% set span = numbers.get(item.sr_no) or (None, None) %}
+      <tr>
+        <td>{{ item.sr_no }}</td>
+        <td>{{ item.product_name }}</td>
+        <td>{{ item.design_name or '—' }}</td>
+        <td>{{ item.batch_number or '—' }}</td>
+        <td>{{ item.production_date | dmy_date }}</td>
+        <td class="num">{{ '%g' % item.ready_quantity }} {{ item.quantity_unit }}</td>
+        <td class="num">{{ '%.2f' % item.as_per_pl_packing }} {{ item.packing_unit_label }}</td>
+        <td class="num">{{ item.actual_packing }}</td>
+        <td class="num">{{ '%g' % item.packed_quantity }} {{ item.quantity_unit }}</td>
+        <td class="num">{{ span[0] if span[0] else '—' }}</td>
+        <td class="num">{{ span[1] if span[1] else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="5">Total</th>
+        <th class="num">{{ '%g' % plan.total_ready }}</th>
+        <th></th>
+        <th class="num">{{ plan.items | sum(attribute='actual_packing') }}</th>
+        <th class="num">{{ '%g' % plan.total_packed }}</th>
+        <th colspan="2"></th>
+      </tr>
+    </tfoot>
+  </table>
+
+  {% set remain = plan.remain_rows %}
+  {% if remain %}
+  <h3>PACKING REMAIN BY MANUAL</h3>
+  <table class="sheet-table">
+    <thead>
+      <tr>
+        <th>SR NO</th>
+        <th>DESCRIPTION OF GOODS</th>
+        <th>MODEL NO OR NAME</th>
+        <th>BATCH NO</th>
+        <th>MANF. DATE</th>
+        <th class="num">QTY</th>
+        <th class="num">PACKING NO</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in remain %}
+      <tr>
+        <td>{{ row.sr_no }}</td>
+        <td>{{ row.product_name }}</td>
+        <td>{{ row.design_name or '—' }}</td>
+        <td>{{ row.batch_number or '—' }}</td>
+        <td>{{ row.production_date | dmy_date }}</td>
+        <td class="num">{{ '%g' % row.quantity }} {{ row.quantity_unit }}</td>
+        {# Blank, not a dash, when nothing has been grouped yet: this column
+           is the one somebody fills in on the floor. #}
+        <td class="num">{{ row.unit_nos | join(', ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="5">Total</th>
+        <th class="num">{{ '%g' % plan.total_remain }}</th>
+        <th></th>
+      </tr>
+    </tfoot>
+  </table>
+  {% endif %}
+
+  {% if plan.manual_units %}
+  <h3>MANUAL UNITS</h3>
+  <table class="sheet-table">
+    <thead>
+      <tr>
+        <th>PACKING NO</th>
+        <th>TYPE</th>
+        <th>CONTENTS</th>
+        <th class="num">QTY</th>
+        <th>REMARKS</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set by_sr = plan.items_by_sr %}
+      {% for unit in plan.manual_units %}
+      <tr>
+        <td class="num">{{ unit.unit_no }}</td>
+        <td>{{ unit.packing_type_name or unit.packing_unit_label }}</td>
+        <td>
+          {% for c in unit.contents %}
+          {% set item = by_sr.get(c.item_sr_no) %}
+          <div>{{ item.label if item else 'Line ' ~ c.item_sr_no }}
+            &mdash; {{ '%g' % (c.quantity_boxes or 0) }} {{ item.quantity_unit if item else '' }}</div>
+          {% else %}
+          <span class="text-soft">empty</span>
+          {% endfor %}
+        </td>
+        <td class="num">{{ '%g' % unit.packed_boxes }}</td>
+        <td>{{ unit.remarks or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+</div>

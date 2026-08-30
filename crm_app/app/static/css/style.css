@@ -626,6 +626,23 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
 .toolbar-menu-empty { padding: 8px 10px; font-size: .8rem; color: var(--color-text-soft); }
 .toolbar-menu-sep { border: 0; border-top: 1px solid var(--color-line); margin: 5px 2px; }
 
+/* One design on a purchase order's Production Status page. A card that is
+   also a disclosure: the summary row is the whole design at a glance, and
+   its batch editor stays folded until that design is being worked on -
+   an order can carry well over fifty of these. */
+.production-design { padding: 0; }
+.production-design > summary.production-design-summary {
+  list-style: none; cursor: pointer; margin: 0;
+}
+.production-design > summary::-webkit-details-marker { display: none; }
+.production-design > summary.production-design-summary::after {
+  content: "▾"; font-size: .7rem; color: var(--color-text-soft); margin-left: 10px;
+}
+.production-design[open] > summary.production-design-summary::after { content: "▴"; }
+.production-design > form { padding: 14px 18px 16px; }
+.production-design[hidden] { display: none; }
+.production-batches .repeatable-row:last-child { border-bottom: 0; }
+
 /* Panels shown above a printable sheet (never printed): the confirmation
    banner and the "designs still to be ordered" table on a proforma invoice. */
 .sheet-note {
