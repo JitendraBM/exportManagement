@@ -8204,14 +8204,18 @@ class PackingPlanningService:
 
     Two things here are worth stating outright:
 
-    * goods come in per BATCH, not per design. `build_prefill_from_proformas`
-      takes the same PI -> purchase orders hop LoadingPlanningService does,
-      but goes one further, to those orders' PRODUCTION BATCHES: a batch
-      number and a manufacturing date exist nowhere else in the app, and they
-      have to ride on the line that gets packed because a pallet is packed
-      out of one batch. ATLANTA LIGHT GREY is one design and two lines here -
-      200 boxes under batch 102 on the 27th, 117 under 103 on the 28th - and
-      packing them as one 317 would put two firings on one pallet.
+    * loading is two explicit steps, not one hop. `purchase_orders_for_proformas`
+      lists the purchase orders the ticked PIs pulled in - not their goods yet -
+      so a run that doesn't want every one of them (a supplier not ready, a PO
+      already packed elsewhere) can narrow the set before
+      `build_prefill_from_purchase_orders` commits to loading anything. Goods
+      come in per BATCH, not per design, one level past where
+      LoadingPlanningService stops: a batch number and a manufacturing date
+      exist nowhere else in the app, and they have to ride on the line that
+      gets packed because a pallet is packed out of one batch. ATLANTA LIGHT
+      GREY is one design and two lines here - 200 boxes under batch 102 on the
+      27th, 117 under 103 on the 28th - and packing them as one 317 would put
+      two firings on one pallet.
 
     * every packing check is a WARNING, never a ValidationError, for the same
       reason LoadingPlanningService gives about its own: batches are keyed in
@@ -8259,9 +8263,9 @@ class PackingPlanningService:
                 result.append(pi)
         return result
 
-    def build_prefill_from_proformas(self, proforma_ids: list, company_id: int) -> dict:
-        """Trace each selected PI through its purchase orders to the batches
-        those orders were actually produced in, one line per batch.
+    def _items_for_purchase_order(self, po: PurchaseOrder) -> List[PackingPlanningItem]:
+        """One line per produced BATCH on this order, `sr_no` left at 0 for
+        the caller to number once every order's lines are merged.
 
         A purchase order line is a product; its production rows are the
         designs of that product the supplier is making (settled on the
@@ -8273,37 +8277,91 @@ class PackingPlanningService:
         Batches with no quantity are skipped - the production form always
         carries a spare blank row, and one that was only ever used to type a
         remark has nothing to pack."""
+        items: List[PackingPlanningItem] = []
+        production = self.production_repo.map_for_purchase_order(po.id)
+        for item in po.items:
+            for record in production.values():
+                if record.purchase_order_item_id != item.id:
+                    continue
+                for batch in record.batches:
+                    if (batch.quantity_boxes or 0) <= 0:
+                        continue
+                    items.append(PackingPlanningItem(
+                        id=None, packing_planning_id=None, sr_no=0,
+                        product_name=item.product_name,
+                        proforma_invoice_id=po.proforma_invoice_id, purchase_order_id=po.id,
+                        po_number=po.po_number, purchase_order_item_id=item.id,
+                        product_id=item.product_id,
+                        design_id=record.design_id, design_name=record.design_name,
+                        batch_number=batch.batch_number,
+                        production_date=batch.production_date,
+                        ready_quantity=batch.quantity_boxes or 0,
+                        quantity_unit=item.quantity_unit or "BOX",
+                    ))
+        return items
+
+    def purchase_orders_for_proformas(self, proforma_ids: list, company_id: int) -> List[dict]:
+        """Step 1 of loading: every purchase order the ticked PIs pulled in,
+        each with a summary of what it would add - not yet the batch lines
+        themselves. Lets the operator narrow to just the orders this packing
+        run actually wants (a supplier not ready yet, a PO already packed in
+        an earlier plan) before step 2 commits to loading anything.
+
+        A PO's `proforma_invoice_id` is a single FK, so one order can never
+        surface twice even when several selected PIs are checked."""
         proformas = self._load_proformas(proforma_ids, company_id)
 
-        items: List[PackingPlanningItem] = []
+        rows = []
         for pi in proformas:
             for po_header in self.purchase_order_repo.list_for_proforma(pi.id):
                 if po_header.company_id != company_id:
                     continue
-                # list_for_proforma returns header rows only, so the order has
-                # to be re-fetched to see its lines - the same reason
-                # LoadingPlanningService re-fetches its own.
+                # list_for_proforma returns header rows only, so the order
+                # has to be re-fetched to see its lines and match a batch's
+                # unit - the same reason build_prefill_from_purchase_orders
+                # re-fetches its own.
                 po = self.purchase_order_repo.get_by_id(po_header.id) or po_header
                 production = self.production_repo.map_for_purchase_order(po.id)
-                for item in po.items:
-                    for record in production.values():
-                        if record.purchase_order_item_id != item.id:
+                batch_count = 0
+                ready_totals: dict = {}
+                for record in production.values():
+                    unit = None
+                    for item in po.items:
+                        if item.id == record.purchase_order_item_id:
+                            unit = item.quantity_unit or "BOX"
+                            break
+                    for batch in record.batches:
+                        qty = batch.quantity_boxes or 0
+                        if qty <= 0:
                             continue
-                        for batch in record.batches:
-                            if (batch.quantity_boxes or 0) <= 0:
-                                continue
-                            items.append(PackingPlanningItem(
-                                id=None, packing_planning_id=None, sr_no=len(items) + 1,
-                                product_name=item.product_name,
-                                proforma_invoice_id=pi.id, purchase_order_id=po.id,
-                                po_number=po.po_number, purchase_order_item_id=item.id,
-                                product_id=item.product_id,
-                                design_id=record.design_id, design_name=record.design_name,
-                                batch_number=batch.batch_number,
-                                production_date=batch.production_date,
-                                ready_quantity=batch.quantity_boxes or 0,
-                                quantity_unit=item.quantity_unit or "BOX",
-                            ))
+                        batch_count += 1
+                        ready_totals[unit or "BOX"] = round(ready_totals.get(unit or "BOX", 0) + qty, 3)
+                rows.append({
+                    "id": po.id, "po_number": po.po_number, "seller_name": po.seller_name,
+                    "proforma_invoice_id": pi.id, "proforma_invoice_number": po.proforma_invoice_number,
+                    "batch_count": batch_count, "ready_totals": ready_totals,
+                })
+        return rows
+
+    def build_prefill_from_purchase_orders(self, purchase_order_ids: list, company_id: int) -> dict:
+        """Step 2 of loading: the batch lines of exactly the purchase orders
+        ticked in step 1's list, merged and renumbered as one document."""
+        pos = []
+        for poid in dict.fromkeys(purchase_order_ids or []):
+            try:
+                po = self.purchase_order_repo.get_by_id(int(poid))
+            except (TypeError, ValueError):
+                continue
+            # A crafted id can never pull another company's order in - same
+            # guard _load_proformas uses for PIs.
+            if po and po.company_id == company_id:
+                pos.append(po)
+
+        items: List[PackingPlanningItem] = []
+        for po in pos:
+            items.extend(self._items_for_purchase_order(po))
+        for i, item in enumerate(items, start=1):
+            item.sr_no = i
 
         self.auto_fill(company_id, items)
         return {

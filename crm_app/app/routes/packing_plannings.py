@@ -11,10 +11,17 @@ product_pallet_types knows a pallet takes 32 boxes, but until now nothing put
 the two together and said "317 ready is nine full pallets and 29 boxes
 somebody has to pack by hand".
 
-Lines come in per BATCH, traced PI -> purchase orders -> those orders'
-production batches, because a batch number and a manufacturing date exist
-nowhere else in the app - and a pallet is packed out of one firing, not out of
-a design's yearly total.
+Loading is two explicit steps: tick proforma invoices and list the purchase
+orders they pulled in (`/api/purchase-orders`), then tick which of THOSE to
+actually draw from (`/api/prefill`, now keyed on purchase_order_ids rather
+than proforma_invoice_ids). The checkpoint exists because not every PO under
+a selected PI belongs in this packing run - a supplier not ready yet, a PO
+already packed in an earlier plan.
+
+Lines come in per BATCH, traced purchase order -> its production batches,
+because a batch number and a manufacturing date exist nowhere else in the app
+- and a pallet is packed out of one firing, not out of a design's yearly
+total.
 
 The sheet's second table is not a second stored list. PACKING REMAIN BY MANUAL
 is derived from the batch rows (see PackingPlanning.remain_rows); what IS
@@ -97,10 +104,29 @@ def _packing_types_json(container, company_id, items) -> str:
     return json.dumps(service.packing_types_for_items(company_id, items))
 
 
+def _purchase_orders_json(container, company_id, plan) -> str:
+    """Seeds step 1's PO picker on an existing document with the purchase
+    orders it was actually built from, pre-checked - so opening it for edit
+    shows what was loaded rather than an empty picker the operator has to
+    re-list from scratch. Scoped to the plan's own proforma invoices, the
+    same set step 1 would offer if run again by hand."""
+    if not plan:
+        return "[]"
+    service = container.packing_planning_service
+    rows = service.purchase_orders_for_proformas(plan.proforma_invoice_ids, company_id)
+    used = {i.purchase_order_id for i in plan.items if i.purchase_order_id}
+    for row in rows:
+        row["checked"] = row["id"] in used
+    return json.dumps(rows)
+
+
 def _render_form(container, plan, warnings=None, status_code=200):
     """Re-render after a failed POST with exactly what was typed, so nothing
     the operator did is lost - the manual grouping especially, which is the
-    part of this document a person actually spends time on."""
+    part of this document a person actually spends time on.
+
+    The PO picker itself isn't POSTed (only the goods lines it produced are),
+    so it comes back empty here - a step 1 click re-lists it in a click."""
     items = _extract_items(request.form)
     html = render_template(
         "packing_plannings/form.html", plan=plan, form_data=request.form,
@@ -108,6 +134,7 @@ def _render_form(container, plan, warnings=None, status_code=200):
         manual_units_json=request.form.get("manual_units_json") or "[]",
         packing_types_json=_packing_types_json(
             container, g.user.company_id, container.packing_planning_service._clean_items(items)),
+        purchase_orders_json="[]",
         selected_proforma_ids=[int(v) for v in request.form.getlist("proforma_invoice_ids[]") if v.isdigit()],
         warnings=warnings or [],
         suggested_number=(plan.packing_planning_number if plan else request.form.get("packing_planning_number")),
@@ -117,18 +144,33 @@ def _render_form(container, plan, warnings=None, status_code=200):
     return (html, status_code) if status_code != 200 else html
 
 
+@packing_plannings_bp.route("/api/purchase-orders")
+@login_required
+def packing_planning_purchase_orders():
+    """Step 1 of loading - the `list purchase orders for selected PIs`
+    button. Every PO the ticked PIs pulled in, each with a batch-count/
+    ready-quantity summary, so the operator can narrow to just the orders
+    this packing run wants before step 2 commits to loading anything."""
+    raw = request.args.get("proforma_invoice_ids", "")
+    ids = [p for p in raw.split(",") if p.strip()]
+    return jsonify({
+        "purchase_orders": current_app.container.packing_planning_service
+        .purchase_orders_for_proformas(ids, g.user.company_id)
+    })
+
+
 @packing_plannings_bp.route("/api/prefill")
 @login_required
 def packing_planning_prefill():
-    """Batches for the ticked proforma invoices - the `load batches from
-    selected PIs` button. Arrives already auto-filled, since the packing type
-    and the whole-unit count are arithmetic, not judgement. Overwrites only
-    the PI-derived lines, leaving the document's number/date and any manual
-    grouping already built untouched."""
-    raw = request.args.get("proforma_invoice_ids", "")
+    """Step 2 of loading - the `load batches from selected POs` button.
+    Arrives already auto-filled, since the packing type and the whole-unit
+    count are arithmetic, not judgement. Overwrites only the PO-derived
+    lines, leaving the document's number/date and any manual grouping
+    already built untouched."""
+    raw = request.args.get("purchase_order_ids", "")
     ids = [p for p in raw.split(",") if p.strip()]
     return jsonify(
-        current_app.container.packing_planning_service.build_prefill_from_proformas(ids, g.user.company_id)
+        current_app.container.packing_planning_service.build_prefill_from_purchase_orders(ids, g.user.company_id)
     )
 
 
@@ -180,7 +222,7 @@ def new_packing_planning():
     today = date.today().isoformat()
     return render_template(
         "packing_plannings/form.html", plan=None, form_data=None, items_json="[]",
-        manual_units_json="[]", packing_types_json="{}",
+        manual_units_json="[]", packing_types_json="{}", purchase_orders_json="[]",
         selected_proforma_ids=[], warnings=[],
         suggested_number=service.next_number(g.user.company_id, today), today=today,
         **_form_context(container, g.user.company_id),
@@ -218,6 +260,7 @@ def edit_packing_planning(packing_planning_id):
         items_json=json.dumps([dataclasses.asdict(i) for i in plan.items]),
         manual_units_json=json.dumps([_unit_json(u) for u in plan.manual_units]),
         packing_types_json=_packing_types_json(container, g.user.company_id, plan.items),
+        purchase_orders_json=_purchase_orders_json(container, g.user.company_id, plan),
         selected_proforma_ids=plan.proforma_invoice_ids,
         warnings=service.packing_warnings(plan),
         suggested_number=plan.packing_planning_number, today=plan.packing_planning_date,
