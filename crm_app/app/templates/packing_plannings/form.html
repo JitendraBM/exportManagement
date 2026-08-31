@@ -54,14 +54,33 @@
         {% endfor %}
       </div>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="load-from-pis-btn">↻ Load batches from selected PIs</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="list-pos-btn">↻ List purchase orders for selected PIs</button>
     <p class="hint">
-      Loading traces each selected PI through its purchase orders to the <strong>batches</strong> those orders
-      were actually produced in &mdash; the rows on each purchase order's Production Status page. One line per
-      batch, because a batch number and manufacturing date exist nowhere else, and a pallet is packed out of one
-      firing: ATLANTA LIGHT GREY arrives as two lines, 200 boxes under batch 102 and 117 under 103. The packing
-      type and whole-unit count are filled in for you. Only the batch lines are replaced &mdash; any manual
-      grouping you've already done is kept.
+      Lists every purchase order the ticked PIs pulled in below &mdash; not their goods yet. Not every PO under a
+      PI belongs in this packing run (a supplier not ready yet, a PO already packed in an earlier plan), so which
+      ones actually load their batches is a second, separate step.
+    </p>
+  </div>
+
+  {# ---- Purchase orders --------------------------------------------------
+     Step 1's result and step 2's input: every PO the ticked PIs pulled in,
+     each with a summary of what it would add, so the operator can narrow the
+     set before committing to loading anything. #}
+  <div class="card">
+    <div class="card-header"><h3>Purchase orders</h3></div>
+    <div class="field">
+      <label>Purchase orders to load batches from <span class="text-soft text-sm">(tick which of these this packing run actually wants)</span></label>
+      <div id="po-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;">
+        <div class="text-soft text-sm" id="po-picker-empty">List purchase orders for selected PIs above first.</div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="load-from-pos-btn">↻ Load batches from selected POs</button>
+    <p class="hint">
+      Loading traces each ticked purchase order to the <strong>batches</strong> it was actually produced in
+      &mdash; the rows on that order's Production Status page. One line per batch, because a batch number and
+      manufacturing date exist nowhere else, and a pallet is packed out of one firing: ATLANTA LIGHT GREY arrives
+      as two lines, 200 boxes under batch 102 and 117 under 103. The packing type and whole-unit count are filled
+      in for you. Only the batch lines are replaced &mdash; any manual grouping you've already done is kept.
     </p>
   </div>
 
@@ -182,6 +201,7 @@
 <script type="application/json" id="pp-initial-items">{{ items_json | safe }}</script>
 <script type="application/json" id="pp-initial-units">{{ manual_units_json | safe }}</script>
 <script type="application/json" id="pp-initial-types">{{ packing_types_json | safe }}</script>
+<script type="application/json" id="pp-initial-pos">{{ purchase_orders_json | safe }}</script>
 
 <script>
 (function () {
@@ -194,10 +214,12 @@
   // mixed pallet holds leftovers from several batches - and flattening a tree
   // into foo[] arrays would need an index-matching convention every regroup
   // would have to keep in sync. The server cleans and revalidates both, so
-  // nothing here is trusted.
+  // nothing here is trusted. `purchaseOrders` is step 1's own list - not
+  // posted at all, since only the batches it leads to end up on the document.
   var items = readJSON("pp-initial-items", []);
   var units = readJSON("pp-initial-units", []);
   var packingTypes = readJSON("pp-initial-types", {});
+  var purchaseOrders = readJSON("pp-initial-pos", []);
 
   function readJSON(id, fallback) {
     var el = document.getElementById(id);
@@ -446,6 +468,41 @@
     return u.packed_boxes_cache;
   }
 
+  // ---- the purchase-order picker (step 1's result, step 2's input) --------
+  // Not part of the items/units render loop: it only changes when step 1 is
+  // re-run, and its checkboxes are read directly by loadFromPOs() rather than
+  // tracked in a JS model - there is nothing here for the form itself to post.
+  function poSummary(po) {
+    var parts = [];
+    Object.keys(po.ready_totals || {}).forEach(function (unit) {
+      parts.push(fmt(po.ready_totals[unit], 0) + " " + esc(unit));
+    });
+    var batches = (po.batch_count || 0) + (po.batch_count === 1 ? " batch" : " batches");
+    return batches + (parts.length ? " ready · " + parts.join(", ") : " ready");
+  }
+
+  function renderPOs() {
+    var pane = document.getElementById("po-picker");
+    if (!purchaseOrders.length) {
+      pane.innerHTML = '<div class="text-soft text-sm" id="po-picker-empty">List purchase orders for selected PIs above first.</div>';
+      return;
+    }
+    var html = "";
+    purchaseOrders.forEach(function (po) {
+      // Pre-checked unless a caller (the edit-seed data) explicitly says
+      // otherwise - a plain List -> Load then reproduces loading every PO,
+      // same as before this was split into two steps.
+      html += '<label class="js-po-label" style="display:block;padding:4px 0;cursor:pointer;">' +
+        '<input type="checkbox" class="js-po-check" value="' + esc(po.id) + '"' +
+        (po.checked !== false ? ' checked' : '') + '>' +
+        ' <strong>' + esc(po.po_number) + '</strong> — ' + esc(po.seller_name) +
+        ' <span class="text-soft">(' + esc(po.proforma_invoice_number) + ')</span>' +
+        '<br><span class="text-soft text-sm">' + esc(poSummary(po)) + '</span>' +
+        '</label>';
+    });
+    pane.innerHTML = html;
+  }
+
   // ---- render pipeline ---------------------------------------------------
   function renderAll() { renderItems(); renderRemain(); renderUnits(); sync(); }
   function sync() {
@@ -546,8 +603,10 @@
       addUnit(picked);
     } else if (t.id === "auto-fill-btn") {
       autoFill();
-    } else if (t.id === "load-from-pis-btn") {
-      loadFromPIs();
+    } else if (t.id === "list-pos-btn") {
+      listPOs();
+    } else if (t.id === "load-from-pos-btn") {
+      loadFromPOs();
     }
   });
 
@@ -579,11 +638,34 @@
     }).catch(function () { alert("Could not re-fill the packing."); });
   }
 
-  function loadFromPIs() {
+  function listPOs() {
+    // Step 1: which purchase orders the ticked PIs pulled in. Does not touch
+    // the goods lines - that's step 2, and only once this has run.
     var ids = [];
     document.querySelectorAll(".js-pi-check:checked").forEach(function (cb) { ids.push(cb.value); });
     if (!ids.length) { alert("Tick at least one proforma invoice first."); return; }
-    fetch("{{ url_for('packing_plannings.packing_planning_prefill') }}?proforma_invoice_ids=" + ids.join(","))
+    fetch("{{ url_for('packing_plannings.packing_planning_purchase_orders') }}?proforma_invoice_ids=" + ids.join(","))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        purchaseOrders = data.purchase_orders || [];
+        renderPOs();
+        if (!purchaseOrders.length) {
+          alert("Those proforma invoices have no purchase orders yet.");
+        }
+      })
+      .catch(function () { alert("Could not list purchase orders for the selected proforma invoices."); });
+  }
+
+  function loadFromPOs() {
+    // Step 2: the batch lines of exactly the ticked purchase orders.
+    var ids = [];
+    document.querySelectorAll(".js-po-check:checked").forEach(function (cb) { ids.push(cb.value); });
+    if (!ids.length) {
+      alert(purchaseOrders.length ? "Tick at least one purchase order first."
+                                   : "List purchase orders for selected PIs first.");
+      return;
+    }
+    fetch("{{ url_for('packing_plannings.packing_planning_prefill') }}?purchase_order_ids=" + ids.join(","))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         items = data.items || [];
@@ -592,11 +674,11 @@
         // and the reload has just renumbered every one of them.
         units = [];
         if (!items.length) {
-          alert("Those proforma invoices' purchase orders have no production batches keyed in yet.");
+          alert("Those purchase orders have no production batches keyed in yet.");
         }
         renderAll();
       })
-      .catch(function () { alert("Could not load batches from the selected proforma invoices."); });
+      .catch(function () { alert("Could not load batches from the selected purchase orders."); });
   }
 
   // ---- buyer filter over the PI picker (same as every other document) -----
@@ -613,6 +695,7 @@
   }
 
   document.getElementById("pp-form").addEventListener("submit", sync);
+  renderPOs();
   renderAll();
 })();
 </script>

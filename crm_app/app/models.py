@@ -4072,6 +4072,95 @@ class PackingPlanning:
         return rows
 
     @property
+    def pallet_rows(self) -> List[dict]:
+        """The PALLET PACKING PLANNING sheet, as one continuous list: an
+        AUTO row is a single batch with a packing-number RANGE ("1 TO 9"),
+        a MANUAL row is one hand-packed unit built from several batches'
+        leftovers with a single packing number ("54") and one line per
+        batch it holds. Both halves share one SR NO sequence and one
+        packing-number sequence, because that is how the sheet is read on
+        the floor - a pallet number is unique however it was packed.
+
+        A row with nothing packed prints nothing: there is no pallet to
+        list. `lines` is always non-empty for a row that IS printed - an
+        auto row has exactly one, a manual row one per batch it draws from."""
+        numbers = self.packing_numbers
+        by_sr = self.items_by_sr
+        rows: List[dict] = []
+
+        for item in self.items:
+            start, end = numbers.get(item.sr_no) or (None, None)
+            if not start:
+                continue
+            rows.append({
+                "sr_no": len(rows) + 1,
+                "actual_packing": item.actual_packing,
+                "packing_unit_label": item.packing_unit_label,
+                "packing_no": f"{start} TO {end}" if end > start else str(start),
+                "lines": [{
+                    "product_name": item.product_name, "design_name": item.design_name,
+                    "batch_number": item.batch_number, "production_date": item.production_date,
+                    "quantity": item.packed_quantity, "quantity_unit": item.quantity_unit,
+                }],
+            })
+
+        for unit in self.manual_units:
+            lines = []
+            for content in unit.contents:
+                src = by_sr.get(content.get("item_sr_no"))
+                lines.append({
+                    "product_name": src.product_name if src else None,
+                    "design_name": src.design_name if src else None,
+                    "batch_number": src.batch_number if src else None,
+                    "production_date": src.production_date if src else None,
+                    "quantity": content.get("quantity_boxes") or 0,
+                    "quantity_unit": src.quantity_unit if src else "BOX",
+                })
+            rows.append({
+                "sr_no": len(rows) + 1,
+                "actual_packing": 1,
+                "packing_unit_label": unit.packing_unit_label,
+                "packing_no": str(unit.unit_no),
+                "lines": lines or [{"product_name": "(empty)", "design_name": None,
+                                     "batch_number": None, "production_date": None,
+                                     "quantity": 0, "quantity_unit": ""}],
+            })
+        return rows
+
+    @property
+    def total_units_by_label(self) -> dict:
+        """packing_unit_label -> how many numbered pallets/cartons print
+        under it, across both halves - what the sheet's footer totals. Kept
+        apart from `total_units` (a flat count, used by the warnings check)
+        because a document mixing PLT and CTN can't sum those into one
+        number and still mean anything printed."""
+        out: dict = {}
+        for item in self.items:
+            if item.actual_packing:
+                out[item.packing_unit_label] = out.get(item.packing_unit_label, 0) + item.actual_packing
+        for unit in self.manual_units:
+            out[unit.packing_unit_label] = out.get(unit.packing_unit_label, 0) + 1
+        return out
+
+    @property
+    def total_quantity_by_unit(self) -> dict:
+        """quantity_unit -> total boxes/pieces actually printed on
+        `pallet_rows` - the auto rows' packed_quantity plus what the manual
+        units hold, split by unit for the same reason total_units_by_label
+        is."""
+        out: dict = {}
+        for item in self.items:
+            if item.actual_packing:
+                out[item.quantity_unit] = round(out.get(item.quantity_unit, 0) + item.packed_quantity, 3)
+        by_sr = self.items_by_sr
+        for unit in self.manual_units:
+            for content in unit.contents:
+                src = by_sr.get(content.get("item_sr_no"))
+                key = src.quantity_unit if src else "BOX"
+                out[key] = round(out.get(key, 0) + (content.get("quantity_boxes") or 0), 3)
+        return out
+
+    @property
     def total_ready(self) -> float:
         return round(sum((i.ready_quantity or 0) for i in self.items), 3)
 

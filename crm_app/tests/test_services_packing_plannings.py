@@ -6,11 +6,12 @@ into whole numbered pallets and cartons, and what is left over.
 The behaviours worth pinning down are the ones the document exists for, and
 they are checked against the two real orders that motivated it:
 
-  - lines arrive per BATCH, by tracing PI -> purchase orders -> those orders'
-    PRODUCTION BATCHES. A batch number and a manufacturing date exist nowhere
-    else in the app, and a pallet is packed out of one firing: ATLANTA LIGHT
-    GREY is one design and two lines, 200 boxes under batch 102 and 117 under
-    103.
+  - loading is two explicit steps: list the purchase orders the ticked PIs
+    pulled in, then load batches from whichever of THOSE are ticked. Lines
+    arrive per BATCH, one level past the PO - a batch number and a
+    manufacturing date exist nowhere else in the app, and a pallet is packed
+    out of one firing: ATLANTA LIGHT GREY is one design and two lines, 200
+    boxes under batch 102 and 117 under 103.
 
   - only WHOLE units are taken. 317 boxes at 32/pallet reads 9.91 PLT and
     packs 9 holding 288, leaving 29 - and 45 PCS at 30/CTN reads 1.50 CTN and
@@ -58,7 +59,8 @@ def make_design(container, seed, product, name):
 
 def make_chain(container, seed, *, pi_items, po_items, pi_number, po_number):
     """One proforma invoice -> one purchase order, which is the shape
-    build_prefill_from_proformas walks before it reaches the batches."""
+    purchase_orders_for_proformas walks before build_prefill_from_purchase_orders
+    reaches the batches."""
     pi = container.proforma_invoice_service.create(
         seed.admin,
         {"consignee_name": "ROBUST INTERNATIONAL LIMITADA", "invoice_date": "2026-08-27",
@@ -175,9 +177,13 @@ def svc(container):
 
 
 def prefill_items(container, seed, *pis):
+    """The two-step load, run end to end: list the purchase orders the given
+    PIs pulled in, then load batches from every one of them - the "just
+    click List, then Load" path with nothing unticked."""
     service = svc(container)
-    ids = [pi.id for pi in pis]
-    return service._clean_items(service.build_prefill_from_proformas(ids, seed.company_id)["items"])
+    pi_ids = [pi.id for pi in pis]
+    po_ids = [row["id"] for row in service.purchase_orders_for_proformas(pi_ids, seed.company_id)]
+    return service._clean_items(service.build_prefill_from_purchase_orders(po_ids, seed.company_id)["items"])
 
 
 def save(container, seed, items, manual_units=None, date="2026-08-30"):
@@ -230,6 +236,52 @@ def test_a_batch_with_no_quantity_is_not_a_line(container, seed, tiles):
                    [batch("101", "2026-08-29", 317), batch("", "", 0, "nothing yet")])
     items = prefill_items(container, seed, tiles["pi"])
     assert len(items) == 10
+
+
+# --------------------------------------------------------------------------
+# Step 1: listing purchase orders before committing to loading their batches
+# --------------------------------------------------------------------------
+def test_purchase_orders_for_proformas_lists_one_row_per_po_with_a_batch_summary(container, seed, tiles):
+    """Not the goods yet - just what loading this PI would offer, so the
+    operator can narrow the set before step 2 commits to anything."""
+    rows = svc(container).purchase_orders_for_proformas([tiles["pi"].id], seed.company_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["po_number"] == "PO20260827001"
+    assert row["proforma_invoice_number"] == "PI20260827001"
+    assert row["batch_count"] == 10
+    assert row["ready_totals"] == {"BOX": 1888}
+
+
+def test_two_selected_pis_list_both_their_purchase_orders(container, seed, tiles, hardware):
+    rows = svc(container).purchase_orders_for_proformas(
+        [tiles["pi"].id, hardware["pi"].id], seed.company_id)
+    assert {r["po_number"] for r in rows} == {"PO20260827001", "PO20260827002"}
+    hw_row = next(r for r in rows if r["po_number"] == "PO20260827002")
+    assert hw_row["batch_count"] == 2
+    assert hw_row["ready_totals"] == {"PCS": 90}
+
+
+def test_only_the_ticked_purchase_orders_prefill(container, seed, tiles, hardware):
+    """Step 1 lists both orders; step 2, scoped to just one of them, loads
+    only that one's batches - the whole point of the checkpoint."""
+    service = svc(container)
+    rows = service.purchase_orders_for_proformas([tiles["pi"].id, hardware["pi"].id], seed.company_id)
+    assert len(rows) == 2
+    only_tiles = service.build_prefill_from_purchase_orders([tiles["po"].id], seed.company_id)
+    assert len(only_tiles["items"]) == 10
+    assert {i["po_number"] for i in only_tiles["items"]} == {"PO20260827001"}
+
+
+def test_purchase_orders_for_proformas_scopes_to_company(container, seed, db, tiles):
+    other = container.tenant_repo.create("OTHER CO", "other")
+    assert svc(container).purchase_orders_for_proformas([tiles["pi"].id], other.id) == []
+
+
+def test_build_prefill_from_purchase_orders_scopes_to_company(container, seed, db, tiles):
+    other = container.tenant_repo.create("OTHER CO", "other")
+    result = svc(container).build_prefill_from_purchase_orders([tiles["po"].id], other.id)
+    assert result["items"] == []
 
 
 # --------------------------------------------------------------------------
