@@ -13,6 +13,7 @@
   {% if plan %}
   <div class="topbar-actions">
     <a href="{{ url_for('packing_plannings.view_packing_planning', packing_planning_id=plan.id) }}" class="btn btn-ghost">Print</a>
+    <a href="{{ url_for('packing_plannings.packing_planning_labels', packing_planning_id=plan.id) }}" class="btn btn-ghost">🏷 Packing labels</a>
   </div>
   {% endif %}
 </div>

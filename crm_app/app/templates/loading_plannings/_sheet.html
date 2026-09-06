@@ -1,10 +1,13 @@
 {# The printed loading plan: what the loading bay works from. One block per
-   container, listing its pallets, and within each pallet its cartons and the
-   goods in them - the same tree the form builds, flattened for paper.
+   container, listing the numbered packings loaded into it and what each one
+   holds - the same list the form assigns, flattened for paper.
+
+   Packing numbers and unique packing ids are the source packing planning's
+   own, so a row here matches the label physically stuck on the pallet.
 
    Weights follow the document's one rule throughout:
-       pallet gross = contents net + carton tare + pallet tare
-   and a container's VGM is its pallets' gross plus its own tare. #}
+       packing gross = contents net + packing tare
+   and a container's VGM is its packings' gross plus its own tare. #}
 {% set by_sr = plan.items_by_sr %}
 
 <div class="sheet">
@@ -21,56 +24,54 @@
       <td><strong>Voyage</strong> {{ plan.voyage_no or '—' }}</td>
       <td><strong>Transporter</strong> {{ plan.transporter_name or '—' }}</td>
     </tr>
-    {% if plan.proforma_invoice_numbers %}
-    <tr><td colspan="3"><strong>Proforma invoices</strong> {{ plan.proforma_invoice_numbers | join(', ') }}</td></tr>
-    {% endif %}
+    <tr>
+      <td><strong>Packing plannings</strong> {{ plan.packing_planning_numbers | join(', ') or '—' }}</td>
+      <td colspan="2"><strong>Proforma invoices</strong> {{ plan.proforma_invoice_numbers | join(', ') or '—' }}</td>
+    </tr>
+    <tr>
+      <td colspan="3"><strong>Purchase orders</strong> {{ plan.purchase_order_numbers | join(', ') or '—' }}</td>
+    </tr>
     {% if plan.remarks %}<tr><td colspan="3"><strong>Remarks</strong> {{ plan.remarks }}</td></tr>{% endif %}
   </table>
 
   <h3>Goods</h3>
   <table class="sheet-table">
     <thead>
-      <tr><th>Sr</th><th>PO no.</th><th>Product</th><th>Design</th><th>HSN</th>
-          <th class="num">Qty</th><th class="num">Alt qty</th><th class="num">Net kg</th></tr>
+      <tr><th>Sr</th><th>Packing planning</th><th>PO no.</th><th>Product</th><th>Design</th><th>Batch</th><th>Manf. date</th>
+          <th class="num">Qty</th><th class="num">Net kg</th></tr>
     </thead>
     <tbody>
       {% for item in plan.items %}
       <tr>
         <td>{{ item.sr_no }}</td>
+        <td class="text-sm">{{ item.packing_planning_number or '—' }}{% if item.source_sr_no %} · {{ item.source_sr_no }}{% endif %}</td>
         <td>{{ item.po_number or '—' }}</td>
         <td>{{ item.product_name }}</td>
         <td>{{ item.design_name or '—' }}</td>
-        <td>{{ item.hsn_code or '—' }}</td>
+        <td>{{ item.batch_number or '—' }}</td>
+        <td>{{ item.production_date or '—' }}</td>
         <td class="num">{{ '%g' % item.quantity_boxes }} {{ item.quantity_unit }}</td>
-        <td class="num">{{ '%.2f' % item.quantity_value }} {{ item.unit }}</td>
         <td class="num">{{ '%.3f' % item.total_net_weight_kg }}</td>
       </tr>
       {% endfor %}
     </tbody>
     <tfoot>
       <tr>
-        <th colspan="5" class="num">Total</th>
+        <th colspan="7" class="num">Total</th>
         <th class="num">{{ '%g' % plan.total_boxes }}</th>
-        <th></th>
         <th class="num">{{ '%.3f' % plan.total_net_weight_kg }}</th>
       </tr>
     </tfoot>
   </table>
 
   <h3>Loading</h3>
-  {% set cartons_by_pallet = {} %}
-  {% for carton in plan.cartons %}
-  {% set _ = cartons_by_pallet.setdefault(carton.pallet_no, []).append(carton) %}
-  {% endfor %}
-
   {% for row in plan.container_summary %}
-  {% set pallets_here = plan.pallets | selectattr('container_sr_no', 'equalto', row.sr_no) | list %}
   <table class="sheet-table" style="margin-bottom:12px;">
     <thead>
       <tr>
         <th colspan="6" style="text-align:left;">
           {{ row.container_no or 'Unassigned' }}{% if row.container_type %} · {{ row.container_type }}{% endif %}
-          &nbsp;—&nbsp; {{ row.pallet_count }} pallet(s), {{ '%g' % row.boxes }} units
+          &nbsp;—&nbsp; {{ row.packing_count }} packing(s), {{ '%g' % row.boxes }} units
           {% if row.vgm_kg is not none %}
           &nbsp;·&nbsp; VGM <strong>{{ '%.0f' % row.vgm_kg }} kg</strong>
           {% if row.max_permitted_weight %}
@@ -81,30 +82,25 @@
           {% endif %}
         </th>
       </tr>
-      <tr><th>Pallet</th><th>Type</th><th>Contents</th><th class="num">Qty</th><th class="num">Net kg</th><th class="num">Gross kg</th></tr>
+      <tr><th>Packing</th><th>Unique packing id</th><th>Contents</th>
+          <th class="num">Qty</th><th class="num">Net kg</th><th class="num">Gross kg</th></tr>
     </thead>
     <tbody>
-      {% for pallet in pallets_here %}
-      {% set my_cartons = cartons_by_pallet.get(pallet.pallet_no, []) %}
+      {% for packing in plan.packings_for_container(row.sr_no) %}
       <tr>
-        <td>#{{ pallet.pallet_no }}</td>
-        <td>{{ pallet.pallet_type_name or '—' }}</td>
+        <td>{{ packing.label }} <span class="text-sm">{{ packing.packing_unit_label }}</span></td>
+        <td class="mono text-sm">{{ packing.unique_packing_id or '—' }}</td>
         <td>
-          {% for row2 in pallet.contents %}
-          {{ by_sr[row2.item_sr_no].label if row2.item_sr_no in by_sr else '?' }} × {{ '%g' % row2.quantity_boxes }}{% if not loop.last %}<br>{% endif %}
-          {% endfor %}
-          {% for carton in my_cartons %}
-          {% if pallet.contents or not loop.first %}<br>{% endif %}
-          <em>CTN #{{ carton.carton_no }}{% if carton.carton_type_name %} ({{ carton.carton_type_name }}){% endif %}:</em>
-          {% for row3 in carton.contents %}{{ by_sr[row3.item_sr_no].label if row3.item_sr_no in by_sr else '?' }} × {{ '%g' % row3.quantity_boxes }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% for line in packing.contents %}
+          {{ by_sr[line.item_sr_no].label if line.item_sr_no in by_sr else '?' }} × {{ '%g' % line.quantity_boxes }}{% if not loop.last %}<br>{% endif %}
           {% endfor %}
         </td>
-        <td class="num">{{ '%g' % pallet.packed_boxes }}</td>
-        <td class="num">{{ '%.3f' % pallet.net_weight_kg(by_sr) }}</td>
-        <td class="num">{{ '%.3f' % pallet.gross_weight_kg(by_sr) }}</td>
+        <td class="num">{{ '%g' % packing.packed_boxes }}</td>
+        <td class="num">{{ '%.3f' % packing.net_weight_kg(by_sr) }}</td>
+        <td class="num">{{ '%.3f' % packing.gross_weight_kg(by_sr) }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6"><em>No pallets assigned.</em></td></tr>
+      <tr><td colspan="6"><em>No packings assigned.</em></td></tr>
       {% endfor %}
     </tbody>
     <tfoot>

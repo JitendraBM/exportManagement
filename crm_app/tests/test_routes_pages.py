@@ -59,6 +59,7 @@ class TestListPages:
         "/purchase-orders/",
         "/packing-lists/",
         "/packing-plannings/",
+        "/loading-plannings/",
         "/reports/",
         "/account",   # profile_bp is mounted at /account
     ])
@@ -73,13 +74,13 @@ class TestListPages:
 # ==========================================================================
 class TestAdminOnlyPages:
     @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/",
-                                     "/packing-plannings/new"])
+                                     "/packing-plannings/new", "/loading-plannings/new"])
     def test_admin_can_open(self, admin_ctx, path):
         client, *_ = admin_ctx
         assert client.get(path).status_code == 200
 
     @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/",
-                                     "/packing-plannings/new"])
+                                     "/packing-plannings/new", "/loading-plannings/new"])
     def test_employee_gets_403(self, employee_ctx, path):
         client, *_ = employee_ctx
         assert client.get(path).status_code == 403
@@ -2570,3 +2571,92 @@ class TestCustomerInvoiceRoutes:
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         assert client.get(f"/customer-invoices/{rival.id}").status_code == 404
+
+
+# ==========================================================================
+# Packing label sheet
+# ==========================================================================
+class TestPackingLabelRoutes:
+    """The stickers that go on the pallets. Built from a hand-made plan
+    rather than a full PI -> PO -> batches chain: what's under test here is
+    the page, not the loading, which the service suite already covers."""
+
+    def _plan(self, container, admin):
+        return container.packing_planning_service.create(
+            current_user=admin, fields={"packing_planning_date": "2026-08-30"},
+            proforma_ids=[], manual_units=[],
+            items=[{"product_name": "GVT/PGVT 600X1200MM", "design_name": "ARKOSE",
+                    "batch_number": "101", "production_date": "2026-08-29",
+                    "ready_quantity": "70", "quantity_unit": "BOX",
+                    "boxes_per_unit": "32", "actual_packing": "2",
+                    "packing_unit_label": "PLT"}],
+        )
+
+    def test_label_sheet_renders(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        resp = client.get(f"/packing-plannings/{plan.id}/labels")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "UNIQUE PACKING QR ID" in body
+        assert "MADE IN INDIA" in body
+        assert f"{plan.packing_planning_number}0001" in body
+        assert "<svg" in body
+
+    def test_copies_and_per_page_change_what_is_printed(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+        four_up = client.get(f"/packing-plannings/{plan.id}/labels?copies=4&per_page=4")
+        assert four_up.get_data(as_text=True).count('<div class="label">') == 8
+        one_up = client.get(f"/packing-plannings/{plan.id}/labels?copies=1&per_page=1")
+        assert one_up.get_data(as_text=True).count('<div class="label">') == 2
+
+    def test_orientation_defaults_to_portrait_and_landscape_is_selectable(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        default = client.get(f"/packing-plannings/{plan.id}/labels").get_data(as_text=True)
+        assert "size: A4 portrait" in default
+        assert 'value="portrait" selected' in default
+
+        landscape = client.get(f"/packing-plannings/{plan.id}/labels?orientation=landscape").get_data(as_text=True)
+        assert "size: A4 landscape" in landscape
+        assert 'value="landscape" selected' in landscape
+
+        garbage = client.get(f"/packing-plannings/{plan.id}/labels?orientation=sideways").get_data(as_text=True)
+        assert "size: A4 portrait" in garbage
+
+    def test_4x6_label_size_prints_one_sticker_per_page(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+
+        four_up = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x6&copies=1&per_page=4").get_data(as_text=True)
+        assert "size: 4in 6in" in four_up
+        assert 'value="4x6" selected' in four_up
+        assert four_up.count('<div class="label">') == 2   # per_page forced to 1, not 4
+
+        landscape = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x6&orientation=landscape").get_data(as_text=True)
+        assert "size: 6in 4in" in landscape
+
+        default = client.get(f"/packing-plannings/{plan.id}/labels").get_data(as_text=True)
+        assert "size: A4 portrait" in default            # unchanged when 4x6 isn't picked
+
+    def test_4x4_label_size_prints_one_square_sticker_per_page(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+        body = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x4&copies=1&per_page=4").get_data(as_text=True)
+        assert "size: 4in 4in" in body
+        assert 'value="4x4" selected' in body
+        assert body.count('<div class="label">') == 2   # per_page forced to 1, not 4
+        assert 'id="orientation-select"' not in body     # a square has no orientation to pick
+
+    def test_the_pallet_sheet_links_to_the_labels(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        body = client.get(f"/packing-plannings/{plan.id}").get_data(as_text=True)
+        assert f"/packing-plannings/{plan.id}/labels" in body
+
+    def test_another_companys_label_sheet_is_a_404(self, admin_ctx, employee_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        other_client, *_ = employee_ctx
+        assert other_client.get(f"/packing-plannings/{plan.id}/labels").status_code == 404

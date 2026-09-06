@@ -570,3 +570,232 @@ def test_list_all_counts_both_halves(container, seed, tiles):
     assert len(listed) == 1
     assert listed[0].item_count == 10
     assert listed[0].unit_count == 1
+
+
+# --------------------------------------------------------------------------
+# Packing labels: the stickers that go on the pallets themselves
+# --------------------------------------------------------------------------
+def labels_of(container, plan):
+    return container.packing_planning_repo.labels_for_plan(plan.id)
+
+
+def test_an_auto_row_of_nine_pallets_is_nine_separate_packings(container, seed, tiles):
+    """`pallet_rows` prints "9 PLT / 288 BOX / 1 TO 9" as ONE row; a label is
+    needed per physical pallet, so that same row is nine packings of 32."""
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    arkose = [p for p in plan.packings if p["lines"][0]["batch_number"] == "101" and not p["is_manual"]]
+    assert len(arkose) == 9
+    assert [p["packing_no"] for p in arkose] == list(range(1, 10))
+    assert all(p["lines"][0]["quantity"] == 32 for p in arkose)
+
+
+def test_a_mixed_manual_pallet_is_one_packing_listing_every_batch_on_it(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]), manual_units=[
+        {"unit_no": "54", "contents": [{"item_sr_no": "1", "quantity_boxes": "29"},
+                                       {"item_sr_no": "2", "quantity_boxes": "3"}]},
+    ])
+    mixed = next(p for p in plan.packings if p["packing_no"] == 54)
+    assert mixed["is_manual"]
+    assert [(l["batch_number"], l["quantity"]) for l in mixed["lines"]] == [("101", 29), ("102", 3)]
+
+
+def test_every_physical_pallet_gets_exactly_one_label(container, seed, tiles, hardware):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"], hardware["pi"]))
+    labels = labels_of(container, plan)
+    assert len(labels) == len(plan.packings)
+    assert [l.packing_no for l in labels] == [p["packing_no"] for p in plan.packings]
+
+
+def test_a_packing_id_is_the_document_number_plus_the_pallet_number(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    first = labels_of(container, plan)[0]
+    assert first.unique_packing_id == f"{plan.packing_planning_number}0001"
+    assert first.unique_packing_id.startswith("PP")
+
+
+def test_qr_ids_are_unique_across_the_document(container, seed, tiles, hardware):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"], hardware["pi"]))
+    qr_ids = [l.unique_qr_id for l in labels_of(container, plan)]
+    assert len(set(qr_ids)) == len(qr_ids)
+    assert all(q.startswith("UPQR20260830") for q in qr_ids)
+
+
+def test_editing_the_plan_keeps_the_ids_already_printed(container, seed, tiles):
+    """The whole reason these ids are stored rather than derived: a label is
+    stuck on a physical pallet, and an edit must not change it underneath."""
+    items = prefill_items(container, seed, tiles["pi"])
+    plan = save(container, seed, items)
+    before = {l.packing_no: l.unique_qr_id for l in labels_of(container, plan)}
+
+    updated = svc(container).update(
+        packing_planning_id=plan.id, current_user=seed.admin,
+        fields={"packing_planning_date": plan.packing_planning_date, "remarks": "edited"},
+        proforma_ids=[], items=[_as_form(i) for i in plan.items], manual_units=[],
+    )
+    after = {l.packing_no: l.unique_qr_id for l in labels_of(container, updated)}
+    assert after == before
+
+
+def test_a_pallet_that_no_longer_exists_loses_its_label(container, seed, tiles):
+    items = prefill_items(container, seed, tiles["pi"])
+    plan = save(container, seed, items)
+    assert max(l.packing_no for l in labels_of(container, plan)) == 53
+
+    shorter = [dict(_as_form(i)) for i in plan.items]
+    shorter[0]["actual_packing"] = "5"        # ARKOSE drops from 9 pallets to 5
+    updated = svc(container).update(
+        packing_planning_id=plan.id, current_user=seed.admin,
+        fields={"packing_planning_date": plan.packing_planning_date},
+        proforma_ids=[], items=shorter, manual_units=[],
+    )
+    assert max(l.packing_no for l in labels_of(container, updated)) == 49
+    assert len(labels_of(container, updated)) == len(updated.packings)
+
+
+def test_deleting_the_document_takes_its_labels_with_it(container, seed, db, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    assert labels_of(container, plan)
+    svc(container).delete(plan.id, seed.admin)
+    assert db.query("SELECT * FROM packing_planning_labels WHERE packing_planning_id = ?", (plan.id,)) == []
+
+
+def sheet_of(container, seed, plan, **kw):
+    return svc(container).label_sheet(plan.id, seed.company_id, **kw)
+
+
+def test_alt_qty_is_boxes_times_the_products_alternate_quantity(container, seed, tiles):
+    """32 BOX x 1.44 SQM per box = 46.08 SQM, the figure the paper label
+    carries beside the quantity."""
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    first = sheet_of(container, seed, plan, copies=1, per_page=1)["pages"][0][0]
+    assert first["lines"][0]["quantity"] == 32
+    assert first["lines"][0]["alt_quantity"] == pytest.approx(46.08)
+    assert first["lines"][0]["alt_unit"] == "SQM"
+    assert first["total_quantity"] == 32
+    assert first["total_alt_quantity"] == pytest.approx(46.08)
+
+
+def test_a_mixed_pallets_label_totals_its_lines(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]), manual_units=[
+        {"unit_no": "54", "contents": [{"item_sr_no": "1", "quantity_boxes": "29"},
+                                       {"item_sr_no": "2", "quantity_boxes": "3"}]},
+    ])
+    labels = {l["packing_no"]: l for p in sheet_of(container, seed, plan, copies=1, per_page=1)["pages"] for l in p}
+    mixed = labels[54]
+    assert len(mixed["lines"]) == 2
+    assert mixed["total_quantity"] == 32
+    assert mixed["total_alt_quantity"] == pytest.approx(46.08)   # 41.76 + 4.32
+
+
+def test_the_qr_payload_carries_both_ids_the_pi_and_the_contents(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    label = labels_of(container, plan)[0]
+    sheet_label = sheet_of(container, seed, plan, copies=1, per_page=1)["pages"][0][0]
+    payload = svc(container)._qr_payload(label, sheet_label["proforma_numbers"], sheet_label["lines"])
+    lines = payload.split("\n")
+    assert lines[0] == label.unique_qr_id
+    assert lines[1] == label.unique_packing_id
+    assert lines[2] == "PI20260827001"
+    assert lines[3] == "GVT/PGVT 600X1200MM|ARKOSE|101|32 BOX|46.08 SQM"
+
+
+def test_the_qr_is_sized_from_its_module_count_so_it_stays_scannable(container, seed, tiles):
+    """A code dropped into a fixed box gets denser as the payload grows; a
+    three-line mixed pallet would end up unreadable. Every code is emitted at
+    the same millimetres-per-module instead."""
+    import re
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]), manual_units=[
+        {"unit_no": "54", "contents": [{"item_sr_no": "1", "quantity_boxes": "29"},
+                                       {"item_sr_no": "2", "quantity_boxes": "3"},
+                                       {"item_sr_no": "3", "quantity_boxes": "21"}]},
+    ])
+    labels = {l["packing_no"]: l for p in sheet_of(container, seed, plan, copies=1, per_page=1)["pages"] for l in p}
+
+    def mm(label):
+        return float(re.search(r'width="([\d.]+)mm"', label["qr_svg"]).group(1))
+
+    assert mm(labels[54]) > mm(labels[1])     # denser payload, physically bigger code
+    assert mm(labels[1]) >= 20                # and none of them printed tiny
+
+
+def test_copies_and_per_page_are_clamped_to_1_2_or_4(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    packings = len(plan.packings)
+
+    default = sheet_of(container, seed, plan)
+    assert (default["copies"], default["per_page"]) == (4, 2)
+    assert default["printed_count"] == packings * 4
+    assert len(default["pages"]) == packings * 4 / 2
+
+    for bad in ("3", "0", "", None, "abc", "-1", "99"):
+        fallback = sheet_of(container, seed, plan, copies=bad, per_page=bad)
+        assert (fallback["copies"], fallback["per_page"]) == (4, 2), bad
+
+    four_up = sheet_of(container, seed, plan, copies=4, per_page=4)
+    assert len(four_up["pages"]) == packings
+    one_up = sheet_of(container, seed, plan, copies=1, per_page=1)
+    assert len(one_up["pages"]) == packings
+
+
+def test_4x6_label_size_forces_one_label_per_page(container, seed, tiles):
+    """A label printer has no concept of tiling several stickers onto one
+    sheet - picking the 4x6 size overrides whatever per_page was asked for."""
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    packings = len(plan.packings)
+
+    sheet = sheet_of(container, seed, plan, label_size="4x6", copies=2, per_page=4)
+    assert sheet["label_size"] == "4x6"
+    assert sheet["per_page"] == 1
+    assert len(sheet["pages"]) == packings * 2
+
+    default = sheet_of(container, seed, plan)
+    assert default["label_size"] == "a4"
+
+    for bad in ("letter", "", None, "roll"):
+        fallback = sheet_of(container, seed, plan, label_size=bad)
+        assert fallback["label_size"] == "a4", bad
+
+    assert sheet_of(container, seed, plan, label_size="4X6")["label_size"] == "4x6"
+
+
+def test_4x4_label_size_also_forces_one_label_per_page(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    packings = len(plan.packings)
+
+    sheet = sheet_of(container, seed, plan, label_size="4x4", copies=2, per_page=4)
+    assert sheet["label_size"] == "4x4"
+    assert sheet["per_page"] == 1
+    assert len(sheet["pages"]) == packings * 2
+
+
+def test_every_copy_of_a_packing_carries_the_same_ids(container, seed, tiles):
+    """Four labels for four sides of one pallet - the same pallet, so the
+    same ids on every one of them."""
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    sheet = sheet_of(container, seed, plan, copies=4, per_page=1)
+    first_four = [page[0] for page in sheet["pages"][:4]]
+    assert len({l["unique_qr_id"] for l in first_four}) == 1
+    assert len({l["unique_packing_id"] for l in first_four}) == 1
+
+
+def test_another_companys_labels_are_a_404(container, seed, tiles):
+    plan = save(container, seed, prefill_items(container, seed, tiles["pi"]))
+    other = container.tenant_repo.create("OTHER CO", "other")
+    with pytest.raises(NotFoundError):
+        svc(container).label_sheet(plan.id, other.id)
+
+
+def test_a_duplicated_packing_number_still_saves_and_labels(container, seed, tiles):
+    """A hand-pinned number can collide with a range already handed out, and
+    this document warns about that rather than refusing the save - so
+    minting labels must not be the thing that blows up instead. One number
+    is one label; the warning is what tells the operator to fix it."""
+    items = prefill_items(container, seed, tiles["pi"])
+    plan = save(container, seed, items, manual_units=[
+        {"unit_no": "50", "contents": [{"item_sr_no": "1", "quantity_boxes": "29"}]},
+    ])
+    assert 50 in plan.duplicate_packing_numbers
+    numbers = [l.packing_no for l in labels_of(container, plan)]
+    assert numbers == sorted(set(numbers))            # no duplicate label rows
+    assert numbers.count(50) == 1
+    assert any("used more than once" in w for w in svc(container).packing_warnings(plan))

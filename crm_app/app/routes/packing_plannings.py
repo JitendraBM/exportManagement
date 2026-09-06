@@ -302,6 +302,31 @@ def view_packing_planning(packing_planning_id):
     return render_template("packing_plannings/print.html", plan=plan)
 
 
+@packing_plannings_bp.route("/<int:packing_planning_id>/labels")
+@login_required
+def packing_planning_labels(packing_planning_id):
+    """The labels that get stuck on the pallets - one per PHYSICAL packing,
+    repeated so there is one for every side of it.
+
+    Labels are minted on save, but this re-mints first so a plan saved
+    before this sheet existed still prints, and so does one whose ids were
+    never generated for whatever reason. Minting only ever ADDS - a pallet
+    that already has ids keeps them - so doing it on a read path cannot
+    change an id already printed."""
+    service = current_app.container.packing_planning_service
+    try:
+        service.mint_labels(service.get(packing_planning_id, g.user.company_id))
+        sheet = service.label_sheet(
+            packing_planning_id, g.user.company_id,
+            copies=request.args.get("copies"), per_page=request.args.get("per_page"),
+            orientation=request.args.get("orientation"),
+            label_size=request.args.get("label_size"),
+        )
+    except NotFoundError:
+        abort(404)
+    return render_template("packing_plannings/labels.html", **sheet)
+
+
 @packing_plannings_bp.route("/<int:packing_planning_id>/delete", methods=["POST"])
 @admin_required
 def delete_packing_planning(packing_planning_id):

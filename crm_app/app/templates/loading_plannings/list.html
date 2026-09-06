@@ -22,10 +22,11 @@
         <tr>
           <th>Number</th>
           <th>Date</th>
+          <th>Packing plannings</th>
           <th>Booking</th>
           <th>Vessel / Voyage</th>
           <th class="num">Goods lines</th>
-          <th class="num">Pallets</th>
+          <th class="num">Packings</th>
           <th>Created by</th>
           <th></th>
         </tr>
@@ -35,12 +36,13 @@
         <tr>
           <td class="mono"><strong>{{ plan.loading_planning_number }}</strong></td>
           <td class="text-sm">{{ plan.loading_planning_date }}</td>
+          <td class="mono text-sm">{{ plan.packing_planning_numbers | join(', ') or '—' }}</td>
           <td class="mono text-sm">{{ plan.booking_no or '—' }}</td>
           <td class="text-sm">
             {{ plan.vessel_name or '—' }}{% if plan.voyage_no %} / {{ plan.voyage_no }}{% endif %}
           </td>
           <td class="num">{{ plan.item_count or 0 }}</td>
-          <td class="num">{{ plan.pallet_count or 0 }}</td>
+          <td class="num">{{ plan.packing_count or 0 }}</td>
           <td class="text-sm">{{ plan.created_by_name }}</td>
           <td class="text-sm" style="white-space:nowrap;">
             <a href="{{ url_for('loading_plannings.view_loading_planning', loading_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">Print</a>

@@ -21,6 +21,7 @@
       <a href="{{ url_for('packing_plannings.list_packing_plannings') }}" class="btn btn-ghost btn-sm">← All packing plannings</a>
     </div>
     <div class="flex gap-8">
+      <a href="{{ url_for('packing_plannings.packing_planning_labels', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">🏷 Packing labels</a>
       {% if current_user.is_admin %}
       <a href="{{ url_for('packing_plannings.edit_packing_planning', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">Edit</a>
       {% endif %}
