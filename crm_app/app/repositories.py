@@ -26,8 +26,8 @@ from app.models import (
     ExportInvoice, ExportInvoiceItem,
     ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
     PackingList, PackingListItem, DocumentVersion,
-    LoadingPlanning, LoadingPlanningItem, LoadingPlanningCarton, LoadingPlanningPallet,
-    PackingPlanning, PackingPlanningItem, PackingPlanningManualUnit,
+    LoadingPlanning, LoadingPlanningItem, LoadingPlanningPacking,
+    PackingPlanning, PackingPlanningItem, PackingPlanningManualUnit, PackingPlanningLabel,
 )
 
 
@@ -4620,13 +4620,13 @@ class PackingListRepository:
 # what the document is for and why cartons/pallets are numbered objects)
 # ============================================================
 class LoadingPlanningRepository:
-    """Persistence for the Loading Planning document and its six child lists.
+    """Persistence for the Loading Planning document and its five child lists.
 
     Every child list is wholesale delete-and-reinsert on save, the same idiom
     BookingDetailRepository uses for its two - which is exactly why the
-    carton/pallet/container/item cross-references in those tables are natural
-    keys (carton_no, pallet_no, item_sr_no, container_sr_no) rather than FKs
-    to row ids: an id-based link would be broken by the very next save."""
+    packing/container/item cross-references in those tables are natural keys
+    (packing_no, item_sr_no, container_sr_no) rather than FKs to row ids: an
+    id-based link would be broken by the very next save."""
 
     def __init__(self, db: Database):
         self.db = db
@@ -4681,65 +4681,67 @@ class LoadingPlanningRepository:
                 "WHERE loading_planning_id = ? ORDER BY sr_no", (loading_planning_id,)
             )
         ]
-        plan.cartons = self._load_cartons(loading_planning_id)
-        plan.pallets = self._load_pallets(loading_planning_id)
-        # Hang each pallet's cartons off it, so the model's weight rule and
-        # the container summary can walk one object graph.
-        cartons_by_pallet: dict = {}
-        for carton in plan.cartons:
-            cartons_by_pallet.setdefault(carton.pallet_no, []).append(carton)
-        for pallet in plan.pallets:
-            pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
+        plan.packing_planning_ids = [
+            r["packing_planning_id"] for r in self.db.query(
+                "SELECT packing_planning_id FROM loading_planning_packing_links "
+                "WHERE loading_planning_id = ? ORDER BY packing_planning_id", (loading_planning_id,)
+            )
+        ]
+        plan.packing_planning_numbers = [
+            r["packing_planning_number"] for r in self.db.query(
+                """SELECT pp.packing_planning_number FROM loading_planning_packing_links l
+                   JOIN packing_plannings pp ON pp.id = l.packing_planning_id
+                   WHERE l.loading_planning_id = ? ORDER BY pp.packing_planning_number""",
+                (loading_planning_id,),
+            )
+        ]
+        plan.packings = self._load_packings(loading_planning_id)
         return plan
 
-    def _load_cartons(self, loading_planning_id: int) -> List[LoadingPlanningCarton]:
-        cartons = [
-            LoadingPlanningCarton.from_row(r) for r in self.db.query(
-                "SELECT * FROM loading_planning_cartons WHERE loading_planning_id = ? ORDER BY carton_no",
+    def _load_packings(self, loading_planning_id: int) -> List[LoadingPlanningPacking]:
+        packings = [
+            LoadingPlanningPacking.from_row(r) for r in self.db.query(
+                "SELECT * FROM loading_planning_packings WHERE loading_planning_id = ? ORDER BY packing_no",
                 (loading_planning_id,),
             )
         ]
-        by_no = {c.carton_no: c for c in cartons}
+        by_no = {p.packing_no: p for p in packings}
         for r in self.db.query(
-            "SELECT carton_no, item_sr_no, quantity_boxes FROM loading_planning_carton_contents "
-            "WHERE loading_planning_id = ? ORDER BY carton_no, item_sr_no", (loading_planning_id,)
+            "SELECT packing_no, item_sr_no, quantity_boxes FROM loading_planning_packing_contents "
+            "WHERE loading_planning_id = ? ORDER BY packing_no, item_sr_no", (loading_planning_id,)
         ):
-            carton = by_no.get(r["carton_no"])
-            if carton:
-                carton.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
-        return cartons
-
-    def _load_pallets(self, loading_planning_id: int) -> List[LoadingPlanningPallet]:
-        pallets = [
-            LoadingPlanningPallet.from_row(r) for r in self.db.query(
-                "SELECT * FROM loading_planning_pallets WHERE loading_planning_id = ? ORDER BY pallet_no",
-                (loading_planning_id,),
-            )
-        ]
-        by_no = {p.pallet_no: p for p in pallets}
-        for r in self.db.query(
-            "SELECT pallet_no, item_sr_no, quantity_boxes FROM loading_planning_pallet_contents "
-            "WHERE loading_planning_id = ? ORDER BY pallet_no, item_sr_no", (loading_planning_id,)
-        ):
-            pallet = by_no.get(r["pallet_no"])
-            if pallet:
-                pallet.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
-        return pallets
+            packing = by_no.get(r["packing_no"])
+            if packing:
+                packing.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
+        return packings
 
     def list_all(self, company_id: int) -> List[LoadingPlanning]:
         rows = self.db.query(
             """SELECT lp.*, u.full_name AS created_by_name,
                       (SELECT COUNT(*) FROM loading_planning_items
                        WHERE loading_planning_id = lp.id) AS item_count,
-                      (SELECT COUNT(*) FROM loading_planning_pallets
-                       WHERE loading_planning_id = lp.id) AS pallet_count
+                      (SELECT COUNT(*) FROM loading_planning_packings
+                       WHERE loading_planning_id = lp.id) AS packing_count,
+                      (SELECT GROUP_CONCAT(pp.packing_planning_number, ', ')
+                       FROM loading_planning_packing_links l
+                       JOIN packing_plannings pp ON pp.id = l.packing_planning_id
+                       WHERE l.loading_planning_id = lp.id) AS packing_planning_list
                FROM loading_plannings lp
                JOIN users u ON u.id = lp.created_by
                WHERE lp.company_id = ?
                ORDER BY lp.loading_planning_date DESC, lp.id DESC""",
             (company_id,),
         )
-        return [LoadingPlanning.from_row(r) for r in rows]
+        plans = []
+        for row in rows:
+            plan = LoadingPlanning.from_row(row)
+            # List view only - the numbers, not the ids, since all it does is
+            # print them in a cell.
+            plan.packing_planning_numbers = [
+                n for n in (row["packing_planning_list"] or "").split(", ") if n
+            ]
+            plans.append(plan)
+        return plans
 
     def create(self, plan: LoadingPlanning) -> LoadingPlanning:
         new_id = self.db.execute(
@@ -4770,10 +4772,9 @@ class LoadingPlanningRepository:
         never be left behind - the packing rows only mean anything alongside
         the items they reference by sr_no."""
         with self.db.get_connection() as conn:
-            for table in ("loading_planning_proforma_links", "loading_planning_items",
-                          "loading_planning_containers", "loading_planning_cartons",
-                          "loading_planning_carton_contents", "loading_planning_pallets",
-                          "loading_planning_pallet_contents"):
+            for table in ("loading_planning_proforma_links", "loading_planning_packing_links",
+                          "loading_planning_items", "loading_planning_containers",
+                          "loading_planning_packings", "loading_planning_packing_contents"):
                 conn.execute(f"DELETE FROM {table} WHERE loading_planning_id = ?", (loading_planning_id,))
 
             for pi_id in dict.fromkeys(plan.proforma_invoice_ids):
@@ -4782,16 +4783,27 @@ class LoadingPlanningRepository:
                     "VALUES (?, ?)", (loading_planning_id, pi_id),
                 )
 
-            for i, item in enumerate(plan.items, start=1):
+            for pp_id in dict.fromkeys(plan.packing_planning_ids):
+                conn.execute(
+                    "INSERT INTO loading_planning_packing_links (loading_planning_id, packing_planning_id) "
+                    "VALUES (?, ?)", (loading_planning_id, pp_id),
+                )
+
+            for item in plan.items:
                 conn.execute(
                     """INSERT INTO loading_planning_items
-                       (loading_planning_id, sr_no, proforma_invoice_id, purchase_order_id, po_number,
-                        product_id, product_name, design_id, design_name, hsn_code, quantity_boxes,
+                       (loading_planning_id, sr_no, packing_planning_id, packing_planning_number,
+                        source_sr_no, proforma_invoice_id, purchase_order_id, po_number,
+                        product_id, product_name, design_id, design_name, batch_number,
+                        production_date, hsn_code, quantity_boxes,
                         quantity_unit, quantity_value, unit, net_weight_kg, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, i, item.proforma_invoice_id, item.purchase_order_id,
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (loading_planning_id, item.sr_no, item.packing_planning_id,
+                     item.packing_planning_number, item.source_sr_no,
+                     item.proforma_invoice_id, item.purchase_order_id,
                      item.po_number, item.product_id, item.product_name, item.design_id,
-                     item.design_name, item.hsn_code, item.quantity_boxes, item.quantity_unit,
+                     item.design_name, item.batch_number, item.production_date,
+                     item.hsn_code, item.quantity_boxes, item.quantity_unit,
                      item.quantity_value, item.unit, item.net_weight_kg, item.price_usd, item.total_usd),
                 )
 
@@ -4806,39 +4818,26 @@ class LoadingPlanningRepository:
                      c.get("transporter_name"), c.get("max_permitted_weight"), c.get("tare_weight_kg")),
                 )
 
-            for carton in plan.cartons:
+            for packing in plan.packings:
                 conn.execute(
-                    """INSERT INTO loading_planning_cartons
-                       (loading_planning_id, carton_no, carton_type_id, carton_type_name,
-                        capacity_boxes, tare_weight_kg, pallet_no)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, carton.carton_no, carton.carton_type_id,
-                     carton.carton_type_name, carton.capacity_boxes, carton.tare_weight_kg,
-                     carton.pallet_no),
+                    """INSERT INTO loading_planning_packings
+                       (loading_planning_id, packing_no, packing_planning_id,
+                        packing_planning_number, source_packing_no, packing_unit_label, is_manual,
+                        packing_type_name, tare_weight_kg, unique_packing_id, unique_qr_id,
+                        container_sr_no)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (loading_planning_id, packing.packing_no, packing.packing_planning_id,
+                     packing.packing_planning_number, packing.source_packing_no,
+                     packing.packing_unit_label,
+                     1 if packing.is_manual else 0, packing.packing_type_name,
+                     packing.tare_weight_kg, packing.unique_packing_id, packing.unique_qr_id,
+                     packing.container_sr_no),
                 )
-                for row in carton.contents:
+                for row in packing.contents:
                     conn.execute(
-                        "INSERT INTO loading_planning_carton_contents "
-                        "(loading_planning_id, carton_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
-                        (loading_planning_id, carton.carton_no, row.get("item_sr_no"),
-                         row.get("quantity_boxes") or 0),
-                    )
-
-            for pallet in plan.pallets:
-                conn.execute(
-                    """INSERT INTO loading_planning_pallets
-                       (loading_planning_id, pallet_no, pallet_type_id, pallet_type_name,
-                        capacity_boxes, tare_weight_kg, container_sr_no)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, pallet.pallet_no, pallet.pallet_type_id,
-                     pallet.pallet_type_name, pallet.capacity_boxes, pallet.tare_weight_kg,
-                     pallet.container_sr_no),
-                )
-                for row in pallet.contents:
-                    conn.execute(
-                        "INSERT INTO loading_planning_pallet_contents "
-                        "(loading_planning_id, pallet_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
-                        (loading_planning_id, pallet.pallet_no, row.get("item_sr_no"),
+                        "INSERT INTO loading_planning_packing_contents "
+                        "(loading_planning_id, packing_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
+                        (loading_planning_id, packing.packing_no, row.get("item_sr_no"),
                          row.get("quantity_boxes") or 0),
                     )
 
@@ -4847,10 +4846,9 @@ class LoadingPlanningRepository:
         enforced when the pragma is on, so they're removed explicitly - and in
         the same transaction, so no orphan set can be left behind."""
         with self.db.get_connection() as conn:
-            for table in ("loading_planning_pallet_contents", "loading_planning_pallets",
-                          "loading_planning_carton_contents", "loading_planning_cartons",
+            for table in ("loading_planning_packing_contents", "loading_planning_packings",
                           "loading_planning_containers", "loading_planning_items",
-                          "loading_planning_proforma_links"):
+                          "loading_planning_packing_links", "loading_planning_proforma_links"):
                 conn.execute(f"DELETE FROM {table} WHERE loading_planning_id = ?", (loading_planning_id,))
             conn.execute("DELETE FROM loading_plannings WHERE id = ?", (loading_planning_id,))
 
@@ -5018,12 +5016,91 @@ class PackingPlanningRepository:
     def delete(self, packing_planning_id: int) -> None:
         """Child rows are ON DELETE CASCADE, but foreign keys are only
         enforced when the pragma is on, so they're removed explicitly - and in
-        the same transaction, so no orphan set can be left behind."""
+        the same transaction, so no orphan set can be left behind.
+
+        Labels go here, unlike in _replace_children: deleting the whole
+        document is the one thing that legitimately takes its printed ids
+        with it."""
         with self.db.get_connection() as conn:
-            for table in ("packing_planning_manual_contents", "packing_planning_manual_units",
-                          "packing_planning_items", "packing_planning_proforma_links"):
+            for table in ("packing_planning_labels", "packing_planning_manual_contents",
+                          "packing_planning_manual_units", "packing_planning_items",
+                          "packing_planning_proforma_links"):
                 conn.execute(f"DELETE FROM {table} WHERE packing_planning_id = ?", (packing_planning_id,))
             conn.execute("DELETE FROM packing_plannings WHERE id = ?", (packing_planning_id,))
+
+    # ---- labels -------------------------------------------------
+    # Deliberately NOT part of _replace_children: every other child list is
+    # wholesale deleted and re-inserted on each save, which is exactly what
+    # must never happen to an id already printed on a pallet.
+    def list_for_purchase_orders(self, company_id: int, purchase_order_ids: list) -> List[dict]:
+        """Every packing planning holding a batch of any of these purchase
+        orders - step 3 of a Loading Planning's narrowing.
+
+        Reported per plan with the orders it actually covers, because an
+        order's goods are routinely packed across several runs on different
+        days, and a run routinely covers several orders."""
+        ids = [int(i) for i in dict.fromkeys(purchase_order_ids or [])]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.db.query(
+            f"""SELECT pp.id, pp.packing_planning_number, pp.packing_planning_date,
+                       GROUP_CONCAT(DISTINCT i.po_number) AS po_numbers,
+                       COUNT(DISTINCT i.sr_no) AS batch_count
+                FROM packing_plannings pp
+                JOIN packing_planning_items i ON i.packing_planning_id = pp.id
+                WHERE pp.company_id = ? AND i.purchase_order_id IN ({placeholders})
+                GROUP BY pp.id
+                ORDER BY pp.packing_planning_date DESC, pp.id DESC""",
+            tuple([company_id] + ids),
+        )
+        return [{
+            "id": r["id"],
+            "packing_planning_number": r["packing_planning_number"],
+            "packing_planning_date": r["packing_planning_date"],
+            "po_numbers": [n for n in (r["po_numbers"] or "").split(",") if n],
+            "batch_count": r["batch_count"] or 0,
+        } for r in rows]
+
+    def labels_for_plan(self, packing_planning_id: int):
+        rows = self.db.query(
+            "SELECT * FROM packing_planning_labels WHERE packing_planning_id = ? ORDER BY packing_no",
+            (packing_planning_id,),
+        )
+        return [PackingPlanningLabel.from_row(r) for r in rows]
+
+    def next_qr_sequence(self, company_id: int, prefix: str) -> int:
+        """The next free number in a day-scoped UPQR sequence - the same
+        shape next_number() uses for the document itself, counted over the
+        labels already minted rather than over documents."""
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS c FROM packing_planning_labels "
+            "WHERE company_id = ? AND unique_qr_id LIKE ?",
+            (company_id, f"{prefix}%"),
+        )
+        return (row["c"] if row else 0) + 1
+
+    def sync_labels(self, packing_planning_id: int, new_labels: List[PackingPlanningLabel],
+                    stale_packing_nos: List[int]) -> None:
+        """Insert freshly minted labels and drop the ones whose pallet no
+        longer exists. Existing rows are never rewritten - that is the whole
+        point of the table."""
+        if not new_labels and not stale_packing_nos:
+            return
+        with self.db.get_connection() as conn:
+            for packing_no in stale_packing_nos:
+                conn.execute(
+                    "DELETE FROM packing_planning_labels WHERE packing_planning_id = ? AND packing_no = ?",
+                    (packing_planning_id, packing_no),
+                )
+            for label in new_labels:
+                conn.execute(
+                    """INSERT INTO packing_planning_labels
+                       (company_id, packing_planning_id, packing_no, unique_packing_id, unique_qr_id)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (label.company_id, packing_planning_id, label.packing_no,
+                     label.unique_packing_id, label.unique_qr_id),
+                )
 
 
 # ============================================================

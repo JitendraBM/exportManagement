@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ plan.packing_planning_number }} · Packing Labels</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    @media print {
+      @page {
+        size: {{ '4in 4in' if label_size == '4x4'
+                 else '4in 6in' if label_size == '4x6' and orientation == 'portrait'
+                 else '6in 4in' if label_size == '4x6'
+                 else ('A4 ' + orientation) }};
+        margin: {{ '2mm' if label_size in ('4x6', '4x4') else '8mm' }};
+      }
+      body { background: #fff !important; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="quote-print-body">
+
+  {# Both options are server-side rather than a CSS class toggle: the number
+     of copies changes how many labels exist, not just how they sit, and
+     what prints should be exactly what the page shows. #}
+  <div class="quote-toolbar no-print">
+    <div class="flex gap-8" style="align-items:center;">
+      <a href="{{ url_for('packing_plannings.view_packing_planning', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">← Pallet packing planning</a>
+      <span class="text-soft text-sm">
+        {{ label_count }} packing{{ 's' if label_count != 1 }} ·
+        {{ printed_count }} label{{ 's' if printed_count != 1 }} ·
+        {{ pages | length }} page{{ 's' if pages | length != 1 }}
+      </span>
+    </div>
+    <div class="flex gap-8" style="align-items:center;">
+      <label class="text-sm" style="display:flex;align-items:center;gap:6px;">
+        Label size
+        <select id="label-size-select" style="max-width:170px;">
+          <option value="a4" {{ 'selected' if label_size == 'a4' }}>A4 sheet</option>
+          <option value="4x6" {{ 'selected' if label_size == '4x6' }}>4×6 in (label printer)</option>
+          <option value="4x4" {{ 'selected' if label_size == '4x4' }}>4×4 in (label printer)</option>
+        </select>
+      </label>
+      <label class="text-sm" style="display:flex;align-items:center;gap:6px;">
+        Copies
+        <select id="copies-select" style="max-width:70px;">
+          {% for n in [1, 2, 4] %}
+          <option value="{{ n }}" {{ 'selected' if n == copies }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if label_size == 'a4' %}
+      <label class="text-sm" style="display:flex;align-items:center;gap:6px;">
+        Per page
+        <select id="per-page-select" style="max-width:70px;">
+          {% for n in [1, 2, 4] %}
+          <option value="{{ n }}" {{ 'selected' if n == per_page }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      {% if label_size != '4x4' %}
+      <label class="text-sm" style="display:flex;align-items:center;gap:6px;">
+        Orientation
+        <select id="orientation-select" style="max-width:100px;">
+          <option value="portrait" {{ 'selected' if orientation == 'portrait' }}>Portrait</option>
+          <option value="landscape" {{ 'selected' if orientation == 'landscape' }}>Landscape</option>
+        </select>
+      </label>
+      {% endif %}
+      <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print</button>
+    </div>
+  </div>
+
+  {% if not pages %}
+  <div class="sheet-note no-print">
+    Nothing to label yet &mdash; this packing planning has no whole pallet or carton packed.
+  </div>
+  {% endif %}
+
+  {% for page in pages %}
+  <div class="label-page label-page-{{ per_page }}up orientation-{{ orientation }} size-{{ label_size }}">
+    {% for label in page %}
+    <div class="label">
+      <div class="label-head">
+        <div class="label-ids">
+          <div class="label-line"><strong>PROFOMA INVOICE NO :</strong> {{ label.proforma_numbers | join(', ') or '—' }}</div>
+          <div class="label-line"><strong>UNIQUE PACKING ID :</strong> {{ label.unique_packing_id }}</div>
+          <div class="label-line"><strong>UNIQUE PACKING QR ID :</strong>
+            <span class="label-qr-id">{{ label.unique_qr_id }}</span></div>
+        </div>
+        <div class="label-qr">{{ label.qr_svg | safe }}</div>
+      </div>
+
+      <table class="label-table">
+        <thead>
+          <tr>
+            <th>DESCRIPTION OF GOODS</th>
+            <th>MODEL NO OR NAME</th>
+            <th class="num">QTY</th>
+            <th class="num">ALT QTY</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for line in label.lines %}
+          <tr>
+            <td>{{ line.product_name or '' }}</td>
+            <td>{{ line.design_name or '' }}</td>
+            <td class="num">{{ '%g' % line.quantity }} {{ line.quantity_unit }}</td>
+            <td class="num">{{ '%g' % line.alt_quantity }} {{ line.alt_unit }}</td>
+          </tr>
+          {% endfor %}
+          {# Padded to a fixed six rows so every label prints the same height,
+             whatever it holds - the reference sheet's blank rows. #}
+          {% for _ in range(6 - (label.lines | length)) if label.lines | length < 6 %}
+          <tr><td>&nbsp;</td><td></td><td></td><td></td></tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="2">TOTAL</th>
+            <th class="num">{{ '%g' % label.total_quantity }} {{ label.quantity_unit }}</th>
+            <th class="num">{{ '%g' % label.total_alt_quantity }} {{ label.alt_unit }}</th>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="label-origin">MADE IN INDIA</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+<script>
+(function () {
+  "use strict";
+  // Each option reloads with a new querystring rather than restyling in
+  // place: copies changes how many labels there ARE, so the server has to
+  // rebuild the pages either way.
+  function go() {
+    var labelSize = document.getElementById("label-size-select").value;
+    var copies = document.getElementById("copies-select").value;
+    var perPageEl = document.getElementById("per-page-select");
+    var perPage = perPageEl ? perPageEl.value : "1";
+    var orientationEl = document.getElementById("orientation-select");
+    var orientation = orientationEl ? orientationEl.value : "portrait";
+    window.location.search = "?label_size=" + labelSize + "&copies=" + copies +
+      "&per_page=" + perPage + "&orientation=" + orientation;
+  }
+  document.getElementById("label-size-select").addEventListener("change", go);
+  document.getElementById("copies-select").addEventListener("change", go);
+  var perPageSelect = document.getElementById("per-page-select");
+  if (perPageSelect) perPageSelect.addEventListener("change", go);
+  var orientationSelect = document.getElementById("orientation-select");
+  if (orientationSelect) orientationSelect.addEventListener("change", go);
+})();
+</script>
+
+</body>
+</html>

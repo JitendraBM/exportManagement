@@ -839,9 +839,9 @@ class ProductPalletType:
     `unit_kind` says which LEVEL of packing this is: a 'carton' is an inner
     box that then goes ON a pallet, a 'pallet' is what a forklift moves into
     the container. Tiles have no carton level (boxes sit straight on the
-    pallet); hardware goes pieces -> carton -> pallet. Loading Planning is
-    the only thing that reads it - see LoadingPlanningPallet.gross_weight_kg
-    for how the two tares stack."""
+    pallet); hardware goes pieces -> carton -> pallet. Packing Planning is
+    what reads it - it labels a batch's units PLT or CTN accordingly, and a
+    loading plan simply carries that label across."""
     id: Optional[int]
     company_id: int
     product_id: int
@@ -3438,28 +3438,42 @@ class ExportDesignsPackingList:
 
 @dataclass
 class LoadingPlanningItem:
-    """One goods line on a Loading Planning, at DESIGN level.
+    """One goods line on a Loading Planning: one produced BATCH.
 
-    Loaded by tracing a proforma invoice through its purchase orders to THOSE
-    ORDERS' packing lists - a PO orders 1268 boxes of a product, and its
-    packing list is what says those 1268 are four designs of 317. When a PO
-    has no packing list to explode, the PO's own product line comes through
-    with design_id/design_name NULL.
+    Imported from the source Packing Plannings' own item rows. `sr_no` is
+    renumbered across the whole document, because several packing plans load
+    at once and each numbers its batches from 1; `source_sr_no` keeps what it
+    was called on its own document. The packings' contents reference the
+    RENUMBERED sr_no, which is why both halves are always imported together
+    and why a save must never renumber by position.
+
+    A batch rather than a design, for the reason PackingPlanningItem gives: a
+    design is routinely fired in several batches on different days, and a
+    pallet is packed out of one firing.
+
+    `quantity_boxes` is what the numbered packings actually HOLD, not what was
+    produced. A batch's unpacked leftover is the packing plan's problem; it
+    must not arrive here as something to load.
 
     `net_weight_kg` is PER box/pc (a snapshot of products.net_weight_kg), not
-    the line total - it has to be per-unit, because a line is split across
-    several cartons and pallets in quantities nobody knows at load time.
-    `price_usd` is the PI's own quoted rate, matched by product_id."""
+    the line total - it has to be per-unit, because a line is spread across
+    several packings. `price_usd` is the PI's own quoted rate, matched by
+    product_id."""
     id: Optional[int]
     loading_planning_id: Optional[int]
     sr_no: int
     product_name: str
+    packing_planning_id: Optional[int] = None
+    packing_planning_number: Optional[str] = None
+    source_sr_no: Optional[int] = None
     proforma_invoice_id: Optional[int] = None
     purchase_order_id: Optional[int] = None
     po_number: Optional[str] = None
     product_id: Optional[int] = None
     design_id: Optional[int] = None
     design_name: Optional[str] = None
+    batch_number: Optional[str] = None
+    production_date: Optional[str] = None
     hsn_code: Optional[str] = None
     quantity_boxes: float = 0
     quantity_unit: str = "PCS"
@@ -3471,12 +3485,15 @@ class LoadingPlanningItem:
 
     @property
     def label(self) -> str:
-        """How the line names itself in the packing cards' pickers."""
-        return f"{self.product_name} - {self.design_name}" if self.design_name else self.product_name
+        """How the line names itself wherever a packing lists its contents.
+        Same form PackingPlanningItem.label uses, batch included - two batches
+        of one design are different goods lines here."""
+        base = f"{self.product_name} - {self.design_name}" if self.design_name else self.product_name
+        return f"{base} [{self.batch_number}]" if self.batch_number else base
 
     @property
     def total_net_weight_kg(self) -> float:
-        """What the whole line weighs, goods only - no carton or pallet tare."""
+        """What the whole line weighs, goods only - no packing tare."""
         return (self.net_weight_kg or 0) * (self.quantity_boxes or 0)
 
     @staticmethod
@@ -3487,12 +3504,17 @@ class LoadingPlanningItem:
             loading_planning_id=row["loading_planning_id"],
             sr_no=row["sr_no"],
             product_name=row["product_name"],
+            packing_planning_id=row["packing_planning_id"],
+            packing_planning_number=row["packing_planning_number"],
+            source_sr_no=row["source_sr_no"],
             proforma_invoice_id=row["proforma_invoice_id"],
             purchase_order_id=row["purchase_order_id"],
             po_number=row["po_number"],
             product_id=row["product_id"],
             design_id=row["design_id"],
             design_name=row["design_name"],
+            batch_number=row["batch_number"],
+            production_date=row["production_date"],
             hsn_code=row["hsn_code"],
             quantity_boxes=row["quantity_boxes"] or 0,
             quantity_unit=row["quantity_unit"] or "PCS",
@@ -3505,91 +3527,58 @@ class LoadingPlanningItem:
 
 
 @dataclass
-class LoadingPlanningCarton:
-    """One physical carton on a Loading Planning - the OPTIONAL inner packing
-    level, which then goes on a pallet.
+class LoadingPlanningPacking:
+    """One physical packing on a Loading Planning - a pallet or a carton, per
+    `packing_unit_label` - and the unit containers are loaded with.
 
-    Tiles never have one (boxes sit straight on the pallet); hardware does:
-    45 + 45 PCS at 30/CTN packs as two full cartons plus one holding 15 of
-    each, which is why `contents` is a list rather than a single line. A
-    carton with pallet_no None has been built but not yet placed."""
+    Imported whole from a source Packing Planning, which is where it was
+    actually built.
+
+    `packing_no` is the one thing this document assigns, and only so the
+    contents rows have a natural key: loading several packing plans at once
+    means several units all calling themselves pallet 1. It is never shown.
+    What IS shown is `source_packing_no` - the number printed on the pallet's
+    own label - beside the packing planning it came from, and
+    `unique_packing_id`, which is globally unique and is the real identity.
+    None of those three is ever reissued here: the packing already exists on
+    the floor with a label stuck to it, and a number invented here would
+    contradict it.
+
+    There is deliberately no capacity and no inner carton level. How full a
+    packing is was settled upstream; what arrives here is one indivisible
+    thing a forklift moves, which makes the weight rule a single line:
+
+        gross = contents net + packing tare
+
+    `contents` is a list because a hand-grouped packing holds leftovers from
+    several batches. `container_sr_no` None means not yet loaded."""
     id: Optional[int]
     loading_planning_id: Optional[int]
-    carton_no: int
-    carton_type_id: Optional[int] = None
-    carton_type_name: Optional[str] = None
-    capacity_boxes: Optional[float] = None
+    packing_no: int
+    packing_planning_id: Optional[int] = None
+    packing_planning_number: Optional[str] = None
+    source_packing_no: Optional[int] = None
+    packing_unit_label: str = "PLT"
+    is_manual: bool = False
+    packing_type_name: Optional[str] = None
     tare_weight_kg: Optional[float] = None
-    pallet_no: Optional[int] = None
+    unique_packing_id: Optional[str] = None
+    unique_qr_id: Optional[str] = None
+    container_sr_no: Optional[int] = None
     contents: List[dict] = field(default_factory=list)  # [{item_sr_no, quantity_boxes}]
 
     @property
     def packed_boxes(self) -> float:
-        return sum((c.get("quantity_boxes") or 0) for c in self.contents)
+        return round(sum((c.get("quantity_boxes") or 0) for c in self.contents), 3)
 
     @property
-    def is_part_filled(self) -> bool:
-        """Flagged on the form: the carton nobody has finished deciding about."""
-        return bool(self.capacity_boxes) and self.packed_boxes < self.capacity_boxes
-
-    @staticmethod
-    def from_row(row) -> "LoadingPlanningCarton":
-        return LoadingPlanningCarton(
-            id=row["id"],
-            loading_planning_id=row["loading_planning_id"],
-            carton_no=row["carton_no"],
-            carton_type_id=row["carton_type_id"],
-            carton_type_name=row["carton_type_name"],
-            capacity_boxes=row["capacity_boxes"],
-            tare_weight_kg=row["tare_weight_kg"],
-            pallet_no=row["pallet_no"],
-        )
-
-
-@dataclass
-class LoadingPlanningPallet:
-    """One physical pallet on a Loading Planning - what a forklift moves into
-    the container, and the unit containers are packed with.
-
-    A pallet's goods are its `contents` (boxes placed directly on it, the
-    tiles case) PLUS whatever its `cartons` hold (the hardware case); it may
-    carry both. That is what lets one weight rule cover every case:
-
-        gross = contents net + carton tare + pallet tare
-
-    which is exactly what PO20260827001's tiles want - (32 x 27) + 0 + 20 =
-    884kg - and what PO20260827002's hardware wants - 44.325 + (3 x 0.3) + 20
-    = 65.225kg. `container_sr_no` None means built but not yet loaded."""
-    id: Optional[int]
-    loading_planning_id: Optional[int]
-    pallet_no: int
-    pallet_type_id: Optional[int] = None
-    pallet_type_name: Optional[str] = None
-    capacity_boxes: Optional[float] = None
-    tare_weight_kg: Optional[float] = None
-    container_sr_no: Optional[int] = None
-    contents: List[dict] = field(default_factory=list)  # [{item_sr_no, quantity_boxes}] placed DIRECTLY on the pallet
-    cartons: List[LoadingPlanningCarton] = field(default_factory=list)  # populated by the service, not the row
-
-    @property
-    def direct_boxes(self) -> float:
-        return sum((c.get("quantity_boxes") or 0) for c in self.contents)
-
-    @property
-    def packed_boxes(self) -> float:
-        """Everything on the pallet, whether it went through a carton or not."""
-        return self.direct_boxes + sum(c.packed_boxes for c in self.cartons)
-
-    @property
-    def carton_tare_kg(self) -> float:
-        return sum((c.tare_weight_kg or 0) for c in self.cartons)
-
-    @property
-    def is_part_filled(self) -> bool:
-        """Only meaningful for a pallet loaded directly with boxes - a pallet
-        carrying cartons has no capacity, since how many fit is the
-        operator's call, not a rule."""
-        return bool(self.capacity_boxes) and self.direct_boxes < self.capacity_boxes
+    def label(self) -> str:
+        """How a packing names itself on screen and on paper: its own number,
+        qualified by the document that issued it. Two packing plans both have
+        a pallet 5, so the number alone is ambiguous the moment more than one
+        is loaded."""
+        no = self.source_packing_no if self.source_packing_no is not None else self.packing_no
+        return f"{self.packing_planning_number} · {no}" if self.packing_planning_number else str(no)
 
     def net_weight_kg(self, items_by_sr: dict) -> float:
         """Goods only. Needs the plan's items to know what a box weighs, so
@@ -3599,27 +3588,27 @@ class LoadingPlanningPallet:
             item = items_by_sr.get(row.get("item_sr_no"))
             if item:
                 total += (item.net_weight_kg or 0) * (row.get("quantity_boxes") or 0)
-        for carton in self.cartons:
-            for row in carton.contents:
-                item = items_by_sr.get(row.get("item_sr_no"))
-                if item:
-                    total += (item.net_weight_kg or 0) * (row.get("quantity_boxes") or 0)
         return total
 
     def gross_weight_kg(self, items_by_sr: dict) -> float:
         """The rule the whole document is built around."""
-        return self.net_weight_kg(items_by_sr) + self.carton_tare_kg + (self.tare_weight_kg or 0)
+        return self.net_weight_kg(items_by_sr) + (self.tare_weight_kg or 0)
 
     @staticmethod
-    def from_row(row) -> "LoadingPlanningPallet":
-        return LoadingPlanningPallet(
+    def from_row(row) -> "LoadingPlanningPacking":
+        return LoadingPlanningPacking(
             id=row["id"],
             loading_planning_id=row["loading_planning_id"],
-            pallet_no=row["pallet_no"],
-            pallet_type_id=row["pallet_type_id"],
-            pallet_type_name=row["pallet_type_name"],
-            capacity_boxes=row["capacity_boxes"],
+            packing_no=row["packing_no"],
+            packing_planning_id=row["packing_planning_id"],
+            packing_planning_number=row["packing_planning_number"],
+            source_packing_no=row["source_packing_no"],
+            packing_unit_label=row["packing_unit_label"] or "PLT",
+            is_manual=bool(row["is_manual"]),
+            packing_type_name=row["packing_type_name"],
             tare_weight_kg=row["tare_weight_kg"],
+            unique_packing_id=row["unique_packing_id"],
+            unique_qr_id=row["unique_qr_id"],
             container_sr_no=row["container_sr_no"],
         )
 
@@ -3629,17 +3618,17 @@ class LoadingPlanning:
     """The LOADING PLANNING document: which goods physically go in which
     container, worked out before the export invoice is cut.
 
-    Nothing else in the app answers that. A purchase order knows what was
-    bought, its packing list knows the design split, and a booking knows the
-    containers - but `packing_list_items.pallets` is stored as
-    boxes/box_per_pallet, a DECIMAL, and 9.91 pallets or 1.5 cartons is not
-    a thing anyone can ship. So this document makes cartons and pallets real
-    numbered objects that a human fills by hand, then assigns those pallets
-    whole to the booking's containers.
+    Nothing else in the app answers that. A Packing Planning says what there
+    is to load - it turns production into whole numbered pallets and cartons
+    and mints a label id for each - and a Booking Detail knows the containers,
+    but nothing put the two together and said which pallet goes in which box.
 
-    Container rows are a SNAPSHOT of the chosen booking, same treatment every
-    other imported party detail gets, so editing the booking later can't
-    rewrite a finished plan."""
+    So this document packs nothing. It imports whole packing plans - SEVERAL
+    of them, since one container load routinely draws on more than one packing
+    run - and its only job is assignment. Both the packing rows and the container rows are
+    SNAPSHOTS of what they were imported from, the same treatment every other
+    imported detail gets, so editing either afterwards can't rewrite a
+    finished plan."""
     id: Optional[int]
     company_id: int
     created_by: int
@@ -3655,17 +3644,25 @@ class LoadingPlanning:
     updated_at: Optional[str] = None
     created_by_name: Optional[str] = None  # populated by joined queries only
     item_count: Optional[int] = None  # list-view only
-    pallet_count: Optional[int] = None  # list-view only
+    packing_count: Optional[int] = None  # list-view only
     proforma_invoice_ids: List[int] = field(default_factory=list)
     proforma_invoice_numbers: List[str] = field(default_factory=list)
+    packing_planning_ids: List[int] = field(default_factory=list)
+    packing_planning_numbers: List[str] = field(default_factory=list)
     items: List[LoadingPlanningItem] = field(default_factory=list)
     containers: List[dict] = field(default_factory=list)  # snapshot of the booking's 11B rows
-    cartons: List[LoadingPlanningCarton] = field(default_factory=list)
-    pallets: List[LoadingPlanningPallet] = field(default_factory=list)
+    packings: List[LoadingPlanningPacking] = field(default_factory=list)
 
     @property
     def items_by_sr(self) -> dict:
         return {i.sr_no: i for i in self.items}
+
+    @property
+    def purchase_order_numbers(self) -> List[str]:
+        """The purchase orders these goods were ordered on, in the order the
+        lines mention them - what the read-only Purchase orders card lists.
+        Derived rather than stored, since the goods lines already carry it."""
+        return list(dict.fromkeys(i.po_number for i in self.items if i.po_number))
 
     @property
     def total_boxes(self) -> float:
@@ -3677,21 +3674,17 @@ class LoadingPlanning:
 
     @property
     def line_balances(self) -> List[dict]:
-        """Per goods line: how much is planned, how much has actually been
-        packed (in a carton or straight onto a pallet), and what is left.
+        """Per goods line: how much came in, how much the imported packings
+        account for, and what is unaccounted for.
 
-        `left` must reach 0 for the plan to be complete - but a non-zero
-        left is a WARNING, never a refusal to save. Unlike the export packing
-        list's container split, a loading plan is legitimately worked on over
-        several sittings."""
+        A clean import always balances - both halves come off the same packing
+        plan. A non-zero `left` means the two have been edited apart, and is a
+        WARNING rather than a refusal to save, for the reason this whole
+        document reports rather than raises: a plan is worked on over several
+        sittings and a half-built one must save."""
         packed = {i.sr_no: 0.0 for i in self.items}
-        for carton in self.cartons:
-            for row in carton.contents:
-                sr = row.get("item_sr_no")
-                if sr in packed:
-                    packed[sr] += row.get("quantity_boxes") or 0
-        for pallet in self.pallets:
-            for row in pallet.contents:
+        for packing in self.packings:
+            for row in packing.contents:
                 sr = row.get("item_sr_no")
                 if sr in packed:
                     packed[sr] += row.get("quantity_boxes") or 0
@@ -3720,59 +3713,45 @@ class LoadingPlanning:
         weigh. `over_weight` turns the row red on the form and prints a
         warning - it never blocks a save."""
         by_sr = self.items_by_sr
-        cartons_by_pallet: dict = {}
-        for carton in self.cartons:
-            cartons_by_pallet.setdefault(carton.pallet_no, []).append(carton)
-        rows = []
-        for container in self.containers:
-            sr = container.get("sr_no")
-            pallets = [p for p in self.pallets if p.container_sr_no == sr]
-            for pallet in pallets:
-                pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
-            cargo = sum(p.gross_weight_kg(by_sr) for p in pallets)
-            container_tare = container.get("tare_weight_kg") or 0
+
+        def row_for(sr_no, container, packings):
+            cargo = sum(p.gross_weight_kg(by_sr) for p in packings)
+            container_tare = (container or {}).get("tare_weight_kg") or 0
             vgm = cargo + container_tare
             try:
-                max_weight = float(container.get("max_permitted_weight") or 0)
+                max_weight = float((container or {}).get("max_permitted_weight") or 0)
             except (TypeError, ValueError):
                 max_weight = 0
-            rows.append({
-                "sr_no": sr,
-                "container_no": container.get("container_no"),
-                "container_type": container.get("container_type"),
-                "pallet_count": len(pallets),
-                "boxes": sum(p.packed_boxes for p in pallets),
-                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in pallets),
-                "carton_tare_kg": sum(p.carton_tare_kg for p in pallets),
-                "pallet_tare_kg": sum((p.tare_weight_kg or 0) for p in pallets),
+            return {
+                "sr_no": sr_no,
+                "container_no": (container or {}).get("container_no") if container else "Unassigned",
+                "container_type": (container or {}).get("container_type"),
+                "packing_count": len(packings),
+                "boxes": sum(p.packed_boxes for p in packings),
+                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in packings),
+                "packing_tare_kg": sum((p.tare_weight_kg or 0) for p in packings),
                 "cargo_weight_kg": cargo,
                 "container_tare_kg": container_tare,
-                "vgm_kg": vgm,
+                # An unassigned pile has no container to weigh, so no VGM and
+                # nothing to be over.
+                "vgm_kg": vgm if container else None,
                 "max_permitted_weight": max_weight,
-                "headroom_kg": (max_weight - vgm) if max_weight else None,
-                "over_weight": bool(max_weight and vgm > max_weight),
-            })
-        loose = [p for p in self.pallets if p.container_sr_no is None]
+                "headroom_kg": (max_weight - vgm) if (container and max_weight) else None,
+                "over_weight": bool(container and max_weight and vgm > max_weight),
+            }
+
+        rows = [row_for(c.get("sr_no"), c, self.packings_for_container(c.get("sr_no")))
+                for c in self.containers]
+        loose = self.packings_for_container(None)
         if loose:
-            for pallet in loose:
-                pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
-            rows.append({
-                "sr_no": None,
-                "container_no": "Unassigned",
-                "container_type": None,
-                "pallet_count": len(loose),
-                "boxes": sum(p.packed_boxes for p in loose),
-                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in loose),
-                "carton_tare_kg": sum(p.carton_tare_kg for p in loose),
-                "pallet_tare_kg": sum((p.tare_weight_kg or 0) for p in loose),
-                "cargo_weight_kg": sum(p.gross_weight_kg(by_sr) for p in loose),
-                "container_tare_kg": 0,
-                "vgm_kg": None,
-                "max_permitted_weight": 0,
-                "headroom_kg": None,
-                "over_weight": False,
-            })
+            rows.append(row_for(None, None, loose))
         return rows
+
+    def packings_for_container(self, container_sr_no) -> List[LoadingPlanningPacking]:
+        """The packings loaded into one container, in packing-no order - which
+        is how the loading bay reads them off the sheet."""
+        return sorted((p for p in self.packings if p.container_sr_no == container_sr_no),
+                      key=lambda p: p.packing_no)
 
     @staticmethod
     def from_row(row) -> "LoadingPlanning":
@@ -3793,7 +3772,7 @@ class LoadingPlanning:
             updated_at=row["updated_at"],
             created_by_name=row["created_by_name"] if "created_by_name" in keys else None,
             item_count=row["item_count"] if "item_count" in keys else None,
-            pallet_count=row["pallet_count"] if "pallet_count" in keys else None,
+            packing_count=row["packing_count"] if "packing_count" in keys else None,
         )
 
 
@@ -3942,6 +3921,41 @@ class PackingPlanningManualUnit:
             packing_unit_label=row["packing_unit_label"] or "PLT",
             capacity_boxes=row["capacity_boxes"],
             remarks=row["remarks"],
+        )
+
+
+@dataclass
+class PackingPlanningLabel:
+    """The two ids printed on the labels stuck to one PHYSICAL pallet.
+
+    The one part of this document that is stored rather than derived, and
+    deliberately so. Everything else here - the as-per-PL figure, the
+    remainders, the packing-number ranges - is recomputed on read precisely
+    so the halves of the sheet cannot drift apart. A QR id is the opposite
+    case: the moment it is printed and stuck on a pallet it exists in the
+    physical world, so it is minted once, never re-issued, and a pallet that
+    survives an edit keeps the id already out on the floor.
+
+    `packing_no` is the pallet number the PALLET PACKING PLANNING sheet
+    prints, which is what physically identifies one pallet in a document."""
+    id: Optional[int]
+    company_id: int
+    packing_planning_id: Optional[int]
+    packing_no: int
+    unique_packing_id: str
+    unique_qr_id: str
+    created_at: Optional[str] = None
+
+    @staticmethod
+    def from_row(row) -> "PackingPlanningLabel":
+        return PackingPlanningLabel(
+            id=row["id"],
+            company_id=row["company_id"],
+            packing_planning_id=row["packing_planning_id"],
+            packing_no=row["packing_no"],
+            unique_packing_id=row["unique_packing_id"],
+            unique_qr_id=row["unique_qr_id"],
+            created_at=row["created_at"],
         )
 
 
@@ -4126,6 +4140,80 @@ class PackingPlanning:
                                      "quantity": 0, "quantity_unit": ""}],
             })
         return rows
+
+    @property
+    def packings(self) -> List[dict]:
+        """One entry per PHYSICAL pallet - what a LABEL gets printed for,
+        where `pallet_rows` is one entry per row of the SHEET.
+
+        The difference is the auto half: a row reading "9 PLT / 288 BOX /
+        1 TO 9" is nine separate pallets, each holding one full unit of that
+        batch (32 boxes), and each needs its own label and its own QR id.
+        A manual unit is already one pallet, and comes through carrying
+        whatever mix was grouped onto it.
+
+        Ordered by packing_no, which is how the floor reads them."""
+        numbers = self.packing_numbers
+        by_sr = self.items_by_sr
+        out: List[dict] = []
+
+        for item in self.items:
+            start, end = numbers.get(item.sr_no) or (None, None)
+            if not start:
+                continue
+            for packing_no in range(start, end + 1):
+                out.append({
+                    "packing_no": packing_no,
+                    "is_manual": False,
+                    "packing_unit_label": item.packing_unit_label,
+                    "packing_type_id": item.packing_type_id,
+                    "packing_type_name": item.packing_type_name,
+                    "lines": [{
+                        # The batch row this unit was packed out of. Carried so
+                        # a downstream document (Loading Planning) can map a
+                        # packing's contents back onto its own goods lines
+                        # without re-matching on product/design/batch text.
+                        "item_sr_no": item.sr_no,
+                        "product_id": item.product_id,
+                        "product_name": item.product_name,
+                        "design_name": item.design_name,
+                        "batch_number": item.batch_number,
+                        "production_date": item.production_date,
+                        # One whole unit - which is exactly what "actual
+                        # packing" counted, so 9 pallets x 32 = the 288 the
+                        # sheet totals for that row.
+                        "quantity": item.boxes_per_unit or 0,
+                        "quantity_unit": item.quantity_unit,
+                        "proforma_invoice_id": item.proforma_invoice_id,
+                    }],
+                })
+
+        for unit in self.manual_units:
+            lines = []
+            for content in unit.contents:
+                src = by_sr.get(content.get("item_sr_no"))
+                lines.append({
+                    "item_sr_no": content.get("item_sr_no"),
+                    "product_id": src.product_id if src else None,
+                    "product_name": src.product_name if src else None,
+                    "design_name": src.design_name if src else None,
+                    "batch_number": src.batch_number if src else None,
+                    "production_date": src.production_date if src else None,
+                    "quantity": content.get("quantity_boxes") or 0,
+                    "quantity_unit": src.quantity_unit if src else "BOX",
+                    "proforma_invoice_id": src.proforma_invoice_id if src else None,
+                })
+            out.append({
+                "packing_no": unit.unit_no,
+                "is_manual": True,
+                "packing_unit_label": unit.packing_unit_label,
+                "packing_type_id": unit.packing_type_id,
+                "packing_type_name": unit.packing_type_name,
+                "lines": lines,
+            })
+
+        out.sort(key=lambda p: p["packing_no"])
+        return out
 
     @property
     def total_units_by_label(self) -> dict:

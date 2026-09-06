@@ -201,14 +201,13 @@ class ServiceContainer:
             self.packing_planning_repo, self.proforma_invoice_repo, self.purchase_order_repo,
             self.purchase_order_production_repo, self.product_repo, self.product_pallet_type_repo,
         )
-        # Loading Planning. Wired after packing_list_repo because its whole
-        # reason for existing is that hop: it traces a proforma invoice
-        # through its purchase orders to THOSE ORDERS' packing lists, which
-        # is the only place the design split lives (a PO orders 1268 boxes of
-        # a product; its packing list says those are four designs of 317).
+        # Loading Planning. Wired after packing_planning_SERVICE, not just its
+        # repo: a loading plan's only source of goods and packings is packing
+        # plannings, and its step-2 picker asks the same PI -> purchase orders
+        # question that service already answers.
         self.loading_planning_service = LoadingPlanningService(
-            self.loading_planning_repo, self.proforma_invoice_repo, self.purchase_order_repo,
-            self.packing_list_repo, self.booking_detail_repo, self.product_repo,
+            self.loading_planning_repo, self.packing_planning_repo, self.packing_planning_service,
+            self.proforma_invoice_repo, self.booking_detail_repo, self.product_repo,
             self.product_pallet_type_repo,
         )
         self.purchase_invoice_service = PurchaseInvoiceService(

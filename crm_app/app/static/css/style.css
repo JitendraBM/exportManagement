@@ -674,6 +674,87 @@ legend { font-size: .8rem; font-weight: 600; color: var(--color-ink); padding: 0
    would otherwise draw between them. */
 .sheet-table td.sheet-rowspan { vertical-align: middle; text-align: center; }
 
+/* Packing labels - the stickers that go on the pallets themselves. One
+   .label-page per printed page, tiled 1/2/4-up; the page is chunked
+   server-side rather than left to CSS auto-pagination, which no two
+   browsers agree on and which would slice labels in half. */
+.label-page {
+  margin: 0 auto 18px; background: #fff; padding: 8mm; box-sizing: border-box;
+  box-shadow: var(--shadow-card); display: grid; gap: 0;
+  break-after: page; page-break-after: always;
+}
+.label-page:last-of-type { break-after: auto; page-break-after: auto; }
+/* The page's own footprint, so the grid below has a fixed area to stretch
+   the labels across evenly - an A4 sheet's usable area after the @page
+   margin, in each orientation the user picks. */
+.label-page.orientation-portrait { width: 210mm; min-height: 297mm; }
+.label-page.orientation-landscape { width: 297mm; min-height: 210mm; }
+/* Rows as well as columns are given explicit fractions (not left to
+   auto-size on content) so 2 or 4 labels split the page into equal-height
+   strips/quadrants rather than clumping at the top with blank space below. */
+.label-page-1up { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.label-page-2up { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+.label-page-4up { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+/* A label must never be split across a page, and stretches to fill its
+   grid cell (see .label-page-*up rows above) with its own content spread
+   top-to-bottom rather than left bunched at the top. */
+.label {
+  break-inside: avoid; page-break-inside: avoid; padding: 5mm;
+  box-sizing: border-box; display: flex; flex-direction: column;
+  justify-content: space-between;
+}
+/* Dotted cut lines between labels sharing a page, in both directions, so
+   the user can see exactly where to cut. */
+.label-page-2up .label:nth-child(n+2) { border-top: 1px dashed var(--color-line-dark); }
+.label-page-4up .label:nth-child(n+3) { border-top: 1px dashed var(--color-line-dark); }
+.label-page-4up .label:nth-child(2n) { border-left: 1px dashed var(--color-line-dark); }
+.label-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8mm; margin-bottom: 4mm; }
+.label-line { font-size: .72rem; margin-bottom: 3mm; }
+.label-qr-id { color: var(--color-accent); font-weight: 700; font-family: var(--font-mono); }
+/* The SVG carries its own width/height in mm, sized from the symbol's module
+   count so every code prints at a scannable density (see
+   PackingPlanningService.QR_MM_PER_MODULE). Nothing here may override that -
+   only stop an unusually dense code overflowing a narrow 4-up label. */
+.label-qr svg { display: block; max-width: 100%; height: auto; }
+.label-table { width: 100%; border-collapse: collapse; border: 1px solid var(--color-ink); font-size: .62rem; }
+.label-table th, .label-table td { border: 1px solid var(--color-line-dark); padding: 3px 6px; text-align: left; }
+.label-table thead th { text-align: center; font-weight: 600; }
+.label-table td.num, .label-table th.num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.label-table tbody td { font-weight: 600; }
+.label-table tfoot th { text-align: center; }
+.label-table tfoot th.num { text-align: right; }
+.label-origin { text-align: center; font-weight: 700; letter-spacing: .02em; margin-top: 4mm; font-size: 1.6rem; }
+.label-page-4up .label-origin { font-size: 1rem; margin-top: 2mm; }
+.label-page-1up .label-origin { font-size: 2.4rem; }
+
+/* 4x6in / 4x4in modes - one sticker per page, sized for a TTP-244-class
+   desktop label printer's die-cut stock rather than an A4 sheet. Thermal
+   stock has little printable margin, so page/label padding is tighter than
+   the A4 variants above, and text is scaled down to fit the much smaller
+   area. */
+.label-page.size-4x6.orientation-portrait { width: 4in; min-height: 6in; }
+.label-page.size-4x6.orientation-landscape { width: 6in; min-height: 4in; }
+.label-page.size-4x4 { width: 4in; min-height: 4in; }
+.label-page.size-4x6,
+.label-page.size-4x4 { padding: 2mm; }
+.label-page.size-4x6 .label,
+.label-page.size-4x4 .label { padding: 3mm; }
+.label-page.size-4x6 .label-line,
+.label-page.size-4x4 .label-line { font-size: .62rem; margin-bottom: 2mm; }
+.label-page.size-4x6 .label-table,
+.label-page.size-4x4 .label-table { font-size: .56rem; }
+.label-page.size-4x6 .label-table th, .label-page.size-4x6 .label-table td,
+.label-page.size-4x4 .label-table th, .label-page.size-4x4 .label-table td { padding: 2px 4px; }
+.label-page.size-4x6 .label-origin,
+.label-page.size-4x4 .label-origin { font-size: 1.1rem; margin-top: 2mm; }
+/* 4x4 is a square, ~a third less area than 4x6, and squeezes the same six
+   table rows into a shorter box - shave the table and QR down further so
+   nothing clips the sticker's edge. */
+.label-page.size-4x4 .label-line { font-size: .56rem; margin-bottom: 1.5mm; }
+.label-page.size-4x4 .label-table { font-size: .5rem; }
+.label-page.size-4x4 .label-origin { font-size: .9rem; }
+.label-page.size-4x4 .label-qr svg { max-width: 32mm; }
+
 .quote-sheet {
   max-width: 960px; margin: 24px auto 60px; background: #fff; padding: 30px 34px;
   box-shadow: var(--shadow-card); font-size: .6975rem; color: var(--color-text);

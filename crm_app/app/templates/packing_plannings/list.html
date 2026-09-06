@@ -40,6 +40,7 @@
           <td class="text-sm">{{ plan.created_by_name }}</td>
           <td class="text-sm" style="white-space:nowrap;">
             <a href="{{ url_for('packing_plannings.view_packing_planning', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">Print</a>
+            <a href="{{ url_for('packing_plannings.packing_planning_labels', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">🏷 Labels</a>
             {% if current_user.is_admin %}
             <a href="{{ url_for('packing_plannings.edit_packing_planning', packing_planning_id=plan.id) }}" class="btn btn-ghost btn-sm">Edit</a>
             <form method="POST" action="{{ url_for('packing_plannings.delete_packing_planning', packing_planning_id=plan.id) }}" style="display:inline;"
