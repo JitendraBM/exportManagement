@@ -4,20 +4,26 @@ app/routes/loading_plannings.py
 "Loading Planning" - the document that works out which goods physically go in
 which container, before the export invoice is cut.
 
-Goods are loaded the way the Export Invoice's own "Reference proforma
-invoices" card loads them, but traced one hop differently (PI -> purchase
-orders -> THOSE ORDERS' packing lists, so lines arrive at design level); then
-a human builds cartons and pallets by hand, because `packing_list_items.
-pallets` has always been a decimal and 9.91 pallets is not a thing anyone can
-ship; then those pallets are assigned whole to a booking's containers.
+It packs nothing. A PACKING PLANNING has already turned production into whole
+numbered pallets and cartons and minted a permanent label id for each, so by
+the time a loading plan is made those packings exist on the floor with labels
+stuck to them.
+
+Loading is three explicit steps, the same narrowing packing_plannings uses:
+tick the reference proforma invoices, list the purchase orders they pulled in
+(`/api/purchase-orders`) and tick those, then list the packing plannings
+covering those orders (`/api/packing-plannings`) and tick which to load
+(`/api/prefill`). SEVERAL load at once, because one container load routinely
+draws on more than one packing run. That leaves the operator one job: putting
+each numbered packing in a container.
 
 Reads are open to anyone signed in, writes are admin-only - the same split
-Booking Detail uses, and for the same reason: this is the document the
-loading bay works from.
+Packing Planning and Booking Detail use, and for the same reason: this is the
+document the loading bay works from.
 
-Everything the packing cards check is reported as a WARNING on the form
-rather than raised: a plan is legitimately built across several sittings, so
-a half-built one must save. See LoadingPlanningService.packing_warnings.
+Everything that doesn't add up is reported as a WARNING on the form rather
+than raised: a plan is legitimately built across several sittings, so a
+half-built one must save. See LoadingPlanningService.packing_warnings.
 """
 
 import json
@@ -32,8 +38,9 @@ from app.utils import login_required, admin_required, verify_delete_password
 loading_plannings_bp = Blueprint("loading_plannings", __name__, url_prefix="/loading-plannings")
 
 _FIELDS = [
-    "loading_planning_number", "loading_planning_date", "booking_detail_id",
-    "booking_no", "vessel_name", "voyage_no", "transporter_name", "remarks",
+    "loading_planning_number", "loading_planning_date",
+    "booking_detail_id", "booking_no", "vessel_name", "voyage_no",
+    "transporter_name", "remarks",
 ]
 
 
@@ -42,12 +49,17 @@ def _extract_fields(form) -> dict:
 
 
 def _extract_items(form) -> list:
-    """One goods line per row of the Products card. Every column is posted as
-    its own repeated field, the same idiom every other line-items form here
-    uses."""
-    keys = ("proforma_invoice_id", "purchase_order_id", "po_number", "product_id", "product_name",
-            "design_id", "design_name", "hsn_code", "quantity_boxes", "quantity_unit",
-            "quantity_value", "unit", "net_weight_kg", "price_usd")
+    """One goods line per row of the Goods card. Every column is posted as its
+    own repeated field, the same idiom every other line-items form here uses.
+
+    `sr_no` rides along rather than being inferred from position: it is the
+    document-wide numbering assigned at import, and the packings reference
+    their batch by it."""
+    keys = ("sr_no", "packing_planning_id", "packing_planning_number", "source_sr_no",
+            "proforma_invoice_id", "purchase_order_id", "po_number", "product_id",
+            "product_name", "design_id", "design_name", "batch_number", "production_date",
+            "hsn_code", "quantity_boxes", "quantity_unit", "quantity_value", "unit",
+            "net_weight_kg", "price_usd")
     lists = {k: form.getlist(f"item_{k}[]") for k in keys}
     n = max((len(v) for v in lists.values()), default=0)
     return [{k: (lists[k][i] if i < len(lists[k]) else "") for k in keys} for i in range(n)]
@@ -61,27 +73,24 @@ def _extract_containers(form) -> list:
     return [{k: (lists[k][i] if i < len(lists[k]) else "") for k in keys} for i in range(n)]
 
 
-def _extract_packing(form) -> tuple:
-    """Cartons and pallets come back as JSON rather than as parallel repeated
-    fields.
+def _extract_packings(form) -> list:
+    """The packings come back as JSON rather than as parallel repeated fields.
 
-    Both are trees - a carton holds several goods lines, a pallet holds
-    cartons AND loose boxes - and flattening a tree into `foo[]` arrays would
-    need a fragile index-matching convention that the drag-and-drop card
-    would have to keep in sync on every move. The card owns one JS object and
-    posts it whole; the service still cleans and revalidates every field of
-    it, so nothing here is trusted."""
-    def parse(name):
-        raw = (form.get(name) or "").strip()
-        if not raw:
-            return []
-        try:
-            value = json.loads(raw)
-        except ValueError:
-            raise ValidationError("The packing could not be read - try rebuilding it.")
-        return value if isinstance(value, list) else []
-
-    return parse("cartons_json"), parse("pallets_json")
+    Each one holds a list of contents - a hand-grouped packing carries
+    leftovers from several batches - and flattening that into `foo[]` arrays
+    would need a fragile index-matching convention the card would have to keep
+    in sync on every reassignment. The card owns one JS object and posts it
+    whole; the service still cleans and revalidates every field of it, so
+    nothing here is trusted. Same call packing_plannings._extract_manual_units
+    makes."""
+    raw = (form.get("packings_json") or "").strip()
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        raise ValidationError("The packings could not be read - try loading the packing planning again.")
+    return value if isinstance(value, list) else []
 
 
 def _form_context(container, company_id):
@@ -94,14 +103,13 @@ def _form_context(container, company_id):
 
 def _render_form(container, plan, warnings=None, status_code=200):
     """Re-render after a failed POST with exactly what was typed, so nothing
-    the operator did is lost - the packing cards especially, which can
+    the operator did is lost - the container assignments especially, which can
     represent an afternoon's work."""
     html = render_template(
         "loading_plannings/form.html", plan=plan, form_data=request.form,
         items_json=json.dumps(_extract_items(request.form)),
         form_containers=_extract_containers(request.form),
-        cartons_json=request.form.get("cartons_json") or "[]",
-        pallets_json=request.form.get("pallets_json") or "[]",
+        packings_json=request.form.get("packings_json") or "[]",
         selected_proforma_ids=[int(v) for v in request.form.getlist("proforma_invoice_ids[]") if v.isdigit()],
         warnings=warnings or [],
         suggested_number=(plan.loading_planning_number if plan else request.form.get("loading_planning_number")),
@@ -111,34 +119,60 @@ def _render_form(container, plan, warnings=None, status_code=200):
     return (html, status_code) if status_code != 200 else html
 
 
+def _id_list(name):
+    """Ids round-trip as a comma-joined query param, not a list - the same
+    shape packing_plannings' own chained pickers use."""
+    return [p for p in (request.args.get(name, "") or "").split(",") if p.strip()]
+
+
+@loading_plannings_bp.route("/api/purchase-orders")
+@login_required
+def loading_planning_purchase_orders():
+    """Step 2: the purchase orders the ticked proforma invoices pulled in."""
+    return jsonify({"purchase_orders": current_app.container.loading_planning_service
+                    .purchase_orders_for_proformas(_id_list("proforma_invoice_ids"), g.user.company_id)})
+
+
+@loading_plannings_bp.route("/api/packing-plannings")
+@login_required
+def loading_planning_packing_plannings():
+    """Step 3: the packing plannings covering the ticked purchase orders."""
+    return jsonify({"packing_plannings": current_app.container.loading_planning_service
+                    .packing_plannings_for_purchase_orders(_id_list("purchase_order_ids"), g.user.company_id)})
+
+
 @loading_plannings_bp.route("/api/prefill")
 @login_required
 def loading_planning_prefill():
-    """Goods for the ticked proforma invoices - the `load goods & details from
-    selected PIs` button. Overwrites only the PI-derived goods lines, leaving
-    the document's number/date, its booking and any packing already built
-    untouched, the same rule the Export Invoice's own prefill follows."""
-    raw = request.args.get("proforma_invoice_ids", "")
-    ids = [p for p in raw.split(",") if p.strip()]
-    return jsonify(
-        current_app.container.loading_planning_service.build_prefill_from_proformas(ids, g.user.company_id)
-    )
+    """Step 4: goods and packings for the ticked packing plannings, merged.
+
+    Overwrites only what those documents supply, leaving the loading plan's
+    own number/date and its booking untouched, the same rule every other
+    prefill here follows."""
+    try:
+        return jsonify(
+            current_app.container.loading_planning_service.build_prefill_from_packing_plannings(
+                _id_list("packing_planning_ids"), g.user.company_id)
+        )
+    except NotFoundError as e:
+        return jsonify({"error": str(e)}), 404
 
 
-@loading_plannings_bp.route("/api/auto-build", methods=["POST"])
+@loading_plannings_bp.route("/api/auto-assign", methods=["POST"])
 @login_required
-def loading_planning_auto_build():
-    """The `auto-build` button: whole units to capacity, then one flagged
-    part-unit for the remainder, per goods line. Deliberately does NOT merge
-    part-units - that is the judgement call this whole document exists to let
-    a person make."""
+def loading_planning_auto_assign():
+    """The `auto-assign` button: spread the packings evenly across the
+    containers by weight. Assignment only - nothing is repacked, and every
+    packing can still be moved by hand afterwards."""
     service = current_app.container.loading_planning_service
     payload = request.get_json(silent=True) or {}
     try:
         items = service._clean_items(payload.get("items") or [])
+        packings = service._clean_packings(payload.get("packings") or [])
+        containers = service._clean_containers(payload.get("containers") or [])
     except ValidationError as e:
         return jsonify({"error": str(e)}), 400
-    return jsonify(service.auto_build_packing(g.user.company_id, items))
+    return jsonify(service.auto_assign_containers(packings, containers, items))
 
 
 @loading_plannings_bp.route("/")
@@ -154,15 +188,12 @@ def new_loading_planning():
     container = current_app.container
     service = container.loading_planning_service
     if request.method == "POST":
-        cartons, pallets = [], []
         try:
-            cartons, pallets = _extract_packing(request.form)
             plan = service.create(
                 current_user=g.user, fields=_extract_fields(request.form),
-                proforma_ids=request.form.getlist("proforma_invoice_ids[]"),
                 items=_extract_items(request.form),
                 containers=_extract_containers(request.form),
-                cartons=cartons, pallets=pallets,
+                packings=_extract_packings(request.form),
             )
             _flash_with_warnings(service, plan, "added")
             return redirect(url_for("loading_plannings.edit_loading_planning", loading_planning_id=plan.id))
@@ -173,7 +204,7 @@ def new_loading_planning():
     today = date.today().isoformat()
     return render_template(
         "loading_plannings/form.html", plan=None, form_data=None, items_json="[]",
-        form_containers=None, cartons_json="[]", pallets_json="[]",
+        form_containers=None, packings_json="[]",
         selected_proforma_ids=[], warnings=[],
         suggested_number=service.next_number(g.user.company_id, today), today=today,
         **_form_context(container, g.user.company_id),
@@ -192,14 +223,12 @@ def edit_loading_planning(loading_planning_id):
 
     if request.method == "POST":
         try:
-            cartons, pallets = _extract_packing(request.form)
             updated = service.update(
                 loading_planning_id=loading_planning_id, current_user=g.user,
                 fields=_extract_fields(request.form),
-                proforma_ids=request.form.getlist("proforma_invoice_ids[]"),
                 items=_extract_items(request.form),
                 containers=_extract_containers(request.form),
-                cartons=cartons, pallets=pallets,
+                packings=_extract_packings(request.form),
             )
             _flash_with_warnings(service, updated, "updated")
             return redirect(url_for("loading_plannings.edit_loading_planning",
@@ -212,8 +241,7 @@ def edit_loading_planning(loading_planning_id):
         "loading_plannings/form.html", plan=plan, form_data=None,
         items_json=json.dumps([dataclasses.asdict(i) for i in plan.items]),
         form_containers=None,
-        cartons_json=json.dumps([service._carton_json(c) for c in plan.cartons]),
-        pallets_json=json.dumps([service._pallet_json(p) for p in plan.pallets]),
+        packings_json=json.dumps([service._packing_json(p) for p in plan.packings]),
         selected_proforma_ids=plan.proforma_invoice_ids,
         warnings=service.packing_warnings(plan),
         suggested_number=plan.loading_planning_number, today=plan.loading_planning_date,
@@ -223,7 +251,7 @@ def edit_loading_planning(loading_planning_id):
 
 def _flash_with_warnings(service, plan, verb: str) -> None:
     """Saved is saved - the packing checks are reported alongside, never
-    instead of. A plan with 160 boxes still to pack is a normal, useful
+    instead of. A plan with 40 packings still to assign is a normal, useful
     intermediate state."""
     flash(f"Loading planning {plan.loading_planning_number} {verb}.", "success")
     for warning in service.packing_warnings(plan):

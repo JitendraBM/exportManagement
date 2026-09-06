@@ -2,32 +2,45 @@
 Tests for LoadingPlanningService (app/services.py) - the LOADING PLANNING
 document, which works out which goods physically go in which container.
 
-The behaviours worth pinning down are the ones the document exists for, and
-they are checked against the two real orders that motivated it:
+This document packs nothing. A PACKING PLANNING has already turned production
+into whole numbered pallets and cartons and minted a permanent label id for
+each, so the behaviours worth pinning down are all about IMPORT and
+ASSIGNMENT:
 
-  - goods arrive at DESIGN level, by tracing PI -> purchase orders -> those
-    orders' PACKING LISTS. A PO orders 1268 boxes of a product; only its
-    packing list knows those are four designs of 317. (A PO with no packing
-    list falls back to its own product lines.)
+  - loading narrows in three steps, the same shape Packing Planning uses:
+    proforma invoices -> their purchase orders -> the packing plannings
+    covering those orders. Each checkpoint matters because the set below it
+    is rarely wanted whole.
 
-  - `pallets` stops being a decimal. 317 boxes at 32/pallet is nine full
-    pallets plus one holding 29 - not 9.91 - and auto-build FLAGS that part
-    pallet rather than quietly merging it.
+  - SEVERAL packing plannings merge into one document, because one container
+    load draws on more than one packing run. Each numbers its own batches and
+    pallets from 1, so both are renumbered document-wide - and a packing's
+    contents must still land on the right goods line afterwards, which is the
+    single most breakable thing here.
 
-  - one weight rule covers both packing shapes, because the carton level is
-    optional:
-        pallet gross = contents net + carton tare + pallet tare
-    Tiles: (32 x 27) + 0 + 20 = 884kg. Hardware: 44.325 + (3 x 0.3) + 20 =
-    65.225kg.
+  - goods arrive one line per BATCH. `sr_no` is the document's own and a save
+    must never renumber it by position, because the packings reference it;
+    `source_sr_no` keeps what the batch was called on its own document.
 
-  - a mixed carton is possible at all. 45 + 45 PCS at 30/CTN auto-builds to
-    four cartons; the operator merges the two part-cartons into one holding
-    15 + 15, giving three cartons on one pallet. No rule can make that call,
-    which is why the packing is manual.
+  - a line's quantity is what the numbered packings HOLD, not what was
+    produced. 317 boxes packed as nine pallets of 32 arrive as 288; the 29
+    nobody has packed are the packing plan's problem and must not show up
+    here as something loadable.
 
-  - nothing here BLOCKS a save. Unpacked goods and an over-weight container
-    are reported as warnings, because a plan is built over several sittings.
+  - `source_packing_no` and the unique packing ids come across UNCHANGED.
+    They are already printed on labels stuck to the pallets; a number
+    invented here would contradict the floor.
+
+  - auto-assign spreads the packings evenly across the containers by weight
+    and refuses to put one in a container that has no room, leaving it
+    unassigned instead.
+
+  - nothing here BLOCKS a save. Unassigned packings and an over-weight
+    container are reported as warnings, because a plan is built over several
+    sittings.
 """
+
+import dataclasses
 
 import pytest
 
@@ -35,11 +48,9 @@ from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 
 
 # --------------------------------------------------------------------------
-# Fixture data: the two real orders, rebuilt from scratch.
+# Fixture data: a packing planning, built the way the real one is - product
+# with a packing type, PI -> PO -> production batches -> packing plan.
 # --------------------------------------------------------------------------
-TILE_DESIGNS = ["ARKOSE", "ATLANTA LIGHT GREY", "ARTISTIC BEIGE", "BELLY WOOD BROWN"]
-
-
 def make_product(container, seed, name, hsn, net, qty_unit, alt_qty, pallet_types):
     return container.product_service.create_product(
         current_user=seed.admin, product_name=name, description="", hsn_code=hsn,
@@ -56,9 +67,7 @@ def make_design(container, seed, product, name):
     )
 
 
-def make_chain(container, seed, *, pi_items, po_items, pl_items, pi_number, po_number, pl_number):
-    """One proforma invoice -> one purchase order -> one packing list, which
-    is the exact shape build_prefill_from_proformas walks."""
+def make_chain(container, seed, *, pi_items, po_items, pi_number, po_number):
     pi = container.proforma_invoice_service.create(
         seed.admin,
         {"consignee_name": "ROBUST INTERNATIONAL LIMITADA", "invoice_date": "2026-08-27",
@@ -71,477 +80,539 @@ def make_chain(container, seed, *, pi_items, po_items, pl_items, pi_number, po_n
          "proforma_invoice_id": str(pi.id)},
         po_items,
     )
-    pl = None
-    if pl_items:
-        pl = container.packing_list_service.create(
-            seed.admin,
-            {"packing_list_date": "2026-08-27", "packing_list_number": pl_number,
-             "purchase_order_id": str(po.id)},
-            pl_items,
-        )
-    return pi, po, pl
+    return pi, po
+
+
+def record_batches(container, seed, po, item_index, design, batches):
+    item = po.items[item_index]
+    container.purchase_order_production_service.save_row(
+        purchase_order_id=po.id, purchase_order_item_id=item.id,
+        design_id=(design.id if design else None),
+        design_name=(design.design_name if design else None),
+        status="ready", batches=batches, company_id=seed.company_id, user_id=seed.admin.id,
+    )
+
+
+def batch(number, date, qty):
+    return {"batch_number": number, "production_date": date,
+            "quantity_boxes": str(qty), "remarks": ""}
+
+
+def _as_form(obj):
+    return {k: ("" if v is None else v) for k, v in dataclasses.asdict(obj).items()}
 
 
 @pytest.fixture
 def tiles(container, seed):
-    """PO20260827001: three tile products, 27kg/box, 32 boxes to a 20kg
-    pallet. The purchase order buys 1268 + 310 + 310 boxes at product level;
-    the packing list is what splits the 1268 into four designs of 317."""
+    """PO20260827001: one product at 32 boxes/pallet, 27kg a box, fired as two
+    batches - 317 (nine pallets and 29 over) and 160 (exactly five, nothing
+    over). The two cases the packing plan distinguishes."""
     pallet = [{"name": "Pallet", "boxes_per_pallet": "32", "weight_kg": "20", "unit_kind": "pallet"}]
-    khatli = [{"name": "JUNGLE KHATLI", "boxes_per_pallet": "32", "weight_kg": "20", "unit_kind": "pallet"}]
     base = make_product(container, seed, "GVT/PGVT 600X1200MM", "69072100", 27.0, "BOX", "1.44", pallet)
-    hg = make_product(container, seed, "GVT/PGVT 600X1200MM HG", "69072100", 27.0, "BOX", "1.44", khatli)
-    carving = make_product(container, seed, "GVT/PGVT 600X1200MM CARVING", "69072100", 27.0, "BOX", "1.44", khatli)
+    arkose = make_design(container, seed, base, "ARKOSE")
+    celeste = make_design(container, seed, base, "CELESTE BLUE")
 
-    designs = {d: make_design(container, seed, base, d) for d in TILE_DESIGNS}
-    celeste = make_design(container, seed, hg, "CELESTE BLUE")
-    morena = make_design(container, seed, carving, "MORENA MARFIL")
-
-    def pi_item(product, boxes, price):
-        return {"product_id": str(product.id), "product_name": product.product_name,
+    def pi_item(boxes, price):
+        return {"product_id": str(base.id), "product_name": base.product_name,
                 "hsn_code": "69072100", "quantity_boxes": str(boxes), "quantity_unit": "BOX",
                 "quantity_value": str(boxes * 1.44), "unit": "SQM", "price_usd": str(price)}
 
-    def po_item(product, boxes, price):
-        return {"product_id": str(product.id), "product_name": product.product_name,
+    def po_item(boxes, price):
+        return {"product_id": str(base.id), "product_name": base.product_name,
                 "hsn_code": "69072100", "quantity_boxes": str(boxes), "quantity_unit": "BOX",
                 "quantity_value": str(boxes * 1.44), "unit": "SQM", "price_inr": str(price),
                 "price_per": "BOX"}
 
-    def pl_item(product, design, boxes):
-        return {"product_id": str(product.id), "product_name": product.product_name,
-                "design_id": str(design.id), "design_name": design.design_name,
-                "hsn_code": "69072100", "quantity_boxes": str(boxes), "quantity_unit": "BOX",
-                "quantity_value": str(boxes * 1.44), "unit": "SQM"}
-
-    pi, po, pl = make_chain(
-        container, seed,
-        pi_items=[pi_item(base, 1268, 5.5), pi_item(hg, 310, 7.5), pi_item(carving, 310, 8.5)],
-        po_items=[po_item(base, 1268, 418.5), po_item(hg, 310, 496), po_item(carving, 310, 527)],
-        pl_items=([pl_item(base, designs[d], 317) for d in TILE_DESIGNS]
-                  + [pl_item(hg, celeste, 310), pl_item(carving, morena, 310)]),
-        pi_number="PI20260827001", po_number="PO20260827001", pl_number="PL20260827008",
+    pi, po = make_chain(
+        container, seed, pi_items=[pi_item(477, 5.5)], po_items=[po_item(477, 418.5)],
+        pi_number="PI20260827001", po_number="PO20260827001",
     )
-    return {"pi": pi, "po": po, "pl": pl, "base": base, "hg": hg, "carving": carving}
+    record_batches(container, seed, po, 0, arkose, [batch("101", "2026-08-29", 317)])
+    record_batches(container, seed, po, 0, celeste, [batch("107", "2026-08-28", 160)])
+    return {"pi": pi, "po": po, "product": base}
 
 
 @pytest.fixture
 def hardware(container, seed):
-    """PO20260827002: two hardware products, 45 PCS each, packed 30 to a CTN
-    weighing 0.3kg. The CTN is a CARTON, not a pallet - which is the whole
-    reason unit_kind exists."""
+    """PO20260827002, packed on its own separate run: 45 PCS each at 30/CTN,
+    so 1 full carton and 15 over. A SECOND packing planning, which is what
+    makes the merge testable - both documents number their pallets from 1."""
     ctn = [{"name": "CTN", "boxes_per_pallet": "30", "weight_kg": "0.3", "unit_kind": "carton"}]
     rod = make_product(container, seed, "904 TOWEL ROD", "73269030", 0.56, "PCS", "1", ctn)
-    dish = make_product(container, seed, "910 DOUBLE SOAP DISH", "73269030", 0.425, "PCS", "1", ctn)
     d904 = make_design(container, seed, rod, "904")
-    d910 = make_design(container, seed, dish, "910")
 
-    def line(product, price_key, price):
-        return {"product_id": str(product.id), "product_name": product.product_name,
+    def line(price_key, price):
+        return {"product_id": str(rod.id), "product_name": rod.product_name,
                 "hsn_code": "73269030", "quantity_boxes": "45", "quantity_unit": "PCS",
                 "quantity_value": "45", "unit": "PCS", price_key: str(price)}
 
-    pi, po, pl = make_chain(
-        container, seed,
-        pi_items=[line(rod, "price_usd", 12), line(dish, "price_usd", 15)],
-        po_items=[dict(line(rod, "price_inr", 1150), price_per="PCS"),
-                  dict(line(dish, "price_inr", 1175), price_per="PCS")],
-        pl_items=[{"product_id": str(rod.id), "product_name": rod.product_name,
-                   "design_id": str(d904.id), "design_name": "904", "hsn_code": "73269030",
-                   "quantity_boxes": "45", "quantity_unit": "PCS", "quantity_value": "45", "unit": "PCS"},
-                  {"product_id": str(dish.id), "product_name": dish.product_name,
-                   "design_id": str(d910.id), "design_name": "910", "hsn_code": "73269030",
-                   "quantity_boxes": "45", "quantity_unit": "PCS", "quantity_value": "45", "unit": "PCS"}],
-        pi_number="PI20260827002", po_number="PO20260827002", pl_number="PL20260827007",
+    pi, po = make_chain(
+        container, seed, pi_items=[line("price_usd", 12)],
+        po_items=[dict(line("price_inr", 1150), price_per="PCS")],
+        pi_number="PI20260827002", po_number="PO20260827002",
     )
-    return {"pi": pi, "po": po, "rod": rod, "dish": dish}
+    record_batches(container, seed, po, 0, d904, [batch("YU012", "2026-08-22", 45)])
+    return {"pi": pi, "po": po, "product": rod}
 
 
-@pytest.fixture
-def booking(container, seed):
-    """The two 20FT containers from booking EBKG1652237584: tare 2100kg,
-    max permitted 38400kg."""
-    buyer = container.buyer_service.create(
-        seed.admin,
-        {"company_name": "ROBUST INTERNATIONAL LIMITADA", "phone": "1", "email": "a@example.com"},
-        [{"name": "A", "is_primary": True}],
-    )
-    return container.booking_detail_service.create(
-        seed.admin,
-        {"buyer_id": str(buyer.id), "booking_no": "EBKG1652237584", "vessel_name": "MSC KETRINA",
-         "voyage_no": "1345645", "transporter_name": "FORTUNE SHIPPING PVT LTD"},
-        [{"container_type": "20FT FCL", "container_count": "2"}],
-        [{"container_type": "20FT FCL", "container_no": "DFSU2889215", "max_permitted_weight": "38400",
-          "tare_weight_kg": "2100", "vehicle_no": "GJ39X2361", "lr_no": "LR00102",
-          "line_seal_no": "IN1955841", "rfid_seal_no": "WIND03022679"},
-         {"container_type": "20FT FCL", "container_no": "DFSU2889216", "max_permitted_weight": "38400",
-          "tare_weight_kg": "2100", "vehicle_no": "GJ39X3251", "lr_no": "LR00103",
-          "line_seal_no": "IN1955842", "rfid_seal_no": "WIND03022680"}],
-    )
+def packing_plan(container, seed, source, manual_units=None, date="2026-08-30"):
+    """Build and save a packing planning off the fixture's purchase order,
+    the way its own two-step form does."""
+    pp = container.packing_planning_service
+    rows = pp.build_prefill_from_purchase_orders([source["po"].id], seed.company_id)["items"]
+    items = pp._clean_items(rows)
+    return pp.create(current_user=seed.admin, fields={"packing_planning_date": date},
+                     proforma_ids=[source["pi"].id], items=[_as_form(i) for i in items],
+                     manual_units=manual_units or [])
+
+
+def prefill(container, seed, *plans):
+    return svc(container).build_prefill_from_packing_plannings(
+        [p.id for p in plans], seed.company_id)
 
 
 def svc(container):
     return container.loading_planning_service
 
 
-def prefill_items(container, seed, pi):
-    service = svc(container)
-    return service._clean_items(service.build_prefill_from_proformas([pi.id], seed.company_id)["items"])
+def containers_for(*specs):
+    """Container rows in the shape the 11B table posts."""
+    return [{"container_no": no, "container_type": "20FT FCL",
+             "tare_weight_kg": str(tare), "max_permitted_weight": str(mx)}
+            for no, tare, mx in specs]
 
 
-# --------------------------------------------------------------------------
-# Loading goods: PI -> purchase orders -> their packing lists
-# --------------------------------------------------------------------------
-def test_prefill_explodes_purchase_order_lines_into_designs(container, seed, tiles):
-    """The PO has three product lines; the plan gets six DESIGN lines, because
-    the design split only exists on the PO's packing list."""
-    result = svc(container).build_prefill_from_proformas([tiles["pi"].id], seed.company_id)
-    items = result["items"]
-
-    assert len(items) == 6
-    assert [i["design_name"] for i in items] == TILE_DESIGNS + ["CELESTE BLUE", "MORENA MARFIL"]
-    assert [i["quantity_boxes"] for i in items] == [317, 317, 317, 317, 310, 310]
-    assert sum(i["quantity_boxes"] for i in items) == 1888
-    # Provenance survives the explode, so a line still says which PO bought it.
-    assert {i["po_number"] for i in items} == {"PO20260827001"}
-
-
-def test_prefill_prices_each_line_at_the_pis_own_usd_rate(container, seed, tiles):
-    """Rates are matched by product_id, so all four designs of one product
-    carry that product's quoted price."""
-    items = svc(container).build_prefill_from_proformas([tiles["pi"].id], seed.company_id)["items"]
-    by_design = {i["design_name"]: i for i in items}
-
-    assert [by_design[d]["price_usd"] for d in TILE_DESIGNS] == [5.5, 5.5, 5.5, 5.5]
-    assert by_design["CELESTE BLUE"]["price_usd"] == 7.5
-    assert by_design["MORENA MARFIL"]["price_usd"] == 8.5
-    assert by_design["ARKOSE"]["total_usd"] == pytest.approx(317 * 5.5)
-
-
-def test_prefill_carries_the_per_unit_net_weight_not_the_line_total(container, seed, tiles):
-    """Per box, because a line gets split across cartons and pallets in
-    quantities nobody knows at load time."""
-    items = svc(container).build_prefill_from_proformas([tiles["pi"].id], seed.company_id)["items"]
-
-    assert {i["net_weight_kg"] for i in items} == {27.0}
-    assert sum(i["net_weight_kg"] * i["quantity_boxes"] for i in items) == pytest.approx(50976.0)
-
-
-def test_prefill_falls_back_to_product_lines_when_a_po_has_no_packing_list(container, seed):
-    """Still loadable, just coarser - the lines come through with no design."""
-    pallet = [{"name": "Pallet", "boxes_per_pallet": "32", "weight_kg": "20", "unit_kind": "pallet"}]
-    product = make_product(container, seed, "GVT PLAIN", "69072100", 27.0, "BOX", "1.44", pallet)
-    line = {"product_id": str(product.id), "product_name": product.product_name,
-            "hsn_code": "69072100", "quantity_boxes": "500", "quantity_unit": "BOX",
-            "quantity_value": "720", "unit": "SQM"}
-    pi, po, _ = make_chain(
-        container, seed,
-        pi_items=[dict(line, price_usd="6")],
-        po_items=[dict(line, price_inr="400", price_per="BOX")],
-        pl_items=None, pi_number="PI-NOPL", po_number="PO-NOPL", pl_number=None,
+def save(container, seed, loaded, container_rows=None, packings=None, date="2026-09-06"):
+    return svc(container).create(
+        current_user=seed.admin, fields={"loading_planning_date": date},
+        items=loaded["items"], containers=container_rows or [],
+        packings=loaded["packings"] if packings is None else packings,
     )
 
-    items = svc(container).build_prefill_from_proformas([pi.id], seed.company_id)["items"]
-
-    assert len(items) == 1
-    assert items[0]["design_name"] is None
-    assert items[0]["quantity_boxes"] == 500
-    assert items[0]["price_usd"] == 6
-
-
-def test_prefill_separates_carton_packing_types_from_pallet_ones(container, seed, tiles, hardware):
-    """The carton and pallet pickers are fed from the same table, split on
-    unit_kind - a CTN must never be offered as a pallet."""
-    tile_types = svc(container).build_prefill_from_proformas(
-        [tiles["pi"].id], seed.company_id)["packing_types"]
-    hw_types = svc(container).build_prefill_from_proformas(
-        [hardware["pi"].id], seed.company_id)["packing_types"]
-
-    assert tile_types[str(tiles["base"].id)]["carton"] == []
-    assert tile_types[str(tiles["base"].id)]["pallet"][0]["name"] == "Pallet"
-    assert hw_types[str(hardware["rod"].id)]["pallet"] == []
-    assert hw_types[str(hardware["rod"].id)]["carton"][0]["name"] == "CTN"
-
-
-def test_prefill_ignores_another_companys_proforma_invoice(container, seed, tiles):
-    other = container.tenant_repo.create("Other Co", "other-co")
-
-    assert svc(container).build_prefill_from_proformas([tiles["pi"].id], other.id)["items"] == []
-
 
 # --------------------------------------------------------------------------
-# Auto-build: whole units, then ONE flagged part-unit
+# Importing a packing planning
 # --------------------------------------------------------------------------
-def test_auto_build_turns_9_91_pallets_into_9_full_plus_1_holding_29(container, seed, tiles):
-    """The defect this document exists to fix. 317 / 32 is 9.906 - which is
-    not a shippable quantity - so it becomes 10 real pallets."""
-    items = prefill_items(container, seed, tiles["pi"])
-    built = svc(container).auto_build_packing(seed.company_id, items)
+def test_import_takes_one_goods_line_per_batch(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
 
-    assert built["cartons"] == []          # tiles sit straight on the pallet
-    assert len(built["pallets"]) == 60     # NOT 59.02
-
-    arkose = [p for p in built["pallets"]
-              if p["contents"][0]["item_sr_no"] == 1]
-    loads = sorted(p["contents"][0]["quantity_boxes"] for p in arkose)
-    assert loads == [29] + [32] * 9
-    assert sum(loads) == 317
+    assert [i["batch_number"] for i in out["items"]] == ["101", "107"]
+    assert [i["design_name"] for i in out["items"]] == ["ARKOSE", "CELESTE BLUE"]
+    assert all(i["production_date"] for i in out["items"])
 
 
-def test_auto_build_flags_the_part_pallets_rather_than_merging_them(container, seed, tiles):
-    """Merging is the judgement call the operator makes, so auto-build must
-    leave it alone - all six remainders stay separate and flagged."""
-    items = prefill_items(container, seed, tiles["pi"])
-    built = svc(container).auto_build_packing(seed.company_id, items)
-    pallets = svc(container)._clean_pallets(built["pallets"])
+def test_goods_lines_keep_the_packing_plans_own_sr_nos(container, seed, tiles):
+    """The whole reason for importing rather than re-deriving: a packing's
+    contents reference their batch by sr_no."""
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
 
-    part = [p for p in pallets if p.is_part_filled]
-    assert len(part) == 6
-    assert sorted(p.direct_boxes for p in part) == [22, 22, 29, 29, 29, 29]
-    assert len([p for p in pallets if not p.is_part_filled]) == 54
+    assert [i["sr_no"] for i in out["items"]] == [i.sr_no for i in source.items]
+    referenced = {c["item_sr_no"] for p in out["packings"] for c in p["contents"]}
+    assert referenced <= {i["sr_no"] for i in out["items"]}
 
 
-def test_auto_build_puts_hardware_through_cartons_and_tiles_straight_on_pallets(container, seed, hardware):
-    """The carton level is optional, and which shape applies comes from the
-    product's own packing types."""
-    items = prefill_items(container, seed, hardware["pi"])
-    built = svc(container).auto_build_packing(seed.company_id, items)
+def test_quantity_is_what_the_packings_hold_not_what_was_produced(container, seed, tiles):
+    """317 packs as nine pallets of 32 = 288. The 29 left over are the packing
+    plan's problem; importing them as loadable would put this document
+    permanently out of balance over someone else's decision."""
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    by_batch = {i["batch_number"]: i for i in out["items"]}
 
-    assert len(built["cartons"]) == 4      # 30 + 15 for each of two products
-    loads = sorted(c["contents"][0]["quantity_boxes"] for c in built["cartons"])
-    assert loads == [15, 15, 30, 30]
-    # every carton lands on a pallet rather than floating
-    assert all(c["pallet_no"] for c in built["cartons"])
-
-
-# --------------------------------------------------------------------------
-# The weight rule: gross = contents net + carton tare + pallet tare
-# --------------------------------------------------------------------------
-def test_tile_pallet_weighs_boxes_plus_pallet_with_no_carton_in_between(container, seed, tiles, booking):
-    """(32 x 27) + 0 + 20 = 884kg for a full pallet; the part pallet holding
-    29 comes to 803."""
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=False)
-    by_sr = plan.items_by_sr
-
-    full = [p for p in plan.pallets if p.direct_boxes == 32][0]
-    part = [p for p in plan.pallets if p.direct_boxes == 29][0]
-
-    assert full.carton_tare_kg == 0
-    assert full.net_weight_kg(by_sr) == pytest.approx(864.0)
-    assert full.gross_weight_kg(by_sr) == pytest.approx(884.0)
-    assert part.gross_weight_kg(by_sr) == pytest.approx(803.0)
+    assert by_batch["101"]["quantity_boxes"] == 288      # not 317
+    assert by_batch["107"]["quantity_boxes"] == 160      # divided exactly
 
 
-def test_whole_tile_order_grosses_52176_kg(container, seed, tiles, booking):
-    """1888 boxes at 27kg is 50,976 net; 60 pallets at 20kg add 1,200."""
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=False)
-    by_sr = plan.items_by_sr
+def test_a_grouped_leftover_does_come_across(container, seed, tiles):
+    """Once the packing plan hand-packs the 29 into a mixed unit, they are on
+    a real numbered pallet and become loadable."""
+    plain = packing_plan(container, seed, tiles)
+    leftover = [u for u in plain.remain_rows if u["item_sr_no"] == 1][0]
+    source = packing_plan(container, seed, tiles, manual_units=[{
+        "unit_no": plain.next_packing_no, "packing_unit_label": "PLT",
+        "contents": [{"item_sr_no": leftover["item_sr_no"], "quantity_boxes": leftover["quantity"]}],
+    }])
+    out = prefill(container, seed, source)
+    by_batch = {i["batch_number"]: i for i in out["items"]}
 
-    assert plan.total_net_weight_kg == pytest.approx(50976.0)
-    assert sum(p.tare_weight_kg for p in plan.pallets) == pytest.approx(1200.0)
-    assert sum(p.gross_weight_kg(by_sr) for p in plan.pallets) == pytest.approx(52176.0)
-
-
-def test_a_mixed_carton_turns_four_cartons_into_three_on_one_pallet(container, seed, hardware, booking):
-    """The move no rule can make: the two part-cartons of 15 become one
-    carton holding 15 of each, and all three ride one pallet.
-
-        44.325 net + (3 x 0.3) carton tare + 20 pallet tare = 65.225kg
-    """
-    items = prefill_items(container, seed, hardware["pi"])
-    cartons = [
-        {"carton_no": 1, "carton_type_name": "CTN", "capacity_boxes": 30, "tare_weight_kg": 0.3,
-         "pallet_no": 1, "contents": [{"item_sr_no": 1, "quantity_boxes": 30}]},
-        {"carton_no": 2, "carton_type_name": "CTN", "capacity_boxes": 30, "tare_weight_kg": 0.3,
-         "pallet_no": 1, "contents": [{"item_sr_no": 2, "quantity_boxes": 30}]},
-        {"carton_no": 3, "carton_type_name": "CTN", "capacity_boxes": 30, "tare_weight_kg": 0.3,
-         "pallet_no": 1, "contents": [{"item_sr_no": 1, "quantity_boxes": 15},
-                                      {"item_sr_no": 2, "quantity_boxes": 15}]},
-    ]
-    pallets = [{"pallet_no": 1, "pallet_type_name": "Pallet", "capacity_boxes": None,
-                "tare_weight_kg": 20.0, "container_sr_no": 1, "contents": []}]
-    plan = save_plan(container, seed, hardware["pi"], booking, items, cartons, pallets,
-                     number_date="2026-08-27")
-
-    assert len(plan.cartons) == 3
-    assert len(plan.pallets) == 1
-    pallet = plan.pallets[0]
-    by_sr = plan.items_by_sr
-
-    assert pallet.packed_boxes == 90
-    assert pallet.net_weight_kg(by_sr) == pytest.approx(44.325)
-    assert pallet.carton_tare_kg == pytest.approx(0.9)
-    assert pallet.gross_weight_kg(by_sr) == pytest.approx(65.225)
-    assert plan.is_fully_packed
+    assert by_batch["101"]["quantity_boxes"] == 317
+    assert any(p["is_manual"] for p in out["packings"])
 
 
-def test_a_carton_may_hold_more_than_one_product(container, seed, hardware, booking):
-    """The mixed carton has to be representable at all - both goods lines
-    count as packed from the same carton."""
-    items = prefill_items(container, seed, hardware["pi"])
-    cartons = [{"carton_no": 1, "carton_type_name": "CTN", "capacity_boxes": 30, "tare_weight_kg": 0.3,
-                "pallet_no": None,
-                "contents": [{"item_sr_no": 1, "quantity_boxes": 15},
-                             {"item_sr_no": 2, "quantity_boxes": 15}]}]
-    plan = save_plan(container, seed, hardware["pi"], booking, items, cartons, [])
+def test_one_packing_per_physical_pallet_with_its_label_ids(container, seed, tiles):
+    """Nine pallets and five pallets is fourteen things to put in a container,
+    not two rows - and each carries the id already printed on its label."""
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    labels = {l.packing_no: l for l in container.packing_planning_repo.labels_for_plan(source.id)}
 
-    balances = {b["sr_no"]: b for b in plan.line_balances}
-    assert balances[1]["packed"] == 15
-    assert balances[2]["packed"] == 15
-
-
-# --------------------------------------------------------------------------
-# Containers: VGM, and the fact that none of it blocks a save
-# --------------------------------------------------------------------------
-def test_container_vgm_is_pallet_gross_plus_the_containers_own_tare(container, seed, tiles, booking):
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=True)
-    rows = [r for r in plan.container_summary if r["sr_no"]]
-
-    assert len(rows) == 2
-    for row in rows:
-        assert row["pallet_count"] == 30
-        assert row["container_tare_kg"] == 2100
-        assert row["vgm_kg"] == pytest.approx(row["cargo_weight_kg"] + 2100)
-        assert row["max_permitted_weight"] == 38400
-        assert not row["over_weight"]
-        assert row["headroom_kg"] > 0
-    assert sum(r["cargo_weight_kg"] for r in rows) == pytest.approx(52176.0)
+    assert len(out["packings"]) == 14
+    assert [p["packing_no"] for p in out["packings"]] == list(range(1, 15))
+    for p in out["packings"]:
+        assert p["unique_packing_id"] == labels[p["packing_no"]].unique_packing_id
+        assert p["unique_qr_id"] == labels[p["packing_no"]].unique_qr_id
 
 
-def test_an_over_weight_container_warns_and_still_saves(container, seed, tiles, booking):
-    """A warning, never a refusal - unlike the export packing list's own
-    container split, which hard-enforces its equivalent invariant."""
-    plan = build_plan(container, seed, tiles["pi"], booking, assign="all-in-one")
+def test_packings_carry_the_type_label_and_its_tare(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
 
-    warnings = svc(container).packing_warnings(plan)
-    assert any("over the" in w for w in warnings)
-    assert plan.container_summary[0]["over_weight"]
-    # It is on disk regardless.
-    assert svc(container).get(plan.id, seed.company_id).id == plan.id
+    assert {p["packing_unit_label"] for p in out["packings"]} == {"PLT"}
+    assert {p["tare_weight_kg"] for p in out["packings"]} == {20.0}
 
 
-def test_unpacked_goods_warn_and_still_save(container, seed, tiles, booking):
-    """A half-built plan is a normal intermediate state, not an error."""
-    items = prefill_items(container, seed, tiles["pi"])
-    # Only the first design gets a pallet.
-    pallets = [{"pallet_no": 1, "pallet_type_name": "Pallet", "capacity_boxes": 32,
-                "tare_weight_kg": 20.0, "container_sr_no": None,
-                "contents": [{"item_sr_no": 1, "quantity_boxes": 32}]}]
-    plan = save_plan(container, seed, tiles["pi"], booking, items, [], pallets)
+def test_header_reports_the_documents_behind_the_goods(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
 
-    assert not plan.is_fully_packed
-    warnings = svc(container).packing_warnings(plan)
-    assert any("still to be packed" in w for w in warnings)
-    assert any("not yet assigned to a container" in w for w in warnings)
+    assert out["header"]["packing_planning_numbers"] == [source.packing_planning_number]
+    assert out["header"]["proforma_invoice_numbers"] == ["PI20260827001"]
+    assert out["header"]["purchase_order_numbers"] == ["PO20260827001"]
 
 
-def test_pallets_with_no_container_are_reported_as_unassigned(container, seed, tiles, booking):
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=False)
-    unassigned = [r for r in plan.container_summary if r["sr_no"] is None]
-
-    assert len(unassigned) == 1
-    assert unassigned[0]["pallet_count"] == 60
-    assert unassigned[0]["container_no"] == "Unassigned"
-
-
-# --------------------------------------------------------------------------
-# Round-trip, numbering, scoping
-# --------------------------------------------------------------------------
-def test_plan_round_trips_through_save_and_reload(container, seed, tiles, booking):
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=True)
-    reloaded = svc(container).get(plan.id, seed.company_id)
-
-    assert len(reloaded.items) == 6
-    assert len(reloaded.pallets) == 60
-    assert len(reloaded.containers) == 2
-    assert reloaded.proforma_invoice_ids == [tiles["pi"].id]
-    assert reloaded.booking_no == "EBKG1652237584"
-    assert reloaded.is_fully_packed
-    # Cartons hang off their pallet after a reload, so the weight rule works.
-    assert all(p.cartons == [] for p in reloaded.pallets)
-
-
-def test_number_follows_the_day_scoped_sequence(container, seed, tiles, booking):
-    first = build_plan(container, seed, tiles["pi"], booking, assign=False)
-    second = save_plan(container, seed, tiles["pi"], booking, [], [], [])
-
-    assert first.loading_planning_number == "LP20260827001"
-    assert second.loading_planning_number == "LP20260827002"
-
-
-def test_a_date_is_required(container, seed):
-    with pytest.raises(ValidationError):
-        svc(container).create(seed.admin, {"loading_planning_date": ""}, [], [], [], [], [])
-
-
-def test_another_companys_plan_is_a_404_not_a_403(container, seed, tiles, booking):
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=False)
-    other = container.tenant_repo.create("Other Co", "other-co")
-
+def test_import_is_company_scoped(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
     with pytest.raises(NotFoundError):
-        svc(container).get(plan.id, other.id)
+        svc(container).build_prefill_from_packing_plannings([source.id], seed.company_id + 999)
 
 
-def test_only_an_admin_can_delete(container, seed, tiles, booking):
-    plan = build_plan(container, seed, tiles["pi"], booking, assign=False)
+# --------------------------------------------------------------------------
+# The three-step narrowing: PIs -> their POs -> the packing plannings
+# --------------------------------------------------------------------------
+def test_step_two_lists_the_orders_under_the_ticked_proformas(container, seed, tiles, hardware):
+    rows = svc(container).purchase_orders_for_proformas(
+        [tiles["pi"].id, hardware["pi"].id], seed.company_id)
 
+    assert sorted(r["po_number"] for r in rows) == ["PO20260827001", "PO20260827002"]
+    assert all(r["batch_count"] > 0 for r in rows)
+
+
+def test_step_three_lists_only_the_plans_covering_the_ticked_orders(container, seed, tiles, hardware):
+    """The checkpoint that matters: two orders packed on two separate runs,
+    and ticking one order must not offer the other's run."""
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+
+    only_tiles = svc(container).packing_plannings_for_purchase_orders(
+        [tiles["po"].id], seed.company_id)
+    assert [r["packing_planning_number"] for r in only_tiles] == [tile_plan.packing_planning_number]
+    assert only_tiles[0]["po_numbers"] == ["PO20260827001"]
+
+    both = svc(container).packing_plannings_for_purchase_orders(
+        [tiles["po"].id, hardware["po"].id], seed.company_id)
+    assert {r["packing_planning_number"] for r in both} == {
+        tile_plan.packing_planning_number, hw_plan.packing_planning_number}
+
+
+def test_step_three_is_company_scoped_and_empty_without_orders(container, seed, tiles):
+    packing_plan(container, seed, tiles)
+    assert svc(container).packing_plannings_for_purchase_orders([], seed.company_id) == []
+    assert svc(container).packing_plannings_for_purchase_orders(
+        [tiles["po"].id], seed.company_id + 999) == []
+
+
+# --------------------------------------------------------------------------
+# Merging several packing plannings into one document
+# --------------------------------------------------------------------------
+def test_several_packing_plannings_merge_into_one_document(container, seed, tiles, hardware):
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+    out = prefill(container, seed, tile_plan, hw_plan)
+
+    assert len(out["items"]) == len(tile_plan.items) + len(hw_plan.items)
+    assert len(out["packings"]) == len(tile_plan.packings) + len(hw_plan.packings)
+    assert out["header"]["packing_planning_numbers"] == [
+        tile_plan.packing_planning_number, hw_plan.packing_planning_number]
+    assert out["header"]["purchase_order_numbers"] == ["PO20260827001", "PO20260827002"]
+
+
+def test_merging_renumbers_both_halves_without_collision(container, seed, tiles, hardware):
+    """Both source documents number their batches and pallets from 1, so a
+    merge that kept either would silently fuse two different pallets."""
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+    out = prefill(container, seed, tile_plan, hw_plan)
+
+    srs = [i["sr_no"] for i in out["items"]]
+    nos = [p["packing_no"] for p in out["packings"]]
+    assert srs == list(range(1, len(srs) + 1))
+    assert nos == list(range(1, len(nos) + 1))
+    # Both documents really did contribute a "1".
+    assert sorted(i["source_sr_no"] for i in out["items"]).count(1) == 2
+    assert sorted(p["source_packing_no"] for p in out["packings"]).count(1) == 2
+
+
+def test_every_packings_contents_still_land_on_the_right_goods_line(container, seed, tiles, hardware):
+    """The single most breakable thing about merging: a packing from the
+    second document must reference the SECOND document's batch, not the
+    first's line that happens to share its old number."""
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+    out = prefill(container, seed, tile_plan, hw_plan)
+    by_sr = {i["sr_no"]: i for i in out["items"]}
+
+    for packing in out["packings"]:
+        assert packing["contents"], "a packing came across holding nothing"
+        for line in packing["contents"]:
+            item = by_sr[line["item_sr_no"]]
+            assert item["packing_planning_id"] == packing["packing_planning_id"]
+
+
+def test_a_merged_packing_keeps_its_own_number_and_label(container, seed, tiles, hardware):
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+    out = prefill(container, seed, tile_plan, hw_plan)
+    hw_labels = {l.packing_no: l for l in container.packing_planning_repo.labels_for_plan(hw_plan.id)}
+
+    from_hw = [p for p in out["packings"] if p["packing_planning_id"] == hw_plan.id]
+    assert from_hw
+    for packing in from_hw:
+        label = hw_labels[packing["source_packing_no"]]
+        assert packing["unique_packing_id"] == label.unique_packing_id
+        # Displayed as its own number qualified by the document that issued it.
+        assert packing["label"] == f"{hw_plan.packing_planning_number} · {packing['source_packing_no']}"
+
+
+def test_a_merged_plan_round_trips_and_balances(container, seed, tiles, hardware):
+    tile_plan = packing_plan(container, seed, tiles)
+    hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
+    out = prefill(container, seed, tile_plan, hw_plan)
+    saved = save(container, seed, out, containers_for(("AAAA1111111", 2200, 60000)))
+
+    plan = svc(container).get(saved.id, seed.company_id)
+    assert sorted(plan.packing_planning_ids) == sorted([tile_plan.id, hw_plan.id])
+    assert plan.proforma_invoice_numbers == ["PI20260827001", "PI20260827002"]
+    assert len(plan.items) == len(out["items"])
+    assert len(plan.packings) == len(out["packings"])
+    assert all(abs(b["left"]) < 0.001 for b in plan.line_balances)
+
+
+# --------------------------------------------------------------------------
+# Auto-assign: evenly across the containers, by weight
+# --------------------------------------------------------------------------
+def test_auto_assign_spreads_packings_evenly(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    items = service._clean_items(out["items"])
+    packings = service._clean_packings(out["packings"])
+    rows = service._clean_containers(containers_for(("AAAA1111111", 2200, 30000),
+                                                    ("BBBB2222222", 2200, 30000)))
+
+    assigned = service.auto_assign_containers(packings, rows, items)["packings"]
+    counts = {}
+    for p in assigned:
+        counts[p["container_sr_no"]] = counts.get(p["container_sr_no"], 0) + 1
+
+    # Fourteen identical pallets across two containers is seven each.
+    assert counts == {1: 7, 2: 7}
+    assert None not in counts
+
+
+def test_auto_assign_leaves_a_packing_unassigned_rather_than_overloading(container, seed, tiles):
+    """A pallet is 884kg gross (32 x 27 + 20). A container permitting 5000kg
+    over a 2200kg tare has room for three, not fourteen."""
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    items = service._clean_items(out["items"])
+    packings = service._clean_packings(out["packings"])
+    rows = service._clean_containers(containers_for(("AAAA1111111", 2200, 5000)))
+
+    assigned = service.auto_assign_containers(packings, rows, items)["packings"]
+    loaded = [p for p in assigned if p["container_sr_no"] == 1]
+    assert len(loaded) == 3
+    assert len([p for p in assigned if p["container_sr_no"] is None]) == 11
+
+
+def test_auto_assign_respects_a_container_with_no_stated_limit(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    items = service._clean_items(out["items"])
+    packings = service._clean_packings(out["packings"])
+    rows = service._clean_containers([{"container_no": "AAAA1111111", "tare_weight_kg": "2200"}])
+
+    assigned = service.auto_assign_containers(packings, rows, items)["packings"]
+    assert all(p["container_sr_no"] == 1 for p in assigned)
+
+
+# --------------------------------------------------------------------------
+# Weights and the VGM check
+# --------------------------------------------------------------------------
+def test_packing_gross_is_contents_net_plus_its_own_tare(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    packing = plan.packings[0]
+    assert packing.net_weight_kg(plan.items_by_sr) == pytest.approx(32 * 27)
+    assert packing.gross_weight_kg(plan.items_by_sr) == pytest.approx(32 * 27 + 20)
+
+
+def test_container_summary_totals_and_flags_an_overweight_container(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    for p in out["packings"]:
+        p["container_sr_no"] = 1
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 5000)))
+
+    row = plan.container_summary[0]
+    assert row["packing_count"] == 14
+    assert row["cargo_weight_kg"] == pytest.approx(14 * (32 * 27 + 20))
+    assert row["vgm_kg"] == pytest.approx(row["cargo_weight_kg"] + 2200)
+    assert row["over_weight"] is True
+    assert any("over the" in w for w in service.packing_warnings(plan))
+
+
+def test_unassigned_packings_go_in_their_own_summary_row(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    last = plan.container_summary[-1]
+    assert last["container_no"] == "Unassigned"
+    assert last["packing_count"] == 14
+    assert last["vgm_kg"] is None
+
+
+# --------------------------------------------------------------------------
+# Warnings never block a save
+# --------------------------------------------------------------------------
+def test_a_plan_with_packings_still_to_assign_saves_with_a_warning(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    assert plan.id is not None
+    assert "14 packing(s) not yet assigned to a container." in service.packing_warnings(plan)
+
+
+def test_a_freshly_imported_plan_balances(container, seed, tiles):
+    """Both halves come off the same document, so nothing is unaccounted
+    for - the only warning is about assignment."""
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    for p in out["packings"]:
+        p["container_sr_no"] = 1
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    assert all(abs(b["left"]) < 0.001 for b in plan.line_balances)
+    assert service.packing_warnings(plan) == []
+
+
+def test_a_goods_line_no_packing_covers_warns(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out, [], packings=out["packings"][:1])
+
+    assert any("not in any packing" in w for w in service.packing_warnings(plan))
+
+
+# --------------------------------------------------------------------------
+# Persistence and permissions
+# --------------------------------------------------------------------------
+def test_save_and_reload_round_trips_everything(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    out["packings"][0]["container_sr_no"] = 1
+    saved = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    plan = service.get(saved.id, seed.company_id)
+    assert plan.packing_planning_ids == [source.id]
+    assert plan.packing_planning_numbers == [source.packing_planning_number]
+    assert len(plan.items) == 2
+    assert len(plan.packings) == 14
+    assert plan.packings[0].container_sr_no == 1
+    assert plan.packings[0].unique_packing_id == out["packings"][0]["unique_packing_id"]
+    assert plan.packings[0].contents == out["packings"][0]["contents"]
+    # Derived on save from the goods lines, not posted.
+    assert plan.proforma_invoice_numbers == ["PI20260827001"]
+    assert plan.purchase_order_numbers == ["PO20260827001"]
+
+
+def test_editing_does_not_renumber_the_goods_lines(container, seed, tiles):
+    """sr_no is the packing plan's, and the packings point at it - a save that
+    renumbered by position would silently repoint every packing."""
+    source = packing_plan(container, seed, tiles)
+    service = svc(container)
+    out = prefill(container, seed, source)
+    saved = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
+
+    updated = service.update(
+        loading_planning_id=saved.id, current_user=seed.admin,
+        fields={"loading_planning_date": "2026-09-07"},
+        items=[_as_form(i) for i in saved.items], containers=[],
+        packings=[service._packing_json(p) for p in saved.packings],
+    )
+    assert [i.sr_no for i in updated.items] == [i.sr_no for i in saved.items]
+    assert updated.loading_planning_number == saved.loading_planning_number  # frozen
+
+
+def test_numbering_is_day_scoped(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+
+    first = save(container, seed, out)
+    second = save(container, seed, out)
+    assert first.loading_planning_number == "LP20260906001"
+    assert second.loading_planning_number == "LP20260906002"
+
+
+def test_date_is_required(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    with pytest.raises(ValidationError):
+        save(container, seed, out, date="")
+
+
+def test_a_packing_planning_that_does_not_exist_is_not_found(container, seed, tiles):
+    with pytest.raises(NotFoundError):
+        svc(container).build_prefill_from_packing_plannings([999999], seed.company_id)
+
+
+def test_another_companys_plan_is_not_found(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out)
+    with pytest.raises(NotFoundError):
+        svc(container).get(plan.id, seed.company_id + 999)
+
+
+def test_only_an_admin_can_delete(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out)
     with pytest.raises(PermissionDeniedError):
         svc(container).delete(plan.id, seed.employee)
 
+
+def test_delete_takes_every_child_row_with_it(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    plan = save(container, seed, out, containers_for(("AAAA1111111", 2200, 30000)))
     svc(container).delete(plan.id, seed.admin)
-    with pytest.raises(NotFoundError):
-        svc(container).get(plan.id, seed.company_id)
+
+    for table in ("loading_planning_items", "loading_planning_containers",
+                  "loading_planning_packings", "loading_planning_packing_contents",
+                  "loading_planning_proforma_links"):
+        rows = container.db.query(f"SELECT 1 FROM {table} WHERE loading_planning_id = ?", (plan.id,))
+        assert rows == []
 
 
-def test_booking_snapshot_copies_every_container_column(container, seed, booking):
-    """A copy, not a live link - the two tables already share every column."""
-    snap = svc(container).booking_snapshot(booking.id, seed.company_id)
+def test_list_all_counts_both_halves(container, seed, tiles):
+    source = packing_plan(container, seed, tiles)
+    out = prefill(container, seed, source)
+    save(container, seed, out)
 
-    assert snap["booking_no"] == "EBKG1652237584"
-    assert [c["container_no"] for c in snap["containers"]] == ["DFSU2889215", "DFSU2889216"]
-    first = snap["containers"][0]
-    assert first["tare_weight_kg"] == 2100
-    assert first["max_permitted_weight"] == "38400"
-    assert first["rfid_seal_no"] == "WIND03022679"
-    # The transporter is booking-level, stamped onto every row.
-    assert first["transporter_name"] == "FORTUNE SHIPPING PVT LTD"
-
-
-# --------------------------------------------------------------------------
-# helpers
-# --------------------------------------------------------------------------
-def save_plan(container, seed, pi, booking, items, cartons, pallets, number_date="2026-08-27"):
-    service = svc(container)
-    snap = service.booking_snapshot(booking.id, seed.company_id)
-    raw_items = [{
-        "proforma_invoice_id": i.proforma_invoice_id, "purchase_order_id": i.purchase_order_id,
-        "po_number": i.po_number, "product_id": i.product_id, "product_name": i.product_name,
-        "design_id": i.design_id, "design_name": i.design_name, "hsn_code": i.hsn_code,
-        "quantity_boxes": i.quantity_boxes, "quantity_unit": i.quantity_unit,
-        "quantity_value": i.quantity_value, "unit": i.unit, "net_weight_kg": i.net_weight_kg,
-        "price_usd": i.price_usd,
-    } for i in items]
-    return service.create(
-        seed.admin,
-        {"loading_planning_date": number_date, "booking_detail_id": str(booking.id),
-         "booking_no": snap["booking_no"], "vessel_name": snap["vessel_name"],
-         "voyage_no": snap["voyage_no"], "transporter_name": snap["transporter_name"]},
-        [pi.id], raw_items, snap["containers"], cartons, pallets,
-    )
-
-
-def build_plan(container, seed, pi, booking, assign):
-    """Load goods, auto-build the packing, optionally spread the pallets over
-    the booking's containers, then save."""
-    service = svc(container)
-    items = prefill_items(container, seed, pi)
-    built = service.auto_build_packing(seed.company_id, items)
-    pallets = built["pallets"]
-    if assign == "all-in-one":
-        for p in pallets:
-            p["container_sr_no"] = 1
-    elif assign:
-        half = len(pallets) // 2
-        for i, p in enumerate(pallets):
-            p["container_sr_no"] = 1 if i < half else 2
-    return save_plan(container, seed, pi, booking, items, built["cartons"], pallets)
+    row = svc(container).list_all(seed.company_id)[0]
+    assert row.item_count == 2
+    assert row.packing_count == 14

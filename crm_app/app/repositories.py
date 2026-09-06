@@ -20,13 +20,14 @@ from app.models import (
     Tenant, User, Lead, Party, Supplier, Transporter, ContactPerson, Communication,
     PaymentEntry, DocumentEntry, OurCompany, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, MiscCountry, MiscUnit, Permit, BookingDetail, Category, Product, ProductPalletType, ProductFolder, Design,
     Quotation, QuotationItem, ProformaInvoice, ProformaInvoiceItem,
-    PurchaseOrder, PurchaseOrderItem,
+    PurchaseOrder, PurchaseOrderItem, PurchaseOrderItemBatch, PurchaseOrderItemProduction,
     JobWork, JobWorkItem, JobWorkProduct, JobOut, JobIn, JobInItem,
     PurchaseInvoice, PurchaseInvoiceItem,
     ExportInvoice, ExportInvoiceItem,
     ExportPackingList, ExportPackingListItem, ExportPackingListItemDesign, ExportDesignsPackingList,
     PackingList, PackingListItem, DocumentVersion,
-    LoadingPlanning, LoadingPlanningItem, LoadingPlanningCarton, LoadingPlanningPallet,
+    LoadingPlanning, LoadingPlanningItem, LoadingPlanningPacking,
+    PackingPlanning, PackingPlanningItem, PackingPlanningManualUnit, PackingPlanningLabel,
 )
 
 
@@ -3077,10 +3078,38 @@ class PurchaseOrderRepository:
         self._replace_items(purchase_order_id, purchase_order.items)
 
     def _replace_items(self, purchase_order_id: int, items: List[PurchaseOrderItem]) -> None:
+        """Deletes and re-inserts every line, so line ids are NOT stable
+        across an edit. Production status and batches hang off those ids
+        ON DELETE CASCADE, so they are lifted out first and re-pointed at the
+        new ids afterwards, matched on sr_no - otherwise simply re-saving a
+        purchase order would silently throw its production history away. A
+        line whose sr_no disappears in the edit loses its production data,
+        which is the same thing that happens to the line itself."""
         with self.db.get_connection() as conn:
+            old_ids = {r["sr_no"]: r["id"] for r in conn.execute(
+                "SELECT id, sr_no FROM purchase_order_items WHERE purchase_order_id = ?", (purchase_order_id,)
+            )}
+            production, batches = [], []
+            if old_ids:
+                marks = ",".join("?" * len(old_ids))
+                ids = list(old_ids.values())
+                by_id = {item_id: sr_no for sr_no, item_id in old_ids.items()}
+                production = [(by_id[r["purchase_order_item_id"]], r["design_id"], r["design_name"],
+                               r["status"], r["updated_by"], r["updated_at"])
+                              for r in conn.execute(
+                                  f"SELECT * FROM purchase_order_item_production "
+                                  f"WHERE purchase_order_item_id IN ({marks})", ids)]
+                batches = [(by_id[r["purchase_order_item_id"]], r["design_id"], r["design_name"],
+                            r["sr_no"], r["batch_number"],
+                            r["production_date"], r["quantity_boxes"], r["remarks"])
+                           for r in conn.execute(
+                               f"SELECT * FROM purchase_order_item_batches "
+                               f"WHERE purchase_order_item_id IN ({marks})", ids)]
+
             conn.execute("DELETE FROM purchase_order_items WHERE purchase_order_id = ?", (purchase_order_id,))
+            new_ids = {}
             for item in items:
-                conn.execute(
+                cursor = conn.execute(
                     """INSERT INTO purchase_order_items
                        (purchase_order_id, sr_no, product_id, product_name, hsn_code,
                         quantity_boxes, quantity_unit, quantity_value, unit, price_inr, price_per, total_inr,
@@ -3090,6 +3119,25 @@ class PurchaseOrderRepository:
                      item.quantity_boxes, item.quantity_unit, item.quantity_value, item.unit, item.price_inr,
                      item.price_per, item.total_inr, item.design_id, item.design_name),
                 )
+                new_ids[item.sr_no] = cursor.lastrowid
+
+            for sr_no, design_id, design_name, status, updated_by, updated_at in production:
+                if sr_no in new_ids:
+                    conn.execute(
+                        "INSERT INTO purchase_order_item_production (purchase_order_item_id, design_id, "
+                        "design_name, status, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (new_ids[sr_no], design_id, design_name, status, updated_by, updated_at),
+                    )
+            for (sr_no, design_id, design_name, batch_sr_no, batch_number,
+                 production_date, quantity_boxes, remarks) in batches:
+                if sr_no in new_ids:
+                    conn.execute(
+                        "INSERT INTO purchase_order_item_batches (purchase_order_item_id, design_id, design_name, "
+                        "sr_no, batch_number, production_date, quantity_boxes, remarks) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (new_ids[sr_no], design_id, design_name, batch_sr_no, batch_number,
+                         production_date, quantity_boxes, remarks),
+                    )
 
     def delete(self, purchase_order_id: int) -> None:
         """Deleting a purchase order cascades to its purchase invoice
@@ -3183,6 +3231,178 @@ class PurchaseOrderRepository:
             (company_id, design_id),
         )
         return [dict(r) for r in rows]
+
+
+class PurchaseOrderProductionRepository:
+    """Persistence for what a purchase order's designs are at in production,
+    and the batches they were produced in. Kept apart from
+    PurchaseOrderRepository because none of this is part of the printed
+    document - it is only ever read by the preview page's Production Status
+    card and the PO list's progress column.
+
+    Everything here is keyed on the line plus the design, and the design is
+    its id AND its name: the packing list rows that supply the split are
+    frequently free-typed with no catalog design behind them, so on design_id
+    alone two designs of one product would collide on a shared NULL. A line
+    with no breakdown at all keeps one row with neither."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    @staticmethod
+    def design_key(design_id: Optional[int], design_name: Optional[str]) -> tuple:
+        """How a design is matched across a purchase order line - id when
+        there is one, plus the case- and space-insensitive name."""
+        return (design_id, (design_name or "").strip().upper())
+
+    def map_for_purchase_order(self, purchase_order_id: int) -> dict:
+        """(item_id, design_id) -> PurchaseOrderItemProduction, batches
+        included. Two queries regardless of how many designs the order runs
+        to; a pair with no status row simply isn't in the map and reads as
+        Pending."""
+        rows = self.db.query(
+            """SELECT pr.*, u.full_name AS updated_by_name
+               FROM purchase_order_item_production pr
+               JOIN purchase_order_items i ON i.id = pr.purchase_order_item_id
+               LEFT JOIN users u ON u.id = pr.updated_by
+               WHERE i.purchase_order_id = ?""",
+            (purchase_order_id,),
+        )
+        production = {}
+        for row in rows:
+            record = PurchaseOrderItemProduction.from_row(row)
+            production[(record.purchase_order_item_id,) +
+                       self.design_key(record.design_id, record.design_name)] = record
+        batch_rows = self.db.query(
+            """SELECT b.* FROM purchase_order_item_batches b
+               JOIN purchase_order_items i ON i.id = b.purchase_order_item_id
+               WHERE i.purchase_order_id = ?
+               ORDER BY b.sr_no, b.id""",
+            (purchase_order_id,),
+        )
+        for row in batch_rows:
+            batch = PurchaseOrderItemBatch.from_row(row)
+            key = (batch.purchase_order_item_id,) + self.design_key(batch.design_id, batch.design_name)
+            record = production.get(key)
+            if record is None:
+                # Batches keyed in before a status was ever set - show them
+                # under the default Pending rather than dropping them.
+                record = PurchaseOrderItemProduction(
+                    purchase_order_item_id=batch.purchase_order_item_id,
+                    design_id=batch.design_id, design_name=batch.design_name)
+                production[key] = record
+            record.batches.append(batch)
+        return production
+
+    def save_for_design(self, purchase_order_item_id: int, design_id: Optional[int],
+                        design_name: Optional[str], status: str,
+                        batches: List[PurchaseOrderItemBatch], user_id: Optional[int]) -> None:
+        """Upserts one (line, design) pair's status and replaces its batches
+        wholesale - the same delete-and-re-insert shape PurchaseOrderRepository
+        uses for its own line items, since the form always posts the full set.
+
+        The upsert is a SELECT-then-write rather than ON CONFLICT because the
+        key's uniqueness is enforced by an expression index (see schema.sql):
+        SQLite's own UNIQUE treats NULLs as distinct, which would let one line
+        collect any number of rows for the same design."""
+        design_name = (design_name or "").strip() or None
+        with self.db.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM purchase_order_item_production "
+                "WHERE purchase_order_item_id = ? AND design_id IS ? "
+                "AND UPPER(TRIM(COALESCE(design_name, ''))) = ?",
+                (purchase_order_item_id, design_id, (design_name or "").strip().upper()),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE purchase_order_item_production SET status = ?, "
+                    "updated_by = ?, updated_at = datetime('now') WHERE id = ?",
+                    (status, user_id, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO purchase_order_item_production
+                           (purchase_order_item_id, design_id, design_name, status, updated_by, updated_at)
+                       VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                    (purchase_order_item_id, design_id, design_name, status, user_id),
+                )
+            conn.execute(
+                "DELETE FROM purchase_order_item_batches "
+                "WHERE purchase_order_item_id = ? AND design_id IS ? "
+                "AND UPPER(TRIM(COALESCE(design_name, ''))) = ?",
+                (purchase_order_item_id, design_id, (design_name or "").strip().upper()),
+            )
+            for sr_no, batch in enumerate(batches, start=1):
+                conn.execute(
+                    """INSERT INTO purchase_order_item_batches
+                           (purchase_order_item_id, design_id, design_name, sr_no, batch_number,
+                            production_date, quantity_boxes, remarks)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (purchase_order_item_id, design_id, design_name, sr_no, batch.batch_number,
+                     batch.production_date, batch.quantity_boxes, batch.remarks),
+                )
+
+    # The product key a PO line and a packing list line meet on, spelled in
+    # SQL exactly as PurchaseOrderProductionService._product_key spells it in
+    # Python: the catalog id when there is one, else the typed name.
+    _PRODUCT_KEY = "COALESCE(CAST({t}.product_id AS TEXT), UPPER(TRIM({t}.product_name)))"
+
+    def summary_map_for_company(self, company_id: int) -> dict:
+        """purchase_order_id -> {'ready': n, 'total': n} for the list page's
+        progress column, without an N+1 - the same trick as
+        PurchaseOrderRepository.count_map_by_proforma.
+
+        `total` has to be counted the same way the card lays its rows out, or
+        the column would read 1/1 ready for an order whose single line is
+        three designs with one of them done: the designs of the linked
+        proforma invoice's packing list where there are any, and the order's
+        own line count where there are none."""
+        line_counts = self.db.query(
+            """SELECT i.purchase_order_id AS po_id, COUNT(*) AS lines
+               FROM purchase_orders po
+               JOIN purchase_order_items i ON i.purchase_order_id = po.id
+               WHERE po.company_id = ?
+               GROUP BY i.purchase_order_id""",
+            (company_id,),
+        )
+        totals = {r["po_id"]: r["lines"] for r in line_counts}
+        design_counts = self.db.query(
+            f"""SELECT po.id AS po_id,
+                       COUNT(DISTINCT i.id || '|' || COALESCE(pli.design_id, '') || '|'
+                             || UPPER(TRIM(COALESCE(pli.design_name, '')))) AS designs
+                FROM purchase_orders po
+                JOIN purchase_order_items i ON i.purchase_order_id = po.id
+                JOIN packing_lists pl ON pl.proforma_invoice_id = po.proforma_invoice_id
+                JOIN packing_list_items pli ON pli.packing_list_id = pl.id
+                     AND {self._PRODUCT_KEY.format(t='pli')} = {self._PRODUCT_KEY.format(t='i')}
+                WHERE po.company_id = ?
+                      AND (pli.design_id IS NOT NULL OR TRIM(COALESCE(pli.design_name, '')) <> '')
+                GROUP BY po.id""",
+            (company_id,),
+        )
+        for row in design_counts:
+            if row["designs"]:
+                totals[row["po_id"]] = row["designs"]
+
+        summary = {po_id: {"ready": 0, "total": total} for po_id, total in totals.items()}
+        tracked = self.db.query(
+            """SELECT i.purchase_order_id AS po_id,
+                      COALESCE(SUM(CASE WHEN pr.status = 'ready' THEN 1 ELSE 0 END), 0) AS ready,
+                      COUNT(*) AS tracked
+               FROM purchase_orders po
+               JOIN purchase_order_items i ON i.purchase_order_id = po.id
+               JOIN purchase_order_item_production pr ON pr.purchase_order_item_id = i.id
+               WHERE po.company_id = ?
+               GROUP BY i.purchase_order_id""",
+            (company_id,),
+        )
+        for row in tracked:
+            entry = summary.setdefault(row["po_id"], {"ready": 0, "total": 0})
+            entry["ready"] = row["ready"]
+            # A design tracked against a packing list line since removed still
+            # counts, so the ready tally can never exceed the total shown.
+            entry["total"] = max(entry["total"], row["tracked"])
+        return summary
 
 
 class JobWorkRepository:
@@ -4400,13 +4620,13 @@ class PackingListRepository:
 # what the document is for and why cartons/pallets are numbered objects)
 # ============================================================
 class LoadingPlanningRepository:
-    """Persistence for the Loading Planning document and its six child lists.
+    """Persistence for the Loading Planning document and its five child lists.
 
     Every child list is wholesale delete-and-reinsert on save, the same idiom
     BookingDetailRepository uses for its two - which is exactly why the
-    carton/pallet/container/item cross-references in those tables are natural
-    keys (carton_no, pallet_no, item_sr_no, container_sr_no) rather than FKs
-    to row ids: an id-based link would be broken by the very next save."""
+    packing/container/item cross-references in those tables are natural keys
+    (packing_no, item_sr_no, container_sr_no) rather than FKs to row ids: an
+    id-based link would be broken by the very next save."""
 
     def __init__(self, db: Database):
         self.db = db
@@ -4461,65 +4681,67 @@ class LoadingPlanningRepository:
                 "WHERE loading_planning_id = ? ORDER BY sr_no", (loading_planning_id,)
             )
         ]
-        plan.cartons = self._load_cartons(loading_planning_id)
-        plan.pallets = self._load_pallets(loading_planning_id)
-        # Hang each pallet's cartons off it, so the model's weight rule and
-        # the container summary can walk one object graph.
-        cartons_by_pallet: dict = {}
-        for carton in plan.cartons:
-            cartons_by_pallet.setdefault(carton.pallet_no, []).append(carton)
-        for pallet in plan.pallets:
-            pallet.cartons = cartons_by_pallet.get(pallet.pallet_no, [])
+        plan.packing_planning_ids = [
+            r["packing_planning_id"] for r in self.db.query(
+                "SELECT packing_planning_id FROM loading_planning_packing_links "
+                "WHERE loading_planning_id = ? ORDER BY packing_planning_id", (loading_planning_id,)
+            )
+        ]
+        plan.packing_planning_numbers = [
+            r["packing_planning_number"] for r in self.db.query(
+                """SELECT pp.packing_planning_number FROM loading_planning_packing_links l
+                   JOIN packing_plannings pp ON pp.id = l.packing_planning_id
+                   WHERE l.loading_planning_id = ? ORDER BY pp.packing_planning_number""",
+                (loading_planning_id,),
+            )
+        ]
+        plan.packings = self._load_packings(loading_planning_id)
         return plan
 
-    def _load_cartons(self, loading_planning_id: int) -> List[LoadingPlanningCarton]:
-        cartons = [
-            LoadingPlanningCarton.from_row(r) for r in self.db.query(
-                "SELECT * FROM loading_planning_cartons WHERE loading_planning_id = ? ORDER BY carton_no",
+    def _load_packings(self, loading_planning_id: int) -> List[LoadingPlanningPacking]:
+        packings = [
+            LoadingPlanningPacking.from_row(r) for r in self.db.query(
+                "SELECT * FROM loading_planning_packings WHERE loading_planning_id = ? ORDER BY packing_no",
                 (loading_planning_id,),
             )
         ]
-        by_no = {c.carton_no: c for c in cartons}
+        by_no = {p.packing_no: p for p in packings}
         for r in self.db.query(
-            "SELECT carton_no, item_sr_no, quantity_boxes FROM loading_planning_carton_contents "
-            "WHERE loading_planning_id = ? ORDER BY carton_no, item_sr_no", (loading_planning_id,)
+            "SELECT packing_no, item_sr_no, quantity_boxes FROM loading_planning_packing_contents "
+            "WHERE loading_planning_id = ? ORDER BY packing_no, item_sr_no", (loading_planning_id,)
         ):
-            carton = by_no.get(r["carton_no"])
-            if carton:
-                carton.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
-        return cartons
-
-    def _load_pallets(self, loading_planning_id: int) -> List[LoadingPlanningPallet]:
-        pallets = [
-            LoadingPlanningPallet.from_row(r) for r in self.db.query(
-                "SELECT * FROM loading_planning_pallets WHERE loading_planning_id = ? ORDER BY pallet_no",
-                (loading_planning_id,),
-            )
-        ]
-        by_no = {p.pallet_no: p for p in pallets}
-        for r in self.db.query(
-            "SELECT pallet_no, item_sr_no, quantity_boxes FROM loading_planning_pallet_contents "
-            "WHERE loading_planning_id = ? ORDER BY pallet_no, item_sr_no", (loading_planning_id,)
-        ):
-            pallet = by_no.get(r["pallet_no"])
-            if pallet:
-                pallet.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
-        return pallets
+            packing = by_no.get(r["packing_no"])
+            if packing:
+                packing.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
+        return packings
 
     def list_all(self, company_id: int) -> List[LoadingPlanning]:
         rows = self.db.query(
             """SELECT lp.*, u.full_name AS created_by_name,
                       (SELECT COUNT(*) FROM loading_planning_items
                        WHERE loading_planning_id = lp.id) AS item_count,
-                      (SELECT COUNT(*) FROM loading_planning_pallets
-                       WHERE loading_planning_id = lp.id) AS pallet_count
+                      (SELECT COUNT(*) FROM loading_planning_packings
+                       WHERE loading_planning_id = lp.id) AS packing_count,
+                      (SELECT GROUP_CONCAT(pp.packing_planning_number, ', ')
+                       FROM loading_planning_packing_links l
+                       JOIN packing_plannings pp ON pp.id = l.packing_planning_id
+                       WHERE l.loading_planning_id = lp.id) AS packing_planning_list
                FROM loading_plannings lp
                JOIN users u ON u.id = lp.created_by
                WHERE lp.company_id = ?
                ORDER BY lp.loading_planning_date DESC, lp.id DESC""",
             (company_id,),
         )
-        return [LoadingPlanning.from_row(r) for r in rows]
+        plans = []
+        for row in rows:
+            plan = LoadingPlanning.from_row(row)
+            # List view only - the numbers, not the ids, since all it does is
+            # print them in a cell.
+            plan.packing_planning_numbers = [
+                n for n in (row["packing_planning_list"] or "").split(", ") if n
+            ]
+            plans.append(plan)
+        return plans
 
     def create(self, plan: LoadingPlanning) -> LoadingPlanning:
         new_id = self.db.execute(
@@ -4550,10 +4772,9 @@ class LoadingPlanningRepository:
         never be left behind - the packing rows only mean anything alongside
         the items they reference by sr_no."""
         with self.db.get_connection() as conn:
-            for table in ("loading_planning_proforma_links", "loading_planning_items",
-                          "loading_planning_containers", "loading_planning_cartons",
-                          "loading_planning_carton_contents", "loading_planning_pallets",
-                          "loading_planning_pallet_contents"):
+            for table in ("loading_planning_proforma_links", "loading_planning_packing_links",
+                          "loading_planning_items", "loading_planning_containers",
+                          "loading_planning_packings", "loading_planning_packing_contents"):
                 conn.execute(f"DELETE FROM {table} WHERE loading_planning_id = ?", (loading_planning_id,))
 
             for pi_id in dict.fromkeys(plan.proforma_invoice_ids):
@@ -4562,16 +4783,27 @@ class LoadingPlanningRepository:
                     "VALUES (?, ?)", (loading_planning_id, pi_id),
                 )
 
-            for i, item in enumerate(plan.items, start=1):
+            for pp_id in dict.fromkeys(plan.packing_planning_ids):
+                conn.execute(
+                    "INSERT INTO loading_planning_packing_links (loading_planning_id, packing_planning_id) "
+                    "VALUES (?, ?)", (loading_planning_id, pp_id),
+                )
+
+            for item in plan.items:
                 conn.execute(
                     """INSERT INTO loading_planning_items
-                       (loading_planning_id, sr_no, proforma_invoice_id, purchase_order_id, po_number,
-                        product_id, product_name, design_id, design_name, hsn_code, quantity_boxes,
+                       (loading_planning_id, sr_no, packing_planning_id, packing_planning_number,
+                        source_sr_no, proforma_invoice_id, purchase_order_id, po_number,
+                        product_id, product_name, design_id, design_name, batch_number,
+                        production_date, hsn_code, quantity_boxes,
                         quantity_unit, quantity_value, unit, net_weight_kg, price_usd, total_usd)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, i, item.proforma_invoice_id, item.purchase_order_id,
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (loading_planning_id, item.sr_no, item.packing_planning_id,
+                     item.packing_planning_number, item.source_sr_no,
+                     item.proforma_invoice_id, item.purchase_order_id,
                      item.po_number, item.product_id, item.product_name, item.design_id,
-                     item.design_name, item.hsn_code, item.quantity_boxes, item.quantity_unit,
+                     item.design_name, item.batch_number, item.production_date,
+                     item.hsn_code, item.quantity_boxes, item.quantity_unit,
                      item.quantity_value, item.unit, item.net_weight_kg, item.price_usd, item.total_usd),
                 )
 
@@ -4586,39 +4818,26 @@ class LoadingPlanningRepository:
                      c.get("transporter_name"), c.get("max_permitted_weight"), c.get("tare_weight_kg")),
                 )
 
-            for carton in plan.cartons:
+            for packing in plan.packings:
                 conn.execute(
-                    """INSERT INTO loading_planning_cartons
-                       (loading_planning_id, carton_no, carton_type_id, carton_type_name,
-                        capacity_boxes, tare_weight_kg, pallet_no)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, carton.carton_no, carton.carton_type_id,
-                     carton.carton_type_name, carton.capacity_boxes, carton.tare_weight_kg,
-                     carton.pallet_no),
+                    """INSERT INTO loading_planning_packings
+                       (loading_planning_id, packing_no, packing_planning_id,
+                        packing_planning_number, source_packing_no, packing_unit_label, is_manual,
+                        packing_type_name, tare_weight_kg, unique_packing_id, unique_qr_id,
+                        container_sr_no)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (loading_planning_id, packing.packing_no, packing.packing_planning_id,
+                     packing.packing_planning_number, packing.source_packing_no,
+                     packing.packing_unit_label,
+                     1 if packing.is_manual else 0, packing.packing_type_name,
+                     packing.tare_weight_kg, packing.unique_packing_id, packing.unique_qr_id,
+                     packing.container_sr_no),
                 )
-                for row in carton.contents:
+                for row in packing.contents:
                     conn.execute(
-                        "INSERT INTO loading_planning_carton_contents "
-                        "(loading_planning_id, carton_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
-                        (loading_planning_id, carton.carton_no, row.get("item_sr_no"),
-                         row.get("quantity_boxes") or 0),
-                    )
-
-            for pallet in plan.pallets:
-                conn.execute(
-                    """INSERT INTO loading_planning_pallets
-                       (loading_planning_id, pallet_no, pallet_type_id, pallet_type_name,
-                        capacity_boxes, tare_weight_kg, container_sr_no)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (loading_planning_id, pallet.pallet_no, pallet.pallet_type_id,
-                     pallet.pallet_type_name, pallet.capacity_boxes, pallet.tare_weight_kg,
-                     pallet.container_sr_no),
-                )
-                for row in pallet.contents:
-                    conn.execute(
-                        "INSERT INTO loading_planning_pallet_contents "
-                        "(loading_planning_id, pallet_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
-                        (loading_planning_id, pallet.pallet_no, row.get("item_sr_no"),
+                        "INSERT INTO loading_planning_packing_contents "
+                        "(loading_planning_id, packing_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
+                        (loading_planning_id, packing.packing_no, row.get("item_sr_no"),
                          row.get("quantity_boxes") or 0),
                     )
 
@@ -4627,12 +4846,261 @@ class LoadingPlanningRepository:
         enforced when the pragma is on, so they're removed explicitly - and in
         the same transaction, so no orphan set can be left behind."""
         with self.db.get_connection() as conn:
-            for table in ("loading_planning_pallet_contents", "loading_planning_pallets",
-                          "loading_planning_carton_contents", "loading_planning_cartons",
+            for table in ("loading_planning_packing_contents", "loading_planning_packings",
                           "loading_planning_containers", "loading_planning_items",
-                          "loading_planning_proforma_links"):
+                          "loading_planning_packing_links", "loading_planning_proforma_links"):
                 conn.execute(f"DELETE FROM {table} WHERE loading_planning_id = ?", (loading_planning_id,))
             conn.execute("DELETE FROM loading_plannings WHERE id = ?", (loading_planning_id,))
+
+
+class PackingPlanningRepository:
+    """Persistence for the Packing Planning document and its three child
+    lists, on exactly the delete-and-reinsert idiom LoadingPlanningRepository
+    uses - which is why unit_no/item_sr_no are natural keys rather than FKs
+    to row ids, an id-based link being broken by the very next save.
+
+    Nothing about the remainder is stored. The manual half of the sheet is
+    derived from the batch rows on the model, so there is no fourth list to
+    keep in step."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def next_number(self, company_id: int, packing_planning_date: str) -> str:
+        """PP{YYYYMMDD}{seq}, the day-scoped sequence every generated document
+        number in this app uses."""
+        date_part = (packing_planning_date or "")[:10].replace("-", "")
+        prefix = f"PP{date_part}"
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS c FROM packing_plannings "
+            "WHERE company_id = ? AND packing_planning_number LIKE ?",
+            (company_id, f"{prefix}%"),
+        )
+        return f"{prefix}{(row['c'] if row else 0) + 1:03d}"
+
+    def get_by_id(self, packing_planning_id: int) -> Optional[PackingPlanning]:
+        row = self.db.query_one(
+            """SELECT pp.*, u.full_name AS created_by_name
+               FROM packing_plannings pp
+               JOIN users u ON u.id = pp.created_by
+               WHERE pp.id = ?""",
+            (packing_planning_id,),
+        )
+        if not row:
+            return None
+        plan = PackingPlanning.from_row(row)
+        plan.proforma_invoice_ids = [
+            r["proforma_invoice_id"] for r in self.db.query(
+                "SELECT proforma_invoice_id FROM packing_planning_proforma_links "
+                "WHERE packing_planning_id = ? ORDER BY proforma_invoice_id", (packing_planning_id,)
+            )
+        ]
+        plan.proforma_invoice_numbers = [
+            r["invoice_number"] for r in self.db.query(
+                """SELECT pi.invoice_number FROM packing_planning_proforma_links l
+                   JOIN proforma_invoices pi ON pi.id = l.proforma_invoice_id
+                   WHERE l.packing_planning_id = ? ORDER BY pi.invoice_number""",
+                (packing_planning_id,),
+            )
+        ]
+        plan.items = [
+            PackingPlanningItem.from_row(r) for r in self.db.query(
+                "SELECT * FROM packing_planning_items WHERE packing_planning_id = ? ORDER BY sr_no",
+                (packing_planning_id,),
+            )
+        ]
+        plan.manual_units = self._load_manual_units(packing_planning_id)
+        return plan
+
+    def _load_manual_units(self, packing_planning_id: int) -> List[PackingPlanningManualUnit]:
+        units = [
+            PackingPlanningManualUnit.from_row(r) for r in self.db.query(
+                "SELECT * FROM packing_planning_manual_units WHERE packing_planning_id = ? ORDER BY unit_no",
+                (packing_planning_id,),
+            )
+        ]
+        by_no = {u.unit_no: u for u in units}
+        for r in self.db.query(
+            "SELECT unit_no, item_sr_no, quantity_boxes FROM packing_planning_manual_contents "
+            "WHERE packing_planning_id = ? ORDER BY unit_no, item_sr_no", (packing_planning_id,)
+        ):
+            unit = by_no.get(r["unit_no"])
+            if unit:
+                unit.contents.append({"item_sr_no": r["item_sr_no"], "quantity_boxes": r["quantity_boxes"]})
+        return units
+
+    def list_all(self, company_id: int) -> List[PackingPlanning]:
+        rows = self.db.query(
+            """SELECT pp.*, u.full_name AS created_by_name,
+                      (SELECT COUNT(*) FROM packing_planning_items
+                       WHERE packing_planning_id = pp.id) AS item_count,
+                      (SELECT COUNT(*) FROM packing_planning_manual_units
+                       WHERE packing_planning_id = pp.id) AS unit_count
+               FROM packing_plannings pp
+               JOIN users u ON u.id = pp.created_by
+               WHERE pp.company_id = ?
+               ORDER BY pp.packing_planning_date DESC, pp.id DESC""",
+            (company_id,),
+        )
+        return [PackingPlanning.from_row(r) for r in rows]
+
+    def create(self, plan: PackingPlanning) -> PackingPlanning:
+        new_id = self.db.execute(
+            """INSERT INTO packing_plannings
+               (company_id, packing_planning_number, packing_planning_date, remarks, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (plan.company_id, plan.packing_planning_number, plan.packing_planning_date,
+             plan.remarks, plan.created_by),
+        )
+        self._replace_children(new_id, plan)
+        return self.get_by_id(new_id)
+
+    def update(self, packing_planning_id: int, plan: PackingPlanning) -> None:
+        self.db.execute(
+            """UPDATE packing_plannings
+               SET packing_planning_date = ?, remarks = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (plan.packing_planning_date, plan.remarks, packing_planning_id),
+        )
+        self._replace_children(packing_planning_id, plan)
+
+    def _replace_children(self, packing_planning_id: int, plan: PackingPlanning) -> None:
+        """All three child lists in ONE transaction: a manual unit's contents
+        only mean anything alongside the batch rows they reference by sr_no,
+        so they must never be written apart from them."""
+        with self.db.get_connection() as conn:
+            for table in ("packing_planning_proforma_links", "packing_planning_items",
+                          "packing_planning_manual_units", "packing_planning_manual_contents"):
+                conn.execute(f"DELETE FROM {table} WHERE packing_planning_id = ?", (packing_planning_id,))
+
+            for pi_id in dict.fromkeys(plan.proforma_invoice_ids):
+                conn.execute(
+                    "INSERT INTO packing_planning_proforma_links (packing_planning_id, proforma_invoice_id) "
+                    "VALUES (?, ?)", (packing_planning_id, pi_id),
+                )
+
+            for i, item in enumerate(plan.items, start=1):
+                conn.execute(
+                    """INSERT INTO packing_planning_items
+                       (packing_planning_id, sr_no, proforma_invoice_id, purchase_order_id, po_number,
+                        purchase_order_item_id, product_id, product_name, design_id, design_name,
+                        batch_number, production_date, ready_quantity, quantity_unit, packing_type_id,
+                        packing_type_name, packing_unit_label, boxes_per_unit, actual_packing,
+                        packing_no_start)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (packing_planning_id, i, item.proforma_invoice_id, item.purchase_order_id,
+                     item.po_number, item.purchase_order_item_id, item.product_id, item.product_name,
+                     item.design_id, item.design_name, item.batch_number, item.production_date,
+                     item.ready_quantity, item.quantity_unit, item.packing_type_id,
+                     item.packing_type_name, item.packing_unit_label, item.boxes_per_unit,
+                     item.actual_packing, item.packing_no_start),
+                )
+
+            for unit in plan.manual_units:
+                conn.execute(
+                    """INSERT INTO packing_planning_manual_units
+                       (packing_planning_id, unit_no, packing_type_id, packing_type_name,
+                        packing_unit_label, capacity_boxes, remarks)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (packing_planning_id, unit.unit_no, unit.packing_type_id, unit.packing_type_name,
+                     unit.packing_unit_label, unit.capacity_boxes, unit.remarks),
+                )
+                for row in unit.contents:
+                    conn.execute(
+                        "INSERT INTO packing_planning_manual_contents "
+                        "(packing_planning_id, unit_no, item_sr_no, quantity_boxes) VALUES (?, ?, ?, ?)",
+                        (packing_planning_id, unit.unit_no, row.get("item_sr_no"),
+                         row.get("quantity_boxes") or 0),
+                    )
+
+    def delete(self, packing_planning_id: int) -> None:
+        """Child rows are ON DELETE CASCADE, but foreign keys are only
+        enforced when the pragma is on, so they're removed explicitly - and in
+        the same transaction, so no orphan set can be left behind.
+
+        Labels go here, unlike in _replace_children: deleting the whole
+        document is the one thing that legitimately takes its printed ids
+        with it."""
+        with self.db.get_connection() as conn:
+            for table in ("packing_planning_labels", "packing_planning_manual_contents",
+                          "packing_planning_manual_units", "packing_planning_items",
+                          "packing_planning_proforma_links"):
+                conn.execute(f"DELETE FROM {table} WHERE packing_planning_id = ?", (packing_planning_id,))
+            conn.execute("DELETE FROM packing_plannings WHERE id = ?", (packing_planning_id,))
+
+    # ---- labels -------------------------------------------------
+    # Deliberately NOT part of _replace_children: every other child list is
+    # wholesale deleted and re-inserted on each save, which is exactly what
+    # must never happen to an id already printed on a pallet.
+    def list_for_purchase_orders(self, company_id: int, purchase_order_ids: list) -> List[dict]:
+        """Every packing planning holding a batch of any of these purchase
+        orders - step 3 of a Loading Planning's narrowing.
+
+        Reported per plan with the orders it actually covers, because an
+        order's goods are routinely packed across several runs on different
+        days, and a run routinely covers several orders."""
+        ids = [int(i) for i in dict.fromkeys(purchase_order_ids or [])]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.db.query(
+            f"""SELECT pp.id, pp.packing_planning_number, pp.packing_planning_date,
+                       GROUP_CONCAT(DISTINCT i.po_number) AS po_numbers,
+                       COUNT(DISTINCT i.sr_no) AS batch_count
+                FROM packing_plannings pp
+                JOIN packing_planning_items i ON i.packing_planning_id = pp.id
+                WHERE pp.company_id = ? AND i.purchase_order_id IN ({placeholders})
+                GROUP BY pp.id
+                ORDER BY pp.packing_planning_date DESC, pp.id DESC""",
+            tuple([company_id] + ids),
+        )
+        return [{
+            "id": r["id"],
+            "packing_planning_number": r["packing_planning_number"],
+            "packing_planning_date": r["packing_planning_date"],
+            "po_numbers": [n for n in (r["po_numbers"] or "").split(",") if n],
+            "batch_count": r["batch_count"] or 0,
+        } for r in rows]
+
+    def labels_for_plan(self, packing_planning_id: int):
+        rows = self.db.query(
+            "SELECT * FROM packing_planning_labels WHERE packing_planning_id = ? ORDER BY packing_no",
+            (packing_planning_id,),
+        )
+        return [PackingPlanningLabel.from_row(r) for r in rows]
+
+    def next_qr_sequence(self, company_id: int, prefix: str) -> int:
+        """The next free number in a day-scoped UPQR sequence - the same
+        shape next_number() uses for the document itself, counted over the
+        labels already minted rather than over documents."""
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS c FROM packing_planning_labels "
+            "WHERE company_id = ? AND unique_qr_id LIKE ?",
+            (company_id, f"{prefix}%"),
+        )
+        return (row["c"] if row else 0) + 1
+
+    def sync_labels(self, packing_planning_id: int, new_labels: List[PackingPlanningLabel],
+                    stale_packing_nos: List[int]) -> None:
+        """Insert freshly minted labels and drop the ones whose pallet no
+        longer exists. Existing rows are never rewritten - that is the whole
+        point of the table."""
+        if not new_labels and not stale_packing_nos:
+            return
+        with self.db.get_connection() as conn:
+            for packing_no in stale_packing_nos:
+                conn.execute(
+                    "DELETE FROM packing_planning_labels WHERE packing_planning_id = ? AND packing_no = ?",
+                    (packing_planning_id, packing_no),
+                )
+            for label in new_labels:
+                conn.execute(
+                    """INSERT INTO packing_planning_labels
+                       (company_id, packing_planning_id, packing_no, unique_packing_id, unique_qr_id)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (label.company_id, packing_planning_id, label.packing_no,
+                     label.unique_packing_id, label.unique_qr_id),
+                )
 
 
 # ============================================================

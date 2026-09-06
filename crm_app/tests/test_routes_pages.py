@@ -58,6 +58,8 @@ class TestListPages:
         "/proforma-invoices/",
         "/purchase-orders/",
         "/packing-lists/",
+        "/packing-plannings/",
+        "/loading-plannings/",
         "/reports/",
         "/account",   # profile_bp is mounted at /account
     ])
@@ -71,12 +73,14 @@ class TestListPages:
 # Admin-only pages
 # ==========================================================================
 class TestAdminOnlyPages:
-    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/"])
+    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/",
+                                     "/packing-plannings/new", "/loading-plannings/new"])
     def test_admin_can_open(self, admin_ctx, path):
         client, *_ = admin_ctx
         assert client.get(path).status_code == 200
 
-    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/"])
+    @pytest.mark.parametrize("path", ["/admin/employees", "/company/", "/backup/", "/misc/",
+                                     "/packing-plannings/new", "/loading-plannings/new"])
     def test_employee_gets_403(self, employee_ctx, path):
         client, *_ = employee_ctx
         assert client.get(path).status_code == 403
@@ -317,6 +321,109 @@ class TestDocumentRoutes:
         client, container, emp, _ = employee_ctx
         q = self._quotation(container, emp)
         assert f"/quotations/{q.id}/duplicate" not in client.get(f"/quotations/{q.id}").get_data(as_text=True)
+
+    def _production_po(self, container, admin):
+        return container.purchase_order_service.create(
+            admin, {"seller_name": "Supplier Ltd", "po_date": "2026-03-01"},
+            [{"product_name": "Tiles", "design_name": "Carrara", "quantity_boxes": "10",
+              "quantity_value": "100", "price_inr": "500", "price_per": "BOX"}])
+
+    def test_purchase_order_links_to_its_production_page(self, admin_ctx):
+        """Production status is its own page, reached from the purchase
+        order's toolbar the same way its packing list and purchase invoice
+        are - an order of fifty-odd designs is a working list, not something
+        to read above a printable sheet."""
+        client, container, admin, _ = admin_ctx
+        po = self._production_po(container, admin)
+        html = client.get(f"/purchase-orders/{po.id}").get_data(as_text=True)
+        assert f"/purchase-orders/{po.id}/production" in html
+        # ...and nothing of the editor itself is on the sheet page.
+        assert "Production status" in html and "Save this design" not in html
+
+    def test_production_page_lists_every_design(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        po = self._production_po(container, admin)
+        html = client.get(f"/purchase-orders/{po.id}/production").get_data(as_text=True)
+        assert "Production status" in html and "Tiles" in html
+        assert "Pending" in html          # no status saved yet
+        assert "Save this design" in html
+        assert po.po_number in html
+
+    def test_production_page_is_company_scoped(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        po = self._production_po(container, admin)
+        other = container.tenant_repo.create("Other Co", "other-co-prod")
+        with client.session_transaction() as sess:
+            sess["user_id"] = container.auth_service.create_user(
+                other.id, "otheradmin", "other-pass-1", "Other Admin", "admin").id
+        assert client.get(f"/purchase-orders/{po.id}/production").status_code == 404
+
+    def test_saving_production_status_and_a_batch(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        po = self._production_po(container, admin)
+        resp = client.post(
+            f"/purchase-orders/{po.id}/production/{po.items[0].id}",
+            data={"design_id": "", "design_name": "", "status": "ready",
+                  "batch_number": ["B-101", ""], "production_date": ["2026-03-05", ""],
+                  "batch_quantity": ["10", ""], "batch_remarks": ["first kiln run", ""]},
+            follow_redirects=True)
+        html = resp.get_data(as_text=True)
+        assert "Production status saved." in html
+        assert "B-101" in html and "first kiln run" in html
+        row = container.purchase_order_production_service.get_rows(po.id, company_id)[0]
+        assert row["status"] == "ready" and row["produced_boxes"] == 10
+
+    def test_production_status_never_reaches_the_printed_documents(self, admin_ctx):
+        """Production status is working data, not part of the document - the
+        combined printable must carry no trace of it."""
+        client, container, admin, company_id = admin_ctx
+        po = self._production_po(container, admin)
+        container.purchase_order_production_service.save_row(
+            po.id, po.items[0].id, None, None, "ready",
+            [{"batch_number": "B-101", "production_date": "2026-03-05",
+              "quantity_boxes": "10", "remarks": ""}], company_id, admin.id)
+        combined = client.get(f"/purchase-orders/{po.id}/combined").get_data(as_text=True)
+        assert "Production" not in combined and "B-101" not in combined
+
+    def test_production_status_is_saved_per_design_through_the_form(self, admin_ctx):
+        """The card posts the design it is editing back as a hidden field, and
+        that value has to be the design's IDENTITY (its name as the packing
+        list gives it) - posting the printed label instead would file the save
+        under a key the next page load can't find, and the status would read
+        back as Pending."""
+        client, container, admin, company_id = admin_ctx
+        pi = container.proforma_invoice_service.create(
+            admin, {"consignee_name": "Buyer Co", "invoice_date": "2026-02-01"},
+            [{"product_name": "Tiles", "quantity_value": "100", "price_usd": "2"}])
+        container.packing_list_service.create(
+            admin, {"packing_list_date": "2026-02-02", "proforma_invoice_id": pi.id},
+            [{"product_name": "Tiles", "design_name": "Carrara", "quantity_boxes": "6"},
+             {"product_name": "Tiles", "design_name": "Statuario", "quantity_boxes": "4"}])
+        po = container.purchase_order_service.create(
+            admin, {"seller_name": "Supplier Ltd", "po_date": "2026-03-01",
+                    "proforma_invoice_id": str(pi.id)},
+            [{"product_name": "Tiles", "quantity_boxes": "10", "quantity_value": "100",
+              "price_inr": "500", "price_per": "BOX"}])
+
+        html = client.get(f"/purchase-orders/{po.id}/production").get_data(as_text=True)
+        assert "Carrara" in html and "Statuario" in html
+
+        client.post(f"/purchase-orders/{po.id}/production/{po.items[0].id}",
+                    data={"design_id": "", "design_name": "Carrara", "status": "ready",
+                          "batch_number": ["B-101"], "production_date": ["2026-03-05"],
+                          "batch_quantity": ["6"], "batch_remarks": [""]})
+        design_rows = container.packing_list_service.list_for_proforma(pi.id, company_id)[0].items
+        rows = container.purchase_order_production_service.get_rows(po.id, company_id, design_rows)
+        assert [(r["design_label"], r["status"]) for r in rows] == [
+            ("Carrara", "ready"), ("Statuario", "pending")]
+
+    def test_purchase_order_list_shows_production_progress(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        po = self._production_po(container, admin)
+        container.purchase_order_production_service.save_row(
+            po.id, po.items[0].id, None, None, "ready", [], company_id, admin.id)
+        html = client.get("/purchase-orders/").get_data(as_text=True)
+        assert "Production status" in html and "1/1 ready" in html
 
     def test_purchase_order_form_has_no_nested_form(self, admin_ctx):
         """The admin-only "Add new supplier" panel once shipped as a <form>
@@ -2464,3 +2571,92 @@ class TestCustomerInvoiceRoutes:
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
             [{"product_name": "P", "quantity_value": "10", "price_usd": "2"}])
         assert client.get(f"/customer-invoices/{rival.id}").status_code == 404
+
+
+# ==========================================================================
+# Packing label sheet
+# ==========================================================================
+class TestPackingLabelRoutes:
+    """The stickers that go on the pallets. Built from a hand-made plan
+    rather than a full PI -> PO -> batches chain: what's under test here is
+    the page, not the loading, which the service suite already covers."""
+
+    def _plan(self, container, admin):
+        return container.packing_planning_service.create(
+            current_user=admin, fields={"packing_planning_date": "2026-08-30"},
+            proforma_ids=[], manual_units=[],
+            items=[{"product_name": "GVT/PGVT 600X1200MM", "design_name": "ARKOSE",
+                    "batch_number": "101", "production_date": "2026-08-29",
+                    "ready_quantity": "70", "quantity_unit": "BOX",
+                    "boxes_per_unit": "32", "actual_packing": "2",
+                    "packing_unit_label": "PLT"}],
+        )
+
+    def test_label_sheet_renders(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        resp = client.get(f"/packing-plannings/{plan.id}/labels")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "UNIQUE PACKING QR ID" in body
+        assert "MADE IN INDIA" in body
+        assert f"{plan.packing_planning_number}0001" in body
+        assert "<svg" in body
+
+    def test_copies_and_per_page_change_what_is_printed(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+        four_up = client.get(f"/packing-plannings/{plan.id}/labels?copies=4&per_page=4")
+        assert four_up.get_data(as_text=True).count('<div class="label">') == 8
+        one_up = client.get(f"/packing-plannings/{plan.id}/labels?copies=1&per_page=1")
+        assert one_up.get_data(as_text=True).count('<div class="label">') == 2
+
+    def test_orientation_defaults_to_portrait_and_landscape_is_selectable(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        default = client.get(f"/packing-plannings/{plan.id}/labels").get_data(as_text=True)
+        assert "size: A4 portrait" in default
+        assert 'value="portrait" selected' in default
+
+        landscape = client.get(f"/packing-plannings/{plan.id}/labels?orientation=landscape").get_data(as_text=True)
+        assert "size: A4 landscape" in landscape
+        assert 'value="landscape" selected' in landscape
+
+        garbage = client.get(f"/packing-plannings/{plan.id}/labels?orientation=sideways").get_data(as_text=True)
+        assert "size: A4 portrait" in garbage
+
+    def test_4x6_label_size_prints_one_sticker_per_page(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+
+        four_up = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x6&copies=1&per_page=4").get_data(as_text=True)
+        assert "size: 4in 6in" in four_up
+        assert 'value="4x6" selected' in four_up
+        assert four_up.count('<div class="label">') == 2   # per_page forced to 1, not 4
+
+        landscape = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x6&orientation=landscape").get_data(as_text=True)
+        assert "size: 6in 4in" in landscape
+
+        default = client.get(f"/packing-plannings/{plan.id}/labels").get_data(as_text=True)
+        assert "size: A4 portrait" in default            # unchanged when 4x6 isn't picked
+
+    def test_4x4_label_size_prints_one_square_sticker_per_page(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)          # 2 pallets
+        body = client.get(f"/packing-plannings/{plan.id}/labels?label_size=4x4&copies=1&per_page=4").get_data(as_text=True)
+        assert "size: 4in 4in" in body
+        assert 'value="4x4" selected' in body
+        assert body.count('<div class="label">') == 2   # per_page forced to 1, not 4
+        assert 'id="orientation-select"' not in body     # a square has no orientation to pick
+
+    def test_the_pallet_sheet_links_to_the_labels(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        body = client.get(f"/packing-plannings/{plan.id}").get_data(as_text=True)
+        assert f"/packing-plannings/{plan.id}/labels" in body
+
+    def test_another_companys_label_sheet_is_a_404(self, admin_ctx, employee_ctx):
+        client, container, admin, _ = admin_ctx
+        plan = self._plan(container, admin)
+        other_client, *_ = employee_ctx
+        assert other_client.get(f"/packing-plannings/{plan.id}/labels").status_code == 404

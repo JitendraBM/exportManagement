@@ -17,6 +17,13 @@ python-dotenv==1.2.2
 # arbitrary user-uploaded sheet is worth a real library)
 openpyxl==3.1.5
 
+# Used by the Packing Planning label sheet to encode one QR per physical
+# pallet (pure Python, no dependencies of its own, emits SVG directly). The
+# hand-rolled route app/docx.py and app/xlsx.py take was rejected here: a QR's
+# Reed-Solomon and mask selection have to be exactly right or the labels don't
+# scan, and that only shows up once they are stuck on pallets.
+segno==1.6.6
+
 # NOTE: The database layer uses Python's built-in `sqlite3` module, so no
 # separate database driver is required. See README.md -> "Swapping the
 # database" for how to move to PostgreSQL/MySQL later without touching
