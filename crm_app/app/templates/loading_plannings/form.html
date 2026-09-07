@@ -190,19 +190,24 @@
     <div class="card-header">
       <h3>Packing &rarr; containers <span class="text-soft text-sm">— assign each numbered packing</span></h3>
       <div class="flex gap-8">
+        <button type="button" class="btn btn-primary btn-sm" id="apply-assignments-btn">Apply all</button>
         <button type="button" class="btn btn-ghost btn-sm" id="auto-assign-btn">↻ Auto-assign evenly</button>
         <button type="button" class="btn btn-ghost btn-sm" id="unassign-all-btn">Clear assignments</button>
       </div>
     </div>
     <p class="hint">
-      <strong>Auto-assign</strong> spreads the packings evenly across the containers by weight, giving each
-      one in packing-number order to whichever container is carrying the least so far and skipping any
-      already at its max permitted weight. It is a starting point &mdash; move any row by hand afterwards.
-      Each packing shows its own number and the packing planning that issued it, because two plans both
-      number their pallets from 1; that number and the unique packing id are never reissued here, so a row
-      matches the label physically on the pallet.
+      The table lists every packing for reference. To load a container, type its packings into the box
+      under it &mdash; unique packing ids or Loading no.s, separated by commas or new lines, and
+      <code>A - B</code> for a range, which means <em>every packing between A and B in the order listed
+      above</em> (not arithmetic on the id). Fill in as many boxes as you like, then press
+      <strong>Apply all</strong>. An id left out of every box is unassigned; an id in two boxes stays with
+      the first and is flagged. <strong>Auto-assign</strong> spreads the packings evenly across the
+      containers by weight as a starting point, filling the boxes for you to adjust. Packing no. and the
+      unique packing id are never reissued here, so a row matches the label physically on the pallet.
     </p>
     <div id="packings-pane" class="table-wrap"></div>
+    <div id="assign-pane" style="margin-top:16px;"></div>
+    <div id="assign-warnings"></div>
   </div>
 
   <div class="card">
@@ -395,28 +400,44 @@
     document.getElementById("items-total-usd").textContent = fmt(totUsd, 2);
   }
 
+  // Pale row backgrounds for loaded packings, cycled by container sr_no.
+  var CONTAINER_TINTS = ["#eef4ff", "#eafaf0", "#fff5e8", "#fdeef6",
+                         "#f2effc", "#e8fafa", "#fcfae6", "#eef9ee"];
+
+  // Packings in the order the assignment boxes read against: Loading no. order.
+  function orderedPackings() {
+    return packings.slice().sort(function (a, b) { return a.packing_no - b.packing_no; });
+  }
+
+  function containerLabel(srNo) {
+    if (!srNo) return "—";
+    var c = containerRows().filter(function (r) { return String(r.sr_no) === String(srNo); })[0];
+    return c ? (c.container_no || ("Container " + c.sr_no)) : ("Container " + srNo);
+  }
+
   function renderPackings() {
     var pane = document.getElementById("packings-pane");
     if (!packings.length) {
       pane.innerHTML = '<p class="text-soft text-sm">No packings yet — work down the three pickers above and press Load.</p>';
       return;
     }
-    var containers = containerRows();
-    var options = function (selected) {
-      var html = '<option value="">— Unassigned —</option>';
-      containers.forEach(function (c) {
-        html += '<option value="' + c.sr_no + '"' + (String(selected) === String(c.sr_no) ? " selected" : "") + ">" +
-          esc(c.container_no || ("Container " + c.sr_no)) + "</option>";
-      });
-      return html;
-    };
-    var rows = packings.slice().sort(function (a, b) { return a.packing_no - b.packing_no; }).map(function (p) {
+    var labelBySr = {};
+    containerRows().forEach(function (c) { labelBySr[String(c.sr_no)] = c.container_no || ("Container " + c.sr_no); });
+    var rows = orderedPackings().map(function (p) {
       var contents = (p.contents || []).map(function (c) {
         return esc(labelFor(c.item_sr_no)) + " &times; " + g(c.quantity_boxes);
       }).join("<br>") || '<span class="text-soft">empty</span>';
       var no = (p.source_packing_no === null || p.source_packing_no === undefined)
         ? p.packing_no : p.source_packing_no;
-      return "<tr><td><strong>" + esc(no) + "</strong> " +
+      var srNo = p.container_sr_no;
+      // A loaded packing gets a pale row tint, cycling per container so a big
+      // plan's containers stay visually distinct, and its container number.
+      var rowStyle = srNo ? ' style="background:' + CONTAINER_TINTS[(srNo - 1) % CONTAINER_TINTS.length] + ';"' : "";
+      var assigned = srNo
+        ? '<strong>#' + esc(srNo) + "</strong> &middot; " + esc(labelBySr[String(srNo)] || ("Container " + srNo))
+        : '<span class="text-soft">—</span>';
+      return "<tr" + rowStyle + '><td class="num"><strong>' + esc(p.packing_no) + "</strong></td>" +
+        "<td><strong>" + esc(no) + "</strong> " +
         '<span class="text-sm">' + esc(p.packing_unit_label || "PLT") + "</span>" +
         (p.is_manual ? ' <span class="text-soft text-sm">mixed</span>' : "") +
         (p.packing_planning_number ? '<br><span class="text-soft text-sm mono">' +
@@ -425,13 +446,193 @@
         "<td>" + contents + "</td>" +
         '<td class="num">' + g(packingBoxes(p)) + "</td>" +
         '<td class="num">' + fmt(packingGross(p)) + "</td>" +
-        '<td><select class="js-packing-container" data-packing-no="' + esc(p.packing_no) + '">' +
-        options(p.container_sr_no) + "</select></td></tr>";
+        "<td>" + assigned + "</td></tr>";
     }).join("");
     pane.innerHTML = '<table class="ledger"><thead><tr>' +
-      "<th>Packing no.</th><th>Unique packing id</th><th>Contents</th>" +
+      '<th class="num">Loading no.</th><th>Packing no.</th><th>Unique packing id</th><th>Contents</th>' +
       '<th class="num">Qty</th><th class="num">Gross kg</th><th>Container</th>' +
       "</tr></thead><tbody>" + rows + "</tbody></table>";
+  }
+
+  // A packing's token for the assignment boxes: its unique packing id, or
+  // "#<Loading no.>" when it has none (a plan imported before ids were minted).
+  function packingToken(p) {
+    return (p.unique_packing_id === null || p.unique_packing_id === undefined || p.unique_packing_id === "")
+      ? "#" + p.packing_no : String(p.unique_packing_id);
+  }
+
+  // Collapse a container's packings into "firstId - lastId" runs that are
+  // consecutive in orderedPackings(); singletons bare; joined by ", ".
+  function assignmentText(srNo) {
+    var parts = [], run = [];
+    var flush = function () {
+      if (!run.length) return;
+      parts.push(run.length === 1
+        ? packingToken(run[0])
+        : packingToken(run[0]) + " - " + packingToken(run[run.length - 1]));
+      run = [];
+    };
+    orderedPackings().forEach(function (p) {
+      if (String(p.container_sr_no) === String(srNo)) run.push(p);
+      else flush();
+    });
+    flush();
+    return parts.join(", ");
+  }
+
+  function renderAssignBoxes() {
+    var pane = document.getElementById("assign-pane");
+    var containers = containerRows();
+    if (!containers.length || !packings.length) { pane.innerHTML = ""; return; }
+    var missingId = packings.some(function (p) {
+      return p.unique_packing_id === null || p.unique_packing_id === undefined || p.unique_packing_id === "";
+    });
+    pane.innerHTML =
+      '<div class="text-sm text-soft" style="margin-bottom:6px;">Type this load’s packings into a container, then press its <strong>Apply</strong> button (an id moves here from wherever it was; an id you remove is unassigned). <strong>Apply all</strong> reads every box together instead.</div>' +
+      containers.map(function (c) {
+        var head = esc(c.container_no || ("Container " + c.sr_no)) +
+          (c.container_type ? ' <span class="text-soft text-sm">· ' + esc(c.container_type) + "</span>" : "");
+        return '<div class="field" style="margin-bottom:10px;">' +
+          "<label>" + head + "</label>" +
+          '<textarea class="js-assign" data-sr="' + esc(c.sr_no) + '" rows="2" ' +
+          'style="width:100%;font-family:var(--font-mono,monospace);font-size:13px;">' +
+          esc(assignmentText(c.sr_no)) + "</textarea>" +
+          '<div style="margin-top:4px;"><button type="button" class="btn btn-ghost btn-sm js-apply-one" ' +
+          'data-sr="' + esc(c.sr_no) + '">Apply to ' + esc(c.container_no || ("Container " + c.sr_no)) + "</button></div>" +
+          "</div>";
+      }).join("") +
+      (missingId
+        ? '<p class="hint">Some packings have no unique packing id (an older plan) &mdash; reference those by <code>#</code> and their Loading no., e.g. <code>#12 - #40</code>.</p>'
+        : "");
+  }
+
+  function renderAssignWarnings(warnings, unplaced) {
+    var pane = document.getElementById("assign-warnings");
+    var lines = warnings.slice();
+    if (unplaced) lines.push(unplaced + " packing(s) still unassigned.");
+    if (!lines.length) { pane.innerHTML = ""; return; }
+    pane.innerHTML = '<div class="card" style="margin-top:12px;border-color:#f0c674;">' +
+      '<div class="card-header"><h3 style="margin:0;">Assignment notes</h3></div>' +
+      '<ul style="margin:0;padding-left:20px;">' +
+      lines.map(function (l) { return '<li class="text-sm">' + esc(l) + "</li>"; }).join("") +
+      "</ul></div>";
+  }
+
+  // Token -> position in orderedPackings(): by unique packing id, else by
+  // Loading no. (with or without a leading "#").
+  function assignResolver() {
+    var ordered = orderedPackings();
+    var byUid = {}, byNo = {};
+    ordered.forEach(function (p, i) {
+      if (p.unique_packing_id) byUid[String(p.unique_packing_id).toLowerCase()] = i;
+      byNo[String(p.packing_no)] = i;
+    });
+    return {
+      ordered: ordered,
+      posByNo: byNo,
+      resolve: function (tok) {
+        var t = String(tok).trim().replace(/^#/, "");
+        if (t === "") return null;
+        if (byUid[t.toLowerCase()] !== undefined) return byUid[t.toLowerCase()];
+        return byNo[t] === undefined ? null : byNo[t];
+      }
+    };
+  }
+
+  // Expand one box's text ("A - B, C") to a list of orderedPackings() indices;
+  // parse problems are pushed onto `warnings`.
+  function expandAssignBox(value, R, label, warnings) {
+    var out = [];
+    String(value || "").split(/[\n,]+/).forEach(function (raw) {
+      var tok = raw.trim();
+      if (!tok) return;
+      var m = tok.match(/^(.+?)\s*-\s*(.+)$/);
+      if (m && m[1].trim() && m[2].trim()) {
+        var a = R.resolve(m[1]), b = R.resolve(m[2]);
+        if (a === null || b === null) {
+          warnings.push(label + ": can't place range \"" + tok + "\" — " +
+            (a === null ? "\"" + m[1].trim() + "\"" : "\"" + m[2].trim() + "\"") + " is not a packing here.");
+          return;
+        }
+        for (var i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(i);
+      } else {
+        var one = R.resolve(tok);
+        if (one === null) { warnings.push(label + ": \"" + tok + "\" is not a packing here."); return; }
+        out.push(one);
+      }
+    });
+    return out;
+  }
+
+  function unplacedCount() {
+    return packings.filter(function (p) { return !p.container_sr_no; }).length;
+  }
+
+  // Read EVERY container box and set packing.container_sr_no from scratch. An id
+  // in no box is unassigned; an id in two boxes stays with the first and is flagged.
+  function parseAssignments() {
+    var R = assignResolver();
+    var owner = {};          // ordered index -> first container sr_no to claim it
+    var warnings = [];
+    Array.prototype.forEach.call(document.querySelectorAll("#assign-pane .js-assign"), function (ta) {
+      var srNo = parseInt(ta.getAttribute("data-sr"), 10);
+      var label = containerLabel(srNo);
+      expandAssignBox(ta.value, R, label, warnings).forEach(function (idx) {
+        if (owner[idx] !== undefined && owner[idx] !== srNo) {
+          warnings.push("Packing " + (R.ordered[idx] ? packingToken(R.ordered[idx]) : "?") +
+            " is listed under both " + containerLabel(owner[idx]) + " and " + label +
+            " — kept with " + containerLabel(owner[idx]) + ".");
+          return;
+        }
+        if (owner[idx] === undefined) owner[idx] = srNo;
+      });
+    });
+    packings.forEach(function (p) {
+      var idx = R.posByNo[String(p.packing_no)];
+      p.container_sr_no = (idx !== undefined && owner[idx] !== undefined) ? owner[idx] : null;
+    });
+    renderAssignWarnings(warnings, unplacedCount());
+  }
+
+  function applyAssignments() {
+    if (!packings.length) { alert("Load a packing planning first."); return; }
+    if (!containerRows().length) { alert("Pick a booking first, so there are containers to assign to."); return; }
+    parseAssignments();
+    renderPackings();
+    renderSummary();
+    renderAssignBoxes();
+    sync();
+  }
+
+  // Apply just ONE container's box: the ids it lists move into this container
+  // (stolen from wherever they were); any packing currently here that the box no
+  // longer lists is unassigned. Other containers are otherwise left alone.
+  function applyOneAssignment(srNo) {
+    if (!packings.length) { alert("Load a packing planning first."); return; }
+    if (!containerRows().length) { alert("Pick a booking first, so there are containers to assign to."); return; }
+    var ta = document.querySelector('#assign-pane .js-assign[data-sr="' + srNo + '"]');
+    if (!ta) return;
+    var R = assignResolver();
+    var label = containerLabel(srNo);
+    var warnings = [];
+    var want = {};
+    expandAssignBox(ta.value, R, label, warnings).forEach(function (idx) { want[idx] = true; });
+    var moved = 0;
+    packings.forEach(function (p) {
+      var idx = R.posByNo[String(p.packing_no)];
+      if (idx !== undefined && want[idx]) {
+        if (p.container_sr_no && String(p.container_sr_no) !== String(srNo)) moved++;
+        p.container_sr_no = srNo;
+      } else if (String(p.container_sr_no) === String(srNo)) {
+        p.container_sr_no = null;
+      }
+    });
+    if (moved) warnings.push(label + ": moved " + moved + " packing(s) here from other containers.");
+    renderPackings();
+    renderSummary();
+    renderAssignBoxes();
+    renderAssignWarnings(warnings, unplacedCount());
+    sync();
   }
 
   function renderSummary() {
@@ -485,22 +686,15 @@
     renderItems();
     renderPackings();
     renderSummary();
+    renderAssignBoxes();
+    renderAssignWarnings([], 0);
     sync();
   }
 
   // ---- events ------------------------------------------------------------
   document.addEventListener("change", function (e) {
     var t = e.target;
-    if (t.classList && t.classList.contains("js-packing-container")) {
-      var no = t.getAttribute("data-packing-no");
-      packings.forEach(function (p) {
-        if (String(p.packing_no) === String(no)) {
-          p.container_sr_no = t.value ? parseInt(t.value, 10) : null;
-        }
-      });
-      renderSummary();
-      sync();
-    } else if (t.id === "booking_detail_id") {
+    if (t.id === "booking_detail_id") {
       loadBooking(t.value);
     } else if (t.name === "cd_tare_weight_kg[]" || t.name === "cd_max_permitted_weight[]") {
       renderSummary();
@@ -520,12 +714,18 @@
       listPackingPlannings();
     } else if (t.id === "load-from-pps-btn") {
       loadFromPackingPlannings();
+    } else if (t.id === "apply-assignments-btn") {
+      applyAssignments();
+    } else if (t.classList && t.classList.contains("js-apply-one")) {
+      applyOneAssignment(parseInt(t.getAttribute("data-sr"), 10));
     } else if (t.id === "auto-assign-btn") {
       autoAssign();
     } else if (t.id === "unassign-all-btn") {
       packings.forEach(function (p) { p.container_sr_no = null; });
       renderPackings();
       renderSummary();
+      renderAssignBoxes();
+      renderAssignWarnings([], 0);
       sync();
     }
   });
@@ -608,6 +808,8 @@
         packings = d.packings || [];
         renderPackings();
         renderSummary();
+        renderAssignBoxes();
+        renderAssignWarnings([], 0);
         sync();
       })
       .catch(function () { alert("Couldn't assign the packings."); });
