@@ -69,7 +69,7 @@
   <table class="sheet-table" style="margin-bottom:12px;">
     <thead>
       <tr>
-        <th colspan="6" style="text-align:left;">
+        <th colspan="7" style="text-align:left;">
           {{ row.container_no or 'Unassigned' }}{% if row.container_type %} · {{ row.container_type }}{% endif %}
           &nbsp;—&nbsp; {{ row.packing_count }} packing(s), {{ '%g' % row.boxes }} units
           {% if row.vgm_kg is not none %}
@@ -82,12 +82,13 @@
           {% endif %}
         </th>
       </tr>
-      <tr><th>Packing</th><th>Unique packing id</th><th>Contents</th>
+      <tr><th class="num">Loading no.</th><th>Packing</th><th>Unique packing id</th><th>Contents</th>
           <th class="num">Qty</th><th class="num">Net kg</th><th class="num">Gross kg</th></tr>
     </thead>
     <tbody>
       {% for packing in plan.packings_for_container(row.sr_no) %}
       <tr>
+        <td class="num">{{ packing.packing_no }}</td>
         <td>{{ packing.label }} <span class="text-sm">{{ packing.packing_unit_label }}</span></td>
         <td class="mono text-sm">{{ packing.unique_packing_id or '—' }}</td>
         <td>
@@ -100,19 +101,19 @@
         <td class="num">{{ '%.3f' % packing.gross_weight_kg(by_sr) }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6"><em>No packings assigned.</em></td></tr>
+      <tr><td colspan="7"><em>No packings assigned.</em></td></tr>
       {% endfor %}
     </tbody>
     <tfoot>
       <tr>
-        <th colspan="3" class="num">Container total</th>
+        <th colspan="4" class="num">Container total</th>
         <th class="num">{{ '%g' % row.boxes }}</th>
         <th class="num">{{ '%.3f' % row.net_weight_kg }}</th>
         <th class="num">{{ '%.3f' % row.cargo_weight_kg }}</th>
       </tr>
       {% if row.container_tare_kg %}
       <tr>
-        <th colspan="5" class="num">+ container tare {{ '%.0f' % row.container_tare_kg }} kg = VGM</th>
+        <th colspan="6" class="num">+ container tare {{ '%.0f' % row.container_tare_kg }} kg = VGM</th>
         <th class="num">{{ '%.0f' % row.vgm_kg }}</th>
       </tr>
       {% endif %}
