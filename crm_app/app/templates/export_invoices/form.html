@@ -792,12 +792,17 @@
       const printedTotal = Math.round(qty * (Math.round((price + uplift) * 100) / 100) * 100) / 100;
       tax += printedTotal * rate * igst / 100;
 
-      // Total net/gross weight: display-only, worked out from each line's
-      // Boxes x its catalog product's per-box weight (the same figures the
-      // export packing list's container split reads off this row).
+      // Total net/gross weight: display-only. Net is each line's Boxes x its
+      // catalog product's per-box net weight; Gross is that plus Plts x the
+      // selected pallet type's own weight (Loose lines add no pallet weight,
+      // so their gross equals their net) - the same rule the export packing
+      // list's container split applies per row.
       const boxes = parseFloat(tr.querySelector('.js-boxes').value) || 0;
-      netWeight += boxes * (parseFloat(tr.dataset.netWeight) || 0);
-      grossWeight += boxes * (parseFloat(tr.dataset.grossWeight) || 0);
+      const rowNet = boxes * (parseFloat(tr.dataset.netWeight) || 0);
+      const rowPallets = parseFloat(tr.querySelector('.js-pallets').value) || 0;
+      const rowPalletWt = parseFloat(tr.querySelector('.js-pallet-weight').value) || 0;
+      netWeight += rowNet;
+      grossWeight += (rowPalletWt && rowPallets) ? rowNet + rowPallets * rowPalletWt : rowNet;
     });
     document.getElementById('total_net_weight_kg').value = netWeight ? (Math.round(netWeight * 100) / 100) : '';
     document.getElementById('total_gross_weight_kg').value = grossWeight ? (Math.round(grossWeight * 100) / 100) : '';
@@ -1597,13 +1602,13 @@
       tr.querySelector('.js-alloc-pallets').value = pallets || '';
       tr.querySelector('.js-alloc-net').value = net || '';
       // Gross = Net + Plts x the selected pallet type's own weight, once a
-      // real type is known for this goods line; falls back to the product's
-      // flat per-box gross weight (the old formula) for Loose/Manual, where
-      // no pallet weight is known - see ExportPackingListService.build_items,
-      // which mirrors this server-side at save time.
+      // real type is known for this goods line; a Loose/Manual line carries
+      // no pallet weight, so its gross is simply its net - see
+      // ExportPackingListService.build_items, which mirrors this server-side
+      // at save time.
       const gross = line.palletWeightKg
         ? round2(net + pallets * line.palletWeightKg)
-        : (line.gross ? round2(boxes * line.gross) : 0);
+        : net;
       tr.querySelector('.js-alloc-gross').value = gross || '';
     }
   }

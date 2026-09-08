@@ -1968,11 +1968,17 @@ class ProductService:
             raise PermissionDeniedError("Only an admin can manage the product catalog.")
         self.get_product(product_id, current_user.company_id)
         # Design image files live on disk, not in the DB, so the CASCADE
-        # delete doesn't clean them up on its own.
-        for design in self.design_repo.list_for_product(product_id):
-            self._delete_image_file(design.photo_path)
-            self._delete_image_file(design.dimension_photo_path)
+        # delete doesn't clean them up on its own. The rows have to go first:
+        # _delete_image_file keeps a file that any surviving design (e.g. a
+        # duplicate under another product) still points at.
+        image_paths = [
+            path
+            for design in self.design_repo.list_for_product(product_id)
+            for path in (design.photo_path, design.dimension_photo_path)
+        ]
         self.product_repo.delete(product_id)  # cascades to folders/designs in the DB
+        for path in image_paths:
+            self._delete_image_file(path)
 
     # ---- browsing inside a product --------------------------------------------------
     def get_folder(self, folder_id: int, company_id: int) -> ProductFolder:
@@ -1986,6 +1992,26 @@ class ProductService:
             return []
         self.get_folder(folder_id, company_id)  # 404s if missing/another company's before walking up
         return self.folder_repo.list_ancestors(folder_id)
+
+    def list_folders_tree(self, product_id: int) -> List[tuple]:
+        """Every sub category of one product as (folder, depth) pairs, ordered
+        depth-first - lets a folder <select> show nesting via indentation
+        without needing a recursive template (same shape as
+        list_categories_tree)."""
+        all_folders = self.folder_repo.list_all_for_product(product_id)
+        children_by_parent = {}
+        for folder in all_folders:
+            children_by_parent.setdefault(folder.parent_id, []).append(folder)
+
+        ordered = []
+
+        def visit(parent_id, depth):
+            for folder in children_by_parent.get(parent_id, []):
+                ordered.append((folder, depth))
+                visit(folder.id, depth + 1)
+
+        visit(None, 0)
+        return ordered
 
     def list_contents(self, company_id: int, product_id: int, folder_id: Optional[int]):
         """Returns (subfolders, designs) for one level inside a product -
@@ -2024,17 +2050,21 @@ class ProductService:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can manage the product catalog.")
         folder = self.get_folder(folder_id, current_user.company_id)
-        self._delete_folder_images_recursive(folder.product_id, folder_id)
+        image_paths = self._folder_image_paths(folder.product_id, folder_id)
         self.folder_repo.delete(folder_id)  # cascades to subfolders/designs in the DB
+        for path in image_paths:
+            self._delete_image_file(path)
 
-    def _delete_folder_images_recursive(self, product_id: int, folder_id: int) -> None:
+    def _folder_image_paths(self, product_id: int, folder_id: int) -> List[Optional[str]]:
         """Design image files live on disk, not in the DB, so cascading
-        deletes don't clean them up on their own - walk the subtree first."""
+        deletes don't clean them up on their own - walk the subtree and
+        collect what to unlink once the rows are gone."""
+        paths = []
         for design in self.design_repo.list_in(product_id, folder_id):
-            self._delete_image_file(design.photo_path)
-            self._delete_image_file(design.dimension_photo_path)
+            paths.extend((design.photo_path, design.dimension_photo_path))
         for subfolder in self.folder_repo.list_children(product_id, folder_id):
-            self._delete_folder_images_recursive(product_id, subfolder.id)
+            paths.extend(self._folder_image_paths(product_id, subfolder.id))
+        return paths
 
     # ---- designs --------------------------------------------------
     def get_design(self, design_id: int, company_id: int) -> Design:
@@ -2072,6 +2102,37 @@ class ProductService:
         )
         return self.design_repo.create(design)
 
+    def duplicate_design(self, current_user: User, design_id: int, design_name: str = "",
+                          product_id: Optional[int] = None,
+                          folder_id: Optional[int] = None) -> Design:
+        """Creates a second design carrying over every field of an existing
+        one (surface, price, description, alt text, photos) into any product
+        of the company, so the same artwork catalogued under a sibling size/
+        finish product doesn't have to be retyped and re-uploaded.
+
+        The copy points at the SAME image files as its source - nothing is
+        re-uploaded - which is why _delete_image_file only unlinks a file
+        once the last design referencing it is gone."""
+        if not current_user.is_admin:
+            raise PermissionDeniedError("Only an admin can manage the product catalog.")
+        source = self.get_design(design_id, current_user.company_id)
+
+        target_product_id = product_id or source.product_id
+        self.get_product(target_product_id, current_user.company_id)
+        if folder_id is not None:
+            folder = self.get_folder(folder_id, current_user.company_id)
+            if folder.product_id != target_product_id:
+                raise ValidationError("That folder belongs to a different product.")
+
+        # Design names aren't unique, so "<name> (copy)" is safe to reuse -
+        # same convention as duplicate_product.
+        name = (design_name or "").strip() or f"{source.design_name} (copy)"
+        copy = dataclasses.replace(
+            source, id=None, product_id=target_product_id, folder_id=folder_id,
+            design_name=name, created_at=None, updated_at=None,
+        )
+        return self.design_repo.create(copy)
+
     def update_design(self, current_user: User, design_id: int, design_name: str,
                        description: str, price_usd: str, alt_text: str,
                        photo_file, dimension_photo_file, surface: str = "") -> None:
@@ -2086,22 +2147,27 @@ class ProductService:
             "surface": (surface or "").strip() or None,
             "price_usd": self._parse_price(price_usd), "alt_text": alt_text or None,
         }
+        replaced_paths = []
         if photo_file and photo_file.filename:
             fields["photo_path"] = self._save_image(photo_file)
-            self._delete_image_file(existing.photo_path)
+            replaced_paths.append(existing.photo_path)
         if dimension_photo_file and dimension_photo_file.filename:
             fields["dimension_photo_path"] = self._save_image(dimension_photo_file)
-            self._delete_image_file(existing.dimension_photo_path)
+            replaced_paths.append(existing.dimension_photo_path)
 
         self.design_repo.update(design_id, fields)
+        # After the update, so this row no longer counts as a reference to the
+        # old file - a duplicate still pointing at it keeps it on disk.
+        for path in replaced_paths:
+            self._delete_image_file(path)
 
     def delete_design(self, current_user: User, design_id: int) -> None:
         if not current_user.is_admin:
             raise PermissionDeniedError("Only an admin can manage the product catalog.")
         design = self.get_design(design_id, current_user.company_id)
+        self.design_repo.delete(design_id)  # first, so the row no longer counts as a reference
         self._delete_image_file(design.photo_path)
         self._delete_image_file(design.dimension_photo_path)
-        self.design_repo.delete(design_id)
 
     @staticmethod
     def _parse_price(price_usd: str) -> Optional[float]:
@@ -2165,8 +2231,13 @@ class ProductService:
         return f"uploads/products/{stored_name}"
 
     def _delete_image_file(self, relative_path: Optional[str]) -> None:
+        """Unlinks an uploaded image - but only once no design row points at
+        it any more. A duplicated design shares its source's file, so the
+        callers must drop their rows FIRST and clean the files after."""
         if not relative_path:
             return
+        if self.design_repo.count_by_photo_path(relative_path) > 0:
+            return  # still in use by a duplicate (or by the design itself)
         full_path = os.path.join(self.upload_folder, os.path.basename(relative_path))
         if os.path.exists(full_path):
             os.remove(full_path)
@@ -6988,13 +7059,13 @@ class ExportPackingListService:
                 # type was selected on the goods line (item.pallet_weight_kg,
                 # snapshotted the moment it was picked - see
                 # ExportInvoiceItem.pallet_weight_kg and the form's
-                # recalcRowPallets). Falls back to the old flat per-box
-                # formula when no pallet type is known for the line (Loose,
-                # or Plts typed by hand with no type picked).
+                # recalcRowPallets). A Loose line (or Plts typed by hand with
+                # no type picked) carries no pallet weight, so its gross is
+                # simply its net.
                 if item.pallet_weight_kg and pallets:
                     gross = round((net or 0) + pallets * item.pallet_weight_kg, 2)
-                elif product and product.gross_weight_kg:
-                    gross = round(boxes * product.gross_weight_kg, 2)
+                elif net is not None:
+                    gross = net
 
             container = self._container_at(container_details, alloc["container_index"])
             built.append(ExportPackingListItem(
@@ -7717,6 +7788,7 @@ class PackingListService:
                 pcs = float(raw["pcs"]) if raw.get("pcs") else None
                 net_weight_kg = float(raw["net_weight_kg"]) if raw.get("net_weight_kg") else None
                 gross_weight_kg = float(raw["gross_weight_kg"]) if raw.get("gross_weight_kg") else None
+                pallet_weight_kg = float(raw["pallet_weight_kg"]) if raw.get("pallet_weight_kg") else None
             except ValueError:
                 raise ValidationError(f"Row {i}: quantity, pallets, pcs and weights must be numbers.")
             product_id = int(raw["product_id"]) if raw.get("product_id") else None
@@ -7787,17 +7859,20 @@ class PackingListService:
             if pcs is None and quantity_boxes and pcs_per_box:
                 pcs = round(quantity_boxes * pcs_per_box, 2)
 
-            # Net/gross weight auto-calculate from Boxes x the row's catalog
-            # product's per-box weight, same trigger as Qty/Pcs above - but
-            # only to fill in a blank: a weight the row already submitted
-            # (typed by hand, or set from the client-side auto-calc) is kept
-            # as-is, so it stays manually editable on this document instead
-            # of being silently recalculated back on every save.
-            if product and quantity_boxes:
-                if net_weight_kg is None and product.net_weight_kg:
-                    net_weight_kg = round(quantity_boxes * product.net_weight_kg, 2)
-                if gross_weight_kg is None and product.gross_weight_kg:
-                    gross_weight_kg = round(quantity_boxes * product.gross_weight_kg, 2)
+            # Net weight auto-calculates from Boxes x the catalog product's
+            # per-box net weight, same trigger as Qty/Pcs above. Gross is then
+            # Net + Plts x the selected pallet type's own weight (posted as
+            # item_pallet_weight_kg[]); a "Loose" line has no pallet weight so
+            # its gross is simply its net. Both only fill a blank: a weight the
+            # row already submitted (typed by hand, or from the client-side
+            # auto-calc) is kept as-is, so it stays manually editable here.
+            if product and quantity_boxes and net_weight_kg is None and product.net_weight_kg:
+                net_weight_kg = round(quantity_boxes * product.net_weight_kg, 2)
+            if gross_weight_kg is None and quantity_boxes and net_weight_kg is not None:
+                if pallet_weight_kg and pallets:
+                    gross_weight_kg = round(net_weight_kg + pallets * pallet_weight_kg, 2)
+                else:
+                    gross_weight_kg = net_weight_kg
 
             items.append(PackingListItem(
                 id=None, packing_list_id=None, sr_no=i, product_id=product_id, product_name=product_name,
