@@ -107,13 +107,29 @@ class TestPackingListBuildItems:
         assert items[0].pcs == 70.0  # 10 boxes x 7 pcs per box
 
     def test_weights_auto_calculate_from_product(self, container, seed):
+        # A loose line (no pallet type) has no pallet weight, so its gross
+        # weight is simply its net weight - the catalog's flat per-box gross
+        # weight is no longer used.
         product = make_product(container, seed.admin,
                                net_weight_kg="20", gross_weight_kg="22.5")
         items = self._build(container, seed, [
             {"product_name": "Tiles", "product_id": str(product.id),
              "quantity_boxes": "10"}])
         assert items[0].net_weight_kg == 200.0
-        assert items[0].gross_weight_kg == 225.0
+        assert items[0].gross_weight_kg == 200.0
+
+    def test_gross_weight_is_net_plus_pallets_times_pallet_weight(self, container, seed):
+        # A pallet type is picked on the row: Gross = Net + Plts x that
+        # pallet's own weight. 64 boxes / 32 per pallet = 2 pallets;
+        # net 64 x 20 = 1280; gross 1280 + 2 x 25 = 1330.
+        product = make_product(container, seed.admin, net_weight_kg="20")
+        items = self._build(container, seed, [
+            {"product_name": "Tiles", "product_id": str(product.id),
+             "quantity_boxes": "64", "box_per_pallet": "32",
+             "pallet_weight_kg": "25"}])
+        assert items[0].pallets == 2.0
+        assert items[0].net_weight_kg == 1280.0
+        assert items[0].gross_weight_kg == 1330.0
 
     def test_submitted_weight_is_not_overwritten(self, container, seed):
         # A hand-typed weight stays editable and must survive the save.
