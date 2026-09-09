@@ -1,0 +1,98 @@
+{# Duplicate-design modal, shared by the product page (a Duplicate action on
+   each design row) and the design page (a topbar button). The copy carries
+   over every field of its source - including the same photo files - so only
+   the name and where it lands are asked for here.
+
+   Open it from anywhere with: openDuplicateDesignModal(id, name) #}
+<div id="duplicate-design-overlay" class="modal-overlay" hidden>
+  <div class="modal-box" style="max-width:520px;">
+    <div class="modal-header">
+      <h3>Duplicate design</h3>
+      <button type="button" class="btn-link-danger" id="duplicate-design-close">✕ Close</button>
+    </div>
+    <form method="POST" id="duplicate-design-form">
+      <p class="hint">Copies <strong id="duplicate-design-source">this design</strong> — surface, price, description and both photos — into the product you pick below.</p>
+      <div class="field">
+        <label for="duplicate-design-name">New design name<span class="required-mark">*</span></label>
+        <input type="text" id="duplicate-design-name" name="design_name" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="duplicate-design-product">Product</label>
+        <select id="duplicate-design-product" name="product_id" data-current="{{ product.id }}">
+          {% for p in product_options %}
+          <option value="{{ p.id }}" {{ 'selected' if p.id == product.id }}>{{ p.product_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="duplicate-design-folder">Sub category</label>
+        <select id="duplicate-design-folder" name="folder_id">
+          <option value="">— (product root)</option>
+          {% for folder, depth in folder_options %}
+          <option value="{{ folder.id }}">{{ '— ' * depth }}{{ folder.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="hint">Where the copy is filed inside that product.</div>
+      </div>
+      <button type="submit" class="btn btn-primary">Duplicate</button>
+      <button type="button" class="btn btn-ghost" id="duplicate-design-cancel">Cancel</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var overlay = document.getElementById('duplicate-design-overlay');
+  var form = document.getElementById('duplicate-design-form');
+  var nameInput = document.getElementById('duplicate-design-name');
+  var sourceLabel = document.getElementById('duplicate-design-source');
+  var productSelect = document.getElementById('duplicate-design-product');
+  var folderSelect = document.getElementById('duplicate-design-folder');
+  // The action carries the design id, so it is built per design at open time.
+  var actionTemplate = "{{ url_for('products.duplicate_design', design_id=0) }}";
+  var foldersUrlTemplate = "{{ url_for('products.api_list_folders', product_id=0) }}";
+  // The folder list rendered server-side belongs to this page's product -
+  // reused as-is whenever the picker is back on that product.
+  var homeProductId = productSelect.dataset.current;
+  var homeFolderOptions = folderSelect.innerHTML;
+
+  function close() { overlay.hidden = true; }
+
+  window.openDuplicateDesignModal = function (designId, designName) {
+    form.action = actionTemplate.replace(/0(\/duplicate)$/, designId + '$1');
+    sourceLabel.textContent = designName;
+    nameInput.value = designName + ' (copy)';
+    productSelect.value = homeProductId;
+    folderSelect.innerHTML = homeFolderOptions;
+    overlay.hidden = false;
+    nameInput.focus();
+    nameInput.select();
+  };
+
+  // Folders belong to one product, so switching the target product replaces
+  // the whole list (falling back to the product root on a failed fetch).
+  productSelect.addEventListener('change', function () {
+    if (productSelect.value === homeProductId) {
+      folderSelect.innerHTML = homeFolderOptions;
+      return;
+    }
+    folderSelect.innerHTML = '<option value="">— (product root)</option>';
+    fetch(foldersUrlTemplate.replace(/0(\/folders)$/, productSelect.value + '$1'))
+      .then(function (r) { return r.ok ? r.json() : { folders: [] }; })
+      .then(function (data) {
+        (data.folders || []).forEach(function (f) {
+          var label = new Array(f.depth + 1).join('— ') + f.name;
+          folderSelect.appendChild(new Option(label, f.id));
+        });
+      })
+      .catch(function () { /* product root stays the only choice */ });
+  });
+
+  document.getElementById('duplicate-design-close').addEventListener('click', close);
+  document.getElementById('duplicate-design-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !overlay.hidden) close();
+  });
+})();
+</script>

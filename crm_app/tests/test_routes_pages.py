@@ -247,6 +247,48 @@ class TestProductRoutes:
         assert resp.status_code == 200
         assert resp.is_json
 
+    def test_folders_json_api(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        p = self._product(container, admin)
+        parent = container.product_service.create_folder(admin, p.id, "Glossy", None)
+        container.product_service.create_folder(admin, p.id, "600x600", parent.id)
+        folders = client.get(f"/products/api/{p.id}/folders").get_json()["folders"]
+        # Depth-first with a depth for the picker's indentation.
+        assert [(f["name"], f["depth"]) for f in folders] == [("Glossy", 0), ("600x600", 1)]
+
+    def test_product_and_design_pages_offer_duplicate(self, admin_ctx):
+        client, container, admin, _ = admin_ctx
+        p = self._product(container, admin)
+        d = container.product_service.create_design(
+            admin, p.id, None, "White", "", "10", "", None, None)
+        for url in (f"/products/{p.id}", f"/products/design/{d.id}"):
+            page = client.get(url)
+            assert page.status_code == 200
+            assert b"duplicate-design-overlay" in page.data
+            # The opener must sit in a SINGLE-quoted attribute: tojson emits a
+            # double-quoted JSON string, which would close a double-quoted
+            # onclick and silently kill the button.
+            assert b"onclick='openDuplicateDesignModal(" in page.data
+
+    def test_duplicate_design_into_another_product(self, admin_ctx):
+        client, container, admin, company_id = admin_ctx
+        source_product = self._product(container, admin)
+        target = container.product_service.create_product(
+            admin, product_name="Slabs", description="", hsn_code="", igst_percent="",
+            quantity="", alternate_quantity="")
+        d = container.product_service.create_design(
+            admin, source_product.id, None, "White", "", "10", "", None, None)
+        resp = client.post(f"/products/design/{d.id}/duplicate",
+                           data={"design_name": "White v2", "product_id": str(target.id),
+                                 "folder_id": ""})
+        assert resp.status_code == 302
+        copies = container.product_service.list_designs_for_product(target.id, company_id)
+        assert [c.design_name for c in copies] == ["White v2"]
+
+    def test_employee_cannot_duplicate_a_design(self, employee_ctx):
+        client, *_ = employee_ctx
+        assert client.post("/products/design/1/duplicate").status_code == 403
+
     def test_employee_cannot_open_new_product_form(self, employee_ctx):
         client, *_ = employee_ctx
         assert client.get("/products/new").status_code == 403

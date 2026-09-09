@@ -11,6 +11,8 @@
     <a href="{{ url_for('inventory.view_design', design_id=design.id) }}" class="btn btn-ghost">Stock History →</a>
     {% if current_user.is_admin %}
     <a href="{{ url_for('products.edit_design', design_id=design.id) }}" class="btn btn-ghost">Edit</a>
+    <button type="button" class="btn btn-ghost"
+            onclick='openDuplicateDesignModal({{ design.id }}, {{ design.design_name | tojson }})'>Duplicate</button>
     <form method="POST" action="{{ url_for('products.delete_design', design_id=design.id) }}" onsubmit="return confirm('Delete this design?');">
       <button type="submit" class="btn btn-danger">Delete</button>
     </form>
@@ -79,5 +81,9 @@
     <div><div class="text-sm text-soft">Gross weight / box</div><div>{{ (product.gross_weight_kg ~ ' KG') if product.gross_weight_kg is not none else '—' }}</div></div>
   </div>
 </div>
+
+{% if current_user.is_admin %}
+  {% include "products/_duplicate_design_modal.html" %}
+{% endif %}
 
 {% endblock %}

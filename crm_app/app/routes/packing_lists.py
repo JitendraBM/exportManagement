@@ -43,6 +43,7 @@ def _extract_items(form) -> list:
     units = form.getlist("item_unit[]")
     net_weights = form.getlist("item_net_weight_kg[]")
     gross_weights = form.getlist("item_gross_weight_kg[]")
+    pallet_weights = form.getlist("item_pallet_weight_kg[]")
     items = []
     for i in range(len(product_names)):
         items.append({
@@ -59,6 +60,7 @@ def _extract_items(form) -> list:
             "unit": units[i] if i < len(units) else "SQM",
             "net_weight_kg": net_weights[i] if i < len(net_weights) else "",
             "gross_weight_kg": gross_weights[i] if i < len(gross_weights) else "",
+            "pallet_weight_kg": pallet_weights[i] if i < len(pallet_weights) else "",
         })
     return items
 
@@ -167,7 +169,8 @@ def _pallet_types_map(product_map) -> dict:
     for product_id, product in product_map.items():
         result[product_id] = [
             {"name": pt.name, "boxes_per_pallet": pt.boxes_per_pallet,
-             "alt_qty_per_pallet": pallet_alt_quantity(pt, product)}
+             "alt_qty_per_pallet": pallet_alt_quantity(pt, product),
+             "weight_kg": pt.weight_kg}
             for pt in container.product_service.pallet_types_for_product(product_id)
         ]
     return result

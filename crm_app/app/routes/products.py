@@ -84,6 +84,16 @@ def _design_form_fields(form) -> dict:
     }
 
 
+def _duplicate_design_options(container, product_id: int) -> dict:
+    """Every product of the company plus the current product's sub
+    categories - the two <select>s of the duplicate-design modal. Switching
+    the product swaps the folder list via /products/api/<id>/folders."""
+    return {
+        "product_options": container.product_service.list_products(g.user.company_id),
+        "folder_options": container.product_service.list_folders_tree(product_id),
+    }
+
+
 # ============================================================
 # CATALOG ROOT (categories as folders + uncategorised products)
 # ============================================================
@@ -226,6 +236,7 @@ def view_product(product_id, folder_id=None):
         "products/detail.html", product=product, category=category, current_folder=current_folder,
         breadcrumb=breadcrumb, subfolders=subfolders, designs=designs, pallet_types=pallet_types,
         total_job_quantity=total_job_quantity, master_product=master_product,
+        **_duplicate_design_options(container, product_id),
     )
 
 
@@ -413,7 +424,8 @@ def view_design(design_id):
         abort(404)
     breadcrumb = container.product_service.breadcrumb(g.user.company_id, design.folder_id)
     return render_template("products/design_detail.html", design=design, product=product, breadcrumb=breadcrumb,
-                            pallet_types=container.product_service.pallet_types_for_product(product.id))
+                            pallet_types=container.product_service.pallet_types_for_product(product.id),
+                            **_duplicate_design_options(container, product.id))
 
 
 @products_bp.route("/design/<int:design_id>/edit", methods=["GET", "POST"])
@@ -459,6 +471,29 @@ def delete_design(design_id):
     except NotFoundError:
         abort(404)
     return redirect(url_for("products.list_products"))
+
+
+@products_bp.route("/design/<int:design_id>/duplicate", methods=["POST"])
+@admin_required
+def duplicate_design(design_id):
+    """The duplicate modal on the product / design page picks the target
+    product (and sub category) for the copy, so the same design can be
+    catalogued under a sibling product without re-entering it."""
+    container = current_app.container
+    try:
+        copy = container.product_service.duplicate_design(
+            g.user, design_id,
+            design_name=request.form.get("design_name", ""),
+            product_id=_int_or_none(request.form.get("product_id")),
+            folder_id=_int_or_none(request.form.get("folder_id")),
+        )
+        flash(f"Design duplicated as '{copy.design_name}'.", "success")
+        return redirect(url_for("products.view_design", design_id=copy.id))
+    except (ValidationError, PermissionDeniedError) as e:
+        flash(str(e), "error")
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("products.view_design", design_id=design_id))
 
 
 # ============================================================
@@ -521,6 +556,25 @@ def api_quick_create():
     except ValidationError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(_product_json(product, container.product_service.pallet_types_for_product(product.id)))
+
+
+@products_bp.route("/api/<int:product_id>/folders")
+@login_required
+def api_list_folders(product_id):
+    """The sub categories of one product, flat with a depth for indentation -
+    lets the duplicate-design modal repopulate its folder picker when the
+    target product is switched."""
+    container = current_app.container
+    try:
+        container.product_service.get_product(product_id, g.user.company_id)
+    except NotFoundError:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "folders": [
+            {"id": f.id, "name": f.name, "depth": depth}
+            for f, depth in container.product_service.list_folders_tree(product_id)
+        ]
+    })
 
 
 @products_bp.route("/api/<int:product_id>/designs")

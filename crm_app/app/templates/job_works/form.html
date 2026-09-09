@@ -388,12 +388,13 @@
     const lookupKey = sourceKey(line.to_product_id, line.to_product_name) + '||' + designKey;
     const entry = INVOICE_QUANTITIES[lookupKey] || INVOICE_QUANTITIES_BY_DESIGN[designKey];
     const sourceQuantity = entry ? entry.quantity_boxes : 0;
+    const entryUnit = entry ? (entry.quantity_unit || '') : '';
     const conversionValue = num(line.conversion_value);
     const convertedQuantity = conversionValue > 0 ? sourceQuantity / conversionValue : 0;
     const extraPercent = num(line.extra_percent);
     const extraQuantity = convertedQuantity * extraPercent / 100;
     const jobQuantity = Math.ceil(convertedQuantity + extraQuantity);
-    return { sourceQuantity, convertedQuantity, extraQuantity, jobQuantity };
+    return { sourceQuantity, convertedQuantity, extraQuantity, jobQuantity, entryUnit };
   }
 
   // ---- design list for the chosen To Product: NOT the catalog (there is no
@@ -510,7 +511,10 @@
   function updateDesignRow(tr) {
     const line = rowLine(tr);
     const chain = chainOf(line);
-    const unit = unitOf(line);
+    // Jobed Qty is a BOX count off the packing list, so show the packing
+    // list's own unit (BOX) when there's a matched entry; fall back to the
+    // To Product's unit only when nothing matched.
+    const unit = chain.entryUnit || unitOf(line);
     tr.querySelector('.js-jobed-qty').textContent = show(chain.sourceQuantity) + (unit ? ' ' + unit : '');
     tr.querySelector('.js-converted-qty').textContent = show(chain.convertedQuantity) + (unit ? ' ' + unit : '');
     tr.querySelector('.js-extra-qty').textContent = show(chain.extraQuantity) + (unit ? ' ' + unit : '');
@@ -941,7 +945,7 @@
     linesBody.innerHTML = '';
     lines.forEach((line, i) => {
       const chain = chainOf(line);
-      const unit = unitOf(line);
+      const unit = chain.entryUnit || unitOf(line);
       const withUnit = (v) => show(v) + (unit ? ' ' + unit : '');
       const tr = document.createElement('tr');
       tr.innerHTML = `

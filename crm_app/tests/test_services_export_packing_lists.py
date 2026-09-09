@@ -201,13 +201,15 @@ class TestDerivedFigures:
         assert packing_list.total_quantity == pytest.approx(144)
         assert packing_list.total_pallets == pytest.approx(20)
 
-    def test_weights_come_from_the_catalog_products_per_box_figures(self, container, seed):
+    def test_net_weight_comes_from_the_catalog_products_per_box_figure(self, container, seed):
+        # A loose line (no pallet type on the goods line) carries no pallet
+        # weight, so its gross weight is simply its net weight.
         product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
         invoice = make_export(container, seed, [item_for(product, 100)],
                               allocations=[alloc(0, 0, 100)])
         packing_list = packing_list_for(container, seed, invoice)
         assert packing_list.total_net_weight == pytest.approx(2650)
-        assert packing_list.total_gross_weight == pytest.approx(2700)
+        assert packing_list.total_gross_weight == pytest.approx(2650)
 
     def test_a_typed_weight_overrides_the_derived_one(self, container, seed):
         product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
@@ -258,17 +260,19 @@ class TestDerivedFigures:
         packing_list = packing_list_for(container, seed, invoice)
         assert packing_list.total_gross_weight == pytest.approx(2999)
 
-    def test_no_pallet_type_falls_back_to_the_products_per_box_gross_weight(self, container, seed):
+    def test_no_pallet_type_means_gross_equals_net(self, container, seed):
         # No pallet type known for this line (Loose, or Plts typed by hand
         # with no type picked) - pallets is set but pallet_weight_kg isn't,
-        # so Gross falls back to the old Boxes x per-box formula.
+        # so there is no pallet weight to add and Gross = Net. The catalog's
+        # flat per-box gross weight is no longer consulted.
         product = make_product(container, seed, "GVT 600X1200", "69072100", net=26.5, gross=27.0)
         invoice = make_export(
             container, seed, [item_for(product, 100, pallets=20)],
             allocations=[alloc(0, 0, 100)],
         )
         packing_list = packing_list_for(container, seed, invoice)
-        assert packing_list.total_gross_weight == pytest.approx(2700)
+        assert packing_list.total_net_weight == pytest.approx(2650)
+        assert packing_list.total_gross_weight == pytest.approx(2650)
 
     def test_container_identity_is_snapshotted_from_section_11b(self, container, seed):
         product = make_product(container, seed, "GVT 600X1200", "69072100")
@@ -286,16 +290,17 @@ class TestDerivedFigures:
             allocations=[alloc(0, 0, 60), alloc(1, 0, 40)],
         )
         totals = packing_list_for(container, seed, invoice).container_totals
-        # container 1 (index 0 -> sr_no 1): 60 boxes, 12 plts, 60*26.5/27.0 KG
+        # No pallet type on the line, so gross = net per container.
+        # container 1 (index 0 -> sr_no 1): 60 boxes, 12 plts, 60 x 26.5 KG
         assert totals[1]["quantity_boxes"] == pytest.approx(60)
         assert totals[1]["pallets"] == pytest.approx(12)
         assert totals[1]["net_weight_kg"] == pytest.approx(1590)
-        assert totals[1]["gross_weight_kg"] == pytest.approx(1620)
-        # container 2 (index 1 -> sr_no 2): 40 boxes, 8 plts, 40*26.5/27.0 KG
+        assert totals[1]["gross_weight_kg"] == pytest.approx(1590)
+        # container 2 (index 1 -> sr_no 2): 40 boxes, 8 plts, 40 x 26.5 KG
         assert totals[2]["quantity_boxes"] == pytest.approx(40)
         assert totals[2]["pallets"] == pytest.approx(8)
         assert totals[2]["net_weight_kg"] == pytest.approx(1060)
-        assert totals[2]["gross_weight_kg"] == pytest.approx(1080)
+        assert totals[2]["gross_weight_kg"] == pytest.approx(1060)
 
 
 # ==========================================================================

@@ -1651,6 +1651,14 @@ class ProductFolderRepository:
             )
         return [ProductFolder.from_row(r) for r in rows]
 
+    def list_all_for_product(self, product_id: int) -> List[ProductFolder]:
+        """Every folder under one product, flat - the service assembles it
+        into an indented tree for the duplicate-design folder picker."""
+        rows = self.db.query(
+            "SELECT * FROM product_folders WHERE product_id = ? ORDER BY name", (product_id,)
+        )
+        return [ProductFolder.from_row(r) for r in rows]
+
     def list_ancestors(self, folder_id: int) -> List[ProductFolder]:
         """Walks parent_id up to the products top level - powers the breadcrumb trail."""
         trail = []
@@ -1718,6 +1726,17 @@ class DesignRepository:
             "SELECT * FROM designs WHERE product_id = ? ORDER BY design_name", (product_id,)
         )
         return [Design.from_row(r) for r in rows]
+
+    def count_by_photo_path(self, path: str) -> int:
+        """How many designs still reference one uploaded image file. A
+        duplicated design shares its source's photo, so a file may only be
+        unlinked from disk once the last row pointing at it is gone."""
+        row = self.db.query_one(
+            """SELECT COUNT(*) AS n FROM designs
+               WHERE photo_path = ? OR dimension_photo_path = ?""",
+            (path, path),
+        )
+        return row["n"] if row else 0
 
     def list_for_company(self, company_id: int) -> List[Design]:
         """Every design across every product of the company - used as a

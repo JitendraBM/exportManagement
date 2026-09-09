@@ -7,6 +7,7 @@ Image uploads are exercised with a tiny in-memory FileStorage so the
 save/delete-on-disk paths are covered without any real image files.
 """
 
+import dataclasses
 import io
 import os
 
@@ -177,6 +178,67 @@ class TestDesigns:
         designs = container.product_service.list_designs_for_product(product.id, seed.company_id)
         assert {d.design_name for d in designs} == {"A", "B"}
 
+    # ---- duplicating a design ------------------------------------------
+    def test_duplicate_copies_every_field(self, container, seed, product):
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "White Marble", "desc", "12.50",
+            "alt text", upload("tile.png"), upload("dim.png"), surface="GLOSSY")
+        copy = container.product_service.duplicate_design(seed.admin, source.id)
+        assert copy.id != source.id
+        assert copy.design_name == "White Marble (copy)"
+        assert copy.product_id == source.product_id and copy.folder_id is None
+        assert (copy.description, copy.surface, copy.price_usd, copy.alt_text) ==                (source.description, source.surface, source.price_usd, source.alt_text)
+        # the copy shares its source's uploaded files, nothing is re-uploaded
+        assert copy.photo_path == source.photo_path
+        assert copy.dimension_photo_path == source.dimension_photo_path
+
+    def test_duplicate_into_another_product(self, container, seed, product):
+        other_product = container.product_service.create_product(
+            seed.admin, "Slabs", "", "", "", "", "")
+        folder = container.product_service.create_folder(
+            seed.admin, other_product.id, "Glossy", None)
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Design", "", "5", "", None, None)
+        copy = container.product_service.duplicate_design(
+            seed.admin, source.id, product_id=other_product.id, folder_id=folder.id)
+        assert (copy.product_id, copy.folder_id) == (other_product.id, folder.id)
+        # the source stays where it was
+        reloaded = container.product_service.get_design(source.id, seed.company_id)
+        assert reloaded.product_id == product.id and reloaded.folder_id is None
+
+    def test_duplicate_accepts_an_explicit_name(self, container, seed, product):
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Design", "", "", "", None, None)
+        copy = container.product_service.duplicate_design(
+            seed.admin, source.id, design_name="  Design v2  ")
+        assert copy.design_name == "Design v2"
+
+    def test_duplicate_into_a_folder_of_a_different_product_rejected(
+            self, container, seed, product):
+        other_product = container.product_service.create_product(
+            seed.admin, "Slabs", "", "", "", "", "")
+        foreign = container.product_service.create_folder(
+            seed.admin, other_product.id, "Foreign", None)
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Design", "", "", "", None, None)
+        with pytest.raises(ValidationError):
+            container.product_service.duplicate_design(
+                seed.admin, source.id, folder_id=foreign.id)
+
+    def test_duplicate_requires_admin(self, container, seed, product):
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Design", "", "", "", None, None)
+        with pytest.raises(PermissionDeniedError):
+            container.product_service.duplicate_design(seed.employee, source.id)
+
+    def test_duplicate_of_another_companys_design_not_found(self, container, seed, product):
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Design", "", "", "", None, None)
+        other = container.tenant_repo.create("Other", "other")
+        other_admin = dataclasses.replace(seed.admin, company_id=other.id)
+        with pytest.raises(NotFoundError):
+            container.product_service.duplicate_design(other_admin, source.id)
+
     def test_design_from_another_company_not_found(self, container, seed, product):
         d = container.product_service.create_design(
             seed.admin, product.id, None, "Mine", "", "", "", None, None)
@@ -230,6 +292,45 @@ class TestDesignImages:
         reloaded = container.product_service.get_design(d.id, seed.company_id)
         assert os.path.exists(os.path.join(tmp_config.PRODUCT_UPLOAD_FOLDER,
                                            os.path.basename(reloaded.photo_path)))
+
+    def test_deleting_a_duplicate_keeps_the_shared_photo(self, container, seed, product, tmp_config):
+        """A duplicate points at its source's file - the file may only go
+        once the last design referencing it is gone."""
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Shared", "", "", "", upload("x.png"), None)
+        copy = container.product_service.duplicate_design(seed.admin, source.id)
+        on_disk = os.path.join(tmp_config.PRODUCT_UPLOAD_FOLDER,
+                               os.path.basename(source.photo_path))
+
+        container.product_service.delete_design(seed.admin, copy.id)
+        assert os.path.exists(on_disk)  # the source still shows it
+        container.product_service.delete_design(seed.admin, source.id)
+        assert not os.path.exists(on_disk)
+
+    def test_replacing_a_shared_photo_keeps_the_others_file(self, container, seed, product, tmp_config):
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Shared", "", "", "", upload("x.png"), None)
+        container.product_service.duplicate_design(seed.admin, source.id)
+        on_disk = os.path.join(tmp_config.PRODUCT_UPLOAD_FOLDER,
+                               os.path.basename(source.photo_path))
+        container.product_service.update_design(
+            seed.admin, source.id, "Shared", "", "", "", upload("new.png"), None)
+        assert os.path.exists(on_disk)  # the copy still shows it
+
+    def test_deleting_a_product_keeps_a_photo_shared_with_another_product(
+            self, container, seed, product, tmp_config):
+        other_product = container.product_service.create_product(
+            seed.admin, "Slabs", "", "", "", "", "")
+        source = container.product_service.create_design(
+            seed.admin, product.id, None, "Shared", "", "", "", upload("x.png"), None)
+        container.product_service.duplicate_design(
+            seed.admin, source.id, product_id=other_product.id)
+        on_disk = os.path.join(tmp_config.PRODUCT_UPLOAD_FOLDER,
+                               os.path.basename(source.photo_path))
+        container.product_service.delete_product(seed.admin, product.id)
+        assert os.path.exists(on_disk)  # the copy under the other product survives
+        container.product_service.delete_product(seed.admin, other_product.id)
+        assert not os.path.exists(on_disk)
 
     def test_uploaded_names_are_collision_proof(self, container, seed, product):
         a = container.product_service.create_design(

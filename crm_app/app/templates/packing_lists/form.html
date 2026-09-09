@@ -89,7 +89,6 @@
       {% set pm = product_map.get(first.product_id | int) if first.product_id else None %}
       <div class="product-block" data-alt-qty="{{ (pm.alternate_quantity or '') if pm else '' }}" data-pcs-per-box="{{ (pm.quantity or '') if pm else '' }}"
            data-net-per-box="{{ pm.net_weight_kg if pm and pm.net_weight_kg is not none else '' }}"
-           data-gross-per-box="{{ pm.gross_weight_kg if pm and pm.gross_weight_kg is not none else '' }}"
            data-pallet-types="{{ (pallet_types_map.get(first.product_id | int, []) if first.product_id else []) | tojson | forceescape }}"
            data-box-per-pallet="{{ first.box_per_pallet or '' }}">
         <div class="product-block-header">
@@ -150,6 +149,7 @@
                   <input type="hidden" name="item_product_name[]" class="js-mirror-product-name" value="{{ item.product_name }}">
                   <input type="hidden" name="item_hsn_code[]" class="js-mirror-hsn" value="{{ item.hsn_code or '' }}">
                   <input type="hidden" name="item_box_per_pallet[]" class="js-mirror-box-per-pallet" value="{{ item.box_per_pallet or '' }}">
+                  <input type="hidden" name="item_pallet_weight_kg[]" class="js-mirror-pallet-weight" value="">
                   <input type="hidden" name="item_unit[]" class="js-mirror-unit" value="{{ item.unit or 'SQM' }}">
                 </td>
                 <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" required value="{{ item.quantity_boxes or '' }}"></td>
@@ -317,6 +317,7 @@
         <input type="hidden" name="item_product_name[]" class="js-mirror-product-name">
         <input type="hidden" name="item_hsn_code[]" class="js-mirror-hsn">
         <input type="hidden" name="item_box_per_pallet[]" class="js-mirror-box-per-pallet">
+        <input type="hidden" name="item_pallet_weight_kg[]" class="js-mirror-pallet-weight">
         <input type="hidden" name="item_unit[]" class="js-mirror-unit">
       </td>
       <td><input type="number" step="0.01" name="item_quantity_boxes[]" class="js-boxes" required></td>
@@ -359,10 +360,17 @@
   // receives a plain box_per_pallet number and the printed PDF is
   // unchanged - pallet type names never leave the edit form.
   function mirrorProductFields(block, row) {
+    const palletSel = block.querySelector('.js-pallet-type');
+    const palletOpt = palletSel.selectedOptions[0];
     row.querySelector('.js-mirror-product-id').value = block.querySelector('.js-product-id').value;
     row.querySelector('.js-mirror-product-name').value = block.querySelector('.js-product-name').value;
     row.querySelector('.js-mirror-hsn').value = block.querySelector('.js-hsn').value;
-    row.querySelector('.js-mirror-box-per-pallet').value = block.querySelector('.js-pallet-type').value;
+    row.querySelector('.js-mirror-box-per-pallet').value = palletSel.value;
+    // The selected pallet type's own weight_kg, mirrored per row so the
+    // backend's Gross = Net + Plts x this can run without needing the pallet
+    // type name - blank for "Loose" (no pallets).
+    row.querySelector('.js-mirror-pallet-weight').value =
+      (palletSel.value !== '' && palletOpt) ? (palletOpt.dataset.weightKg || '') : '';
     row.querySelector('.js-mirror-unit').value = block.querySelector('.js-unit').value;
   }
 
@@ -382,7 +390,9 @@
     (types || []).forEach((t) => {
       let label = `${t.name} — ${t.boxes_per_pallet} boxes/plt`;
       if (t.alt_qty_per_pallet) label += ` (${t.alt_qty_per_pallet} ${unit})`;
-      sel.appendChild(new Option(label, String(t.boxes_per_pallet)));
+      const opt = new Option(label, String(t.boxes_per_pallet));
+      opt.dataset.weightKg = t.weight_kg ?? '';
+      sel.appendChild(opt);
     });
     const want = parseFloat(selectedBoxes) || 0;
     if (want) {
@@ -405,11 +415,15 @@
   function packInfo(block) {
     const desc = block.querySelector('.js-product-name').value || '';
     const m = desc.match(/([\d.]+)\s*PCS?\s*=\s*([\d.]+)\s*(SQM|LM)/i);
+    const palletSel = block.querySelector('.js-pallet-type');
+    const palletOpt = palletSel.selectedOptions[0];
     return {
       pcsPerBox: parseFloat(block.dataset.pcsPerBox) || (m ? parseFloat(m[1]) : 0),
       qtyPerBox: parseFloat(block.dataset.altQty) || (m ? parseFloat(m[2]) : 0),
       netPerBox: parseFloat(block.dataset.netPerBox) || 0,
-      grossPerBox: parseFloat(block.dataset.grossPerBox) || 0,
+      // Weight of one pallet of the selected named type (0 for "Loose").
+      palletWeightKg: (palletSel.value !== '' && palletOpt)
+        ? (parseFloat(palletOpt.dataset.weightKg) || 0) : 0,
     };
   }
 
@@ -434,16 +448,25 @@
   }
 
   function recalcQtyPcs(block, row, onlyIfEmpty) {
+    const round2 = (n) => Math.round(n * 100) / 100;
     const boxes = parseFloat(row.querySelector('.js-boxes').value) || 0;
-    const { pcsPerBox, qtyPerBox, netPerBox, grossPerBox } = packInfo(block);
+    const { pcsPerBox, qtyPerBox, netPerBox, palletWeightKg } = packInfo(block);
     const fill = (selector, value) => {
       const el = row.querySelector(selector);
       if (!onlyIfEmpty || !el.value) el.value = value;
     };
     if (boxes && pcsPerBox) fill('.js-pcs', +(boxes * pcsPerBox).toFixed(2));
     if (boxes && qtyPerBox) fill('.js-qty', (boxes * qtyPerBox).toFixed(2));
-    if (boxes && netPerBox) fill('.js-net', (boxes * netPerBox).toFixed(2));
-    if (boxes && grossPerBox) fill('.js-gross', (boxes * grossPerBox).toFixed(2));
+    if (boxes && netPerBox) {
+      const net = round2(boxes * netPerBox);
+      fill('.js-net', net.toFixed(2));
+      // Gross = Net + Plts x the selected pallet type's own weight; a "Loose"
+      // line has no pallet weight, so its gross is simply its net. The old
+      // flat per-box gross weight from the catalog is no longer used.
+      const pallets = parseFloat(row.querySelector('.js-pallets').value) || 0;
+      const gross = (palletWeightKg && pallets) ? round2(net + pallets * palletWeightKg) : net;
+      fill('.js-gross', gross.toFixed(2));
+    }
   }
 
   // The row calculates from whichever of Boxes / Pallets was just filled
@@ -647,7 +670,6 @@
     activeBlock.dataset.altQty = parseFloat(p.alternate_quantity) || '';
     activeBlock.dataset.pcsPerBox = parseFloat(p.quantity) || '';
     activeBlock.dataset.netPerBox = p.net_weight_kg || '';
-    activeBlock.dataset.grossPerBox = p.gross_weight_kg || '';
     populatePalletOptions(activeBlock, p.pallet_types || [], null);
     mirrorProductFieldsToAllDesigns(activeBlock);
     activeBlock.querySelectorAll('.design-row').forEach((row) => recalcRow(row));
@@ -786,6 +808,9 @@
     let types = [];
     try { types = JSON.parse(block.dataset.palletTypes || '[]'); } catch (e) {}
     populatePalletOptions(block, types, block.dataset.boxPerPallet);
+    // Re-mirror so each row's hidden pallet-weight matches the re-selected
+    // pallet type before the per-row derivation runs.
+    mirrorProductFieldsToAllDesigns(block);
     block.querySelectorAll('.design-row').forEach((row) => recalcRow(row, null, true));
   });
   renumber();
