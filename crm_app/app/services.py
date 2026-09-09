@@ -3971,6 +3971,11 @@ class JobWorkService:
                 entry = invoice_quantities_by_design.get(design_key)
             if entry:
                 source_quantity = entry["quantity_boxes"]
+                # Jobed Qty is the packing list's BOX count, so the line's
+                # unit must be the packing list's own unit (BOX), not the To
+                # Product's measured unit (MTR/SQM) - otherwise "15" boxes
+                # reads as "15 MTR".
+                unit = entry.get("quantity_unit") or unit
 
             converted_quantity = round(source_quantity / conversion_value, 2)
             extra_quantity = round(converted_quantity * extra_percent / 100, 2)
