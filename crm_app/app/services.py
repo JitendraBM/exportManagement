@@ -8309,13 +8309,18 @@ class PackingPlanningService:
                  purchase_order_repo: PurchaseOrderRepository,
                  production_repo: PurchaseOrderProductionRepository,
                  product_repo: ProductRepository,
-                 pallet_type_repo: ProductPalletTypeRepository):
+                 pallet_type_repo: ProductPalletTypeRepository,
+                 job_in_repo: JobInRepository):
         self.packing_planning_repo = packing_planning_repo
         self.proforma_invoice_repo = proforma_invoice_repo
         self.purchase_order_repo = purchase_order_repo
         self.production_repo = production_repo
         self.product_repo = product_repo
         self.pallet_type_repo = pallet_type_repo
+        # A second, parallel source of goods lines: what a JOB IN reports came
+        # back from the manufacturer. Jobbed goods never touch a purchase
+        # order's production batches, so without this they can't be packed.
+        self.job_in_repo = job_in_repo
 
     # ---- reads --------------------------------------------------
     def get(self, packing_planning_id: int, company_id: int) -> PackingPlanning:
@@ -8451,6 +8456,96 @@ class PackingPlanningService:
             "packing_types": self.packing_types_for_items(company_id, items),
         }
 
+    # ---- loading products from JOB INS --------------------------------
+    def _items_for_job_in(self, job_in: JobIn) -> List[PackingPlanningItem]:
+        """One line per design a job in reports came back, `sr_no` left at 0
+        for the caller to number.
+
+        A job in is the only record of what a manufacturer actually returned
+        - it is typed at the door, not derived - so its own line quantities
+        are what there is to pack. There is no batch number or manufacturing
+        date: those belong to a fired production batch, and a job in is not
+        one. `proforma_invoice_id` stays NULL - a job-in row is keyed to its
+        job in, not to an invoice - so its labels simply carry no proforma
+        number, the same as a manual leftover unit's would."""
+        items: List[PackingPlanningItem] = []
+        for line in job_in.items:
+            if (line.quantity_boxes or 0) <= 0:
+                continue
+            items.append(PackingPlanningItem(
+                id=None, packing_planning_id=None, sr_no=0,
+                product_name=line.product_name,
+                job_in_id=job_in.id,
+                product_id=line.product_id,
+                design_id=line.design_id, design_name=line.design_name,
+                batch_number=None, production_date=None,
+                ready_quantity=line.quantity_boxes or 0,
+                quantity_unit=line.quantity_unit or "BOX",
+            ))
+        return items
+
+    def job_ins_for_proformas(self, proforma_ids: list, company_id: int) -> List[dict]:
+        """The job ins whose returned goods trace back to the ticked proforma
+        invoices, each with a count/ready-quantity summary - the same shape
+        `purchase_orders_for_proformas` returns, so the form's picker renders
+        it the same way.
+
+        Scoped through the job-work chain (see
+        JobInRepository.list_for_proformas); re-fetched one by one because
+        that list returns headers only and the summary needs the line
+        quantities."""
+        rows = []
+        for header in self.job_in_repo.list_for_proformas(proforma_ids, company_id):
+            job_in = self.job_in_repo.get_by_id(header.id) or header
+            if job_in.company_id != company_id:
+                continue
+            ready_totals: dict = {}
+            line_count = 0
+            for line in job_in.items:
+                qty = line.quantity_boxes or 0
+                if qty <= 0:
+                    continue
+                line_count += 1
+                unit = line.quantity_unit or "BOX"
+                ready_totals[unit] = round(ready_totals.get(unit, 0) + qty, 3)
+            rows.append({
+                "id": job_in.id,
+                "stock_inward_no": job_in.stock_inward_no,
+                "stock_inward_date": job_in.stock_inward_date,
+                "delivery_challan_no": job_in.delivery_challan_no,
+                "line_count": line_count,
+                "ready_totals": ready_totals,
+            })
+        return rows
+
+    def build_prefill_from_job_ins(self, job_in_ids: list, company_id: int) -> dict:
+        """The returned-goods lines of exactly the job ins ticked in the
+        form's "Job ins" card, auto-filled. Numbered from 1 here; the form
+        APPENDS these to whatever purchase-order rows are already loaded and
+        renumbers the whole table itself."""
+        job_ins = []
+        for jid in dict.fromkeys(job_in_ids or []):
+            try:
+                job_in = self.job_in_repo.get_by_id(int(jid))
+            except (TypeError, ValueError):
+                continue
+            # A crafted id can never pull another company's job in in - same
+            # guard build_prefill_from_purchase_orders uses for orders.
+            if job_in and job_in.company_id == company_id:
+                job_ins.append(job_in)
+
+        items: List[PackingPlanningItem] = []
+        for job_in in job_ins:
+            items.extend(self._items_for_job_in(job_in))
+        for i, item in enumerate(items, start=1):
+            item.sr_no = i
+
+        self.auto_fill(company_id, items)
+        return {
+            "items": [dataclasses.asdict(i) for i in items],
+            "packing_types": self.packing_types_for_items(company_id, items),
+        }
+
     def packing_types_for_items(self, company_id: int, items: List[PackingPlanningItem]) -> dict:
         """What each row's packing-type dropdown offers, scoped to the
         products these batches actually mention. Split by unit_kind exactly
@@ -8559,6 +8654,7 @@ class PackingPlanningService:
                 purchase_order_id=self._optional_int(r.get("purchase_order_id")),
                 po_number=(r.get("po_number") or "").strip() or None,
                 purchase_order_item_id=self._optional_int(r.get("purchase_order_item_id")),
+                job_in_id=self._optional_int(r.get("job_in_id")),
                 product_id=self._optional_int(r.get("product_id")),
                 design_id=self._optional_int(r.get("design_id")),
                 design_name=(r.get("design_name") or "").strip() or None,
@@ -8904,10 +9000,11 @@ class LoadingPlanningService:
     since one container load routinely draws on more than one packing run -
     and does the one thing left: assignment.
 
-    Loading narrows in three steps, the same shape Packing Planning uses:
-    proforma invoices -> their purchase orders -> the packing plannings
-    covering those orders. Each checkpoint exists because the set below it is
-    rarely wanted whole.
+    Loading narrows in two steps: tick the reference proforma invoices, then
+    tick which of the packing plannings covering them to load. There is no
+    purchase-order checkpoint between - unlike Packing Planning, which picks
+    which orders to draw batches from, this document picks packing runs, and
+    a run already names the orders it holds.
 
     Two rules follow from that and are worth stating, because both are
     deliberate:
@@ -8925,18 +9022,12 @@ class LoadingPlanningService:
 
     def __init__(self, loading_planning_repo: LoadingPlanningRepository,
                  packing_planning_repo: PackingPlanningRepository,
-                 packing_planning_service: "PackingPlanningService",
                  proforma_invoice_repo: ProformaInvoiceRepository,
                  booking_detail_repo: BookingDetailRepository,
                  product_repo: ProductRepository,
                  pallet_type_repo: ProductPalletTypeRepository):
         self.loading_planning_repo = loading_planning_repo
         self.packing_planning_repo = packing_planning_repo
-        # The only service-on-service dependency here, and a deliberate one:
-        # step 2 asks the same PI -> purchase orders question Packing Planning
-        # already answers, and reimplementing that walk would be a second copy
-        # to keep in step.
-        self.packing_planning_service = packing_planning_service
         self.proforma_invoice_repo = proforma_invoice_repo
         self.booking_detail_repo = booking_detail_repo
         self.product_repo = product_repo
@@ -8968,30 +9059,18 @@ class LoadingPlanningService:
             raise NotFoundError(f"Packing planning #{packing_planning_id} not found.")
         return plan
 
-    def purchase_orders_for_proformas(self, proforma_ids: list, company_id: int) -> List[dict]:
-        """Step 2 of loading: every purchase order the ticked PIs pulled in.
+    def packing_plannings_for_proformas(self, proforma_ids: list, company_id: int) -> List[dict]:
+        """Step 2 of loading: the packing plannings covering the ticked
+        proforma invoices, each with the purchase orders it holds batches
+        for.
 
-        Delegated to PackingPlanningService, which asks exactly the same
-        question one document earlier - narrowing a PI to the orders under it
-        is the same operation whether the answer feeds batches or packings,
-        and two copies of that walk would be two things to keep in step."""
-        return self.packing_planning_service.purchase_orders_for_proformas(proforma_ids, company_id)
-
-    def packing_plannings_for_purchase_orders(self, purchase_order_ids: list, company_id: int) -> List[dict]:
-        """Step 3 of loading: the packing plannings covering the ticked
-        orders, each with the orders it actually holds batches for.
-
-        The checkpoint matters because the relationship runs both ways - an
-        order's goods are packed across several runs on different days, and a
-        run covers several orders - so neither "the plans for this order" nor
-        "the orders in this plan" is a set the operator wants whole."""
-        ids = []
-        for value in purchase_order_ids or []:
-            try:
-                ids.append(int(value))
-            except (TypeError, ValueError):
-                continue
-        return self.packing_planning_repo.list_for_purchase_orders(company_id, ids)
+        Straight from the PIs, with no purchase-order checkpoint between:
+        unlike a packing planning - which picks WHICH orders to pull batches
+        from - a loading plan picks packing runs, already-numbered pallets
+        that name their own orders. Narrowing by order first only asked the
+        operator the same question twice, and it also hid every plan packed
+        out of JOB IN returns, whose lines have no purchase order at all."""
+        return self.packing_planning_repo.list_for_proformas(company_id, proforma_ids)
 
     def build_prefill_from_packing_plannings(self, packing_planning_ids: list, company_id: int) -> dict:
         """Import the ticked packing plannings, merged into one document.

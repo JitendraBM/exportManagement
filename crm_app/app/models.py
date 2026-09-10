@@ -3754,6 +3754,47 @@ class LoadingPlanning:
                       key=lambda p: p.packing_no)
 
     @staticmethod
+    def _packing_signature(packing: LoadingPlanningPacking) -> tuple:
+        """What makes two packings the same line on paper. Contents are sorted
+        so the order they happen to sit in never splits a run."""
+        contents = tuple(sorted((row.get("item_sr_no"), row.get("quantity_boxes"))
+                                for row in packing.contents))
+        return (packing.packing_unit_label, packing.is_manual, packing.packing_type_name,
+                packing.tare_weight_kg, packing.packing_planning_number, contents)
+
+    def packing_groups_for_container(self, container_sr_no, items_by_sr=None) -> List[dict]:
+        """The same packings, collapsed into runs of identical ones so a
+        container of twenty pallets of one batch prints as one line.
+
+        A run must be CONSECUTIVE in packing-no order, so `first`..`last`
+        really does bound it and nothing else falls in between - the sheet is
+        read against physical labels, and a range that skipped a pallet would
+        send the loading bay looking for the wrong thing.
+
+        Mirrors packingGroups() in the loading planning form."""
+        by_sr = self.items_by_sr if items_by_sr is None else items_by_sr
+        groups: List[dict] = []
+        previous = None
+        for packing in self.packings_for_container(container_sr_no):
+            signature = self._packing_signature(packing)
+            if not groups or signature != previous:
+                groups.append({"packings": [packing]})
+            else:
+                groups[-1]["packings"].append(packing)
+            previous = signature
+        for group in groups:
+            members = group["packings"]
+            group.update({
+                "first": members[0],
+                "last": members[-1],
+                "count": len(members),
+                "boxes": sum(p.packed_boxes for p in members),
+                "net_weight_kg": sum(p.net_weight_kg(by_sr) for p in members),
+                "gross_weight_kg": sum(p.gross_weight_kg(by_sr) for p in members),
+            })
+        return groups
+
+    @staticmethod
     def from_row(row) -> "LoadingPlanning":
         keys = row.keys()
         return LoadingPlanning(
@@ -3797,6 +3838,11 @@ class PackingPlanningItem:
     purchase_order_id: Optional[int] = None
     po_number: Optional[str] = None
     purchase_order_item_id: Optional[int] = None
+    # Set instead of the purchase-order trio when the row was loaded from a
+    # JOB IN's returned goods rather than a purchase order's production
+    # batches. A job-in row carries no batch number or manufacturing date -
+    # those exist only for a fired production batch.
+    job_in_id: Optional[int] = None
     product_id: Optional[int] = None
     design_id: Optional[int] = None
     design_name: Optional[str] = None
@@ -3863,6 +3909,7 @@ class PackingPlanningItem:
             purchase_order_id=row["purchase_order_id"],
             po_number=row["po_number"],
             purchase_order_item_id=row["purchase_order_item_id"],
+            job_in_id=row["job_in_id"] if "job_in_id" in row.keys() else None,
             product_id=row["product_id"],
             design_id=row["design_id"],
             design_name=row["design_name"],

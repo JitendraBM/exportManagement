@@ -7,10 +7,9 @@ into whole numbered pallets and cartons and minted a permanent label id for
 each, so the behaviours worth pinning down are all about IMPORT and
 ASSIGNMENT:
 
-  - loading narrows in three steps, the same shape Packing Planning uses:
-    proforma invoices -> their purchase orders -> the packing plannings
-    covering those orders. Each checkpoint matters because the set below it
-    is rarely wanted whole.
+  - loading narrows in two steps: proforma invoices -> the packing plannings
+    covering them. No purchase-order checkpoint in between, because this
+    document picks packing runs and a run already names its own orders.
 
   - SEVERAL packing plannings merge into one document, because one container
     load draws on more than one packing run. Each numbers its own batches and
@@ -279,38 +278,54 @@ def test_import_is_company_scoped(container, seed, tiles):
 
 
 # --------------------------------------------------------------------------
-# The three-step narrowing: PIs -> their POs -> the packing plannings
+# The two-step narrowing: PIs -> the packing plannings covering them
 # --------------------------------------------------------------------------
-def test_step_two_lists_the_orders_under_the_ticked_proformas(container, seed, tiles, hardware):
-    rows = svc(container).purchase_orders_for_proformas(
-        [tiles["pi"].id, hardware["pi"].id], seed.company_id)
-
-    assert sorted(r["po_number"] for r in rows) == ["PO20260827001", "PO20260827002"]
-    assert all(r["batch_count"] > 0 for r in rows)
-
-
-def test_step_three_lists_only_the_plans_covering_the_ticked_orders(container, seed, tiles, hardware):
-    """The checkpoint that matters: two orders packed on two separate runs,
-    and ticking one order must not offer the other's run."""
+def test_step_two_lists_only_the_plans_covering_the_ticked_proformas(container, seed, tiles, hardware):
+    """The checkpoint that matters: two PIs packed on two separate runs, and
+    ticking one PI must not offer the other's run."""
     tile_plan = packing_plan(container, seed, tiles)
     hw_plan = packing_plan(container, seed, hardware, date="2026-08-31")
 
-    only_tiles = svc(container).packing_plannings_for_purchase_orders(
-        [tiles["po"].id], seed.company_id)
+    only_tiles = svc(container).packing_plannings_for_proformas(
+        [tiles["pi"].id], seed.company_id)
     assert [r["packing_planning_number"] for r in only_tiles] == [tile_plan.packing_planning_number]
     assert only_tiles[0]["po_numbers"] == ["PO20260827001"]
+    assert only_tiles[0]["batch_count"] > 0
 
-    both = svc(container).packing_plannings_for_purchase_orders(
-        [tiles["po"].id, hardware["po"].id], seed.company_id)
+    both = svc(container).packing_plannings_for_proformas(
+        [tiles["pi"].id, hardware["pi"].id], seed.company_id)
     assert {r["packing_planning_number"] for r in both} == {
         tile_plan.packing_planning_number, hw_plan.packing_planning_number}
 
 
-def test_step_three_is_company_scoped_and_empty_without_orders(container, seed, tiles):
+def test_step_two_lists_a_plan_packed_out_of_job_in_returns(container, seed, tiles):
+    """The regression that matters: a JOB IN row carries neither a purchase
+    order nor a proforma invoice - it is keyed to its job in - so a plan
+    packed wholly out of returned job-work goods is reachable only through
+    the plan's OWN proforma links. Walking PI -> POs -> items hid it."""
+    pp = container.packing_planning_service
+    rows = pp.build_prefill_from_purchase_orders([tiles["po"].id], seed.company_id)["items"]
+    items = []
+    for row in pp._clean_items(rows):
+        form = _as_form(row)
+        # Exactly what the job-in loader leaves behind on a line.
+        form.update({"purchase_order_id": "", "po_number": "",
+                     "purchase_order_item_id": "", "proforma_invoice_id": ""})
+        items.append(form)
+    plan = pp.create(current_user=seed.admin, fields={"packing_planning_date": "2026-09-01"},
+                     proforma_ids=[tiles["pi"].id], items=items, manual_units=[])
+
+    listed = svc(container).packing_plannings_for_proformas([tiles["pi"].id], seed.company_id)
+    row = next(r for r in listed if r["packing_planning_number"] == plan.packing_planning_number)
+    assert row["po_numbers"] == []          # nothing to name, and that is fine
+    assert row["batch_count"] > 0
+
+
+def test_step_two_is_company_scoped_and_empty_without_proformas(container, seed, tiles):
     packing_plan(container, seed, tiles)
-    assert svc(container).packing_plannings_for_purchase_orders([], seed.company_id) == []
-    assert svc(container).packing_plannings_for_purchase_orders(
-        [tiles["po"].id], seed.company_id + 999) == []
+    assert svc(container).packing_plannings_for_proformas([], seed.company_id) == []
+    assert svc(container).packing_plannings_for_proformas(
+        [tiles["pi"].id], seed.company_id + 999) == []
 
 
 # --------------------------------------------------------------------------
