@@ -200,13 +200,12 @@ class ServiceContainer:
         self.packing_planning_service = PackingPlanningService(
             self.packing_planning_repo, self.proforma_invoice_repo, self.purchase_order_repo,
             self.purchase_order_production_repo, self.product_repo, self.product_pallet_type_repo,
+            self.job_in_repo,
         )
-        # Loading Planning. Wired after packing_planning_SERVICE, not just its
-        # repo: a loading plan's only source of goods and packings is packing
-        # plannings, and its step-2 picker asks the same PI -> purchase orders
-        # question that service already answers.
+        # Loading Planning: a loading plan's only source of goods and packings
+        # is packing plannings, so it reads their repo directly.
         self.loading_planning_service = LoadingPlanningService(
-            self.loading_planning_repo, self.packing_planning_repo, self.packing_planning_service,
+            self.loading_planning_repo, self.packing_planning_repo,
             self.proforma_invoice_repo, self.booking_detail_repo, self.product_repo,
             self.product_pallet_type_repo,
         )

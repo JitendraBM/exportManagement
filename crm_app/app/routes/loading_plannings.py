@@ -9,13 +9,13 @@ numbered pallets and cartons and minted a permanent label id for each, so by
 the time a loading plan is made those packings exist on the floor with labels
 stuck to them.
 
-Loading is three explicit steps, the same narrowing packing_plannings uses:
-tick the reference proforma invoices, list the purchase orders they pulled in
-(`/api/purchase-orders`) and tick those, then list the packing plannings
-covering those orders (`/api/packing-plannings`) and tick which to load
-(`/api/prefill`). SEVERAL load at once, because one container load routinely
-draws on more than one packing run. That leaves the operator one job: putting
-each numbered packing in a container.
+Loading is two explicit steps: tick the reference proforma invoices, then list
+the packing plannings covering them (`/api/packing-plannings`) and tick which
+to load (`/api/prefill`). SEVERAL load at once, because one container load
+routinely draws on more than one packing run. There is no purchase-order
+checkpoint in between - a packing planning is already a chosen set of numbered
+pallets naming its own orders. That leaves the operator one job: putting each
+numbered packing in a container.
 
 Reads are open to anyone signed in, writes are admin-only - the same split
 Packing Planning and Booking Detail use, and for the same reason: this is the
@@ -125,26 +125,18 @@ def _id_list(name):
     return [p for p in (request.args.get(name, "") or "").split(",") if p.strip()]
 
 
-@loading_plannings_bp.route("/api/purchase-orders")
-@login_required
-def loading_planning_purchase_orders():
-    """Step 2: the purchase orders the ticked proforma invoices pulled in."""
-    return jsonify({"purchase_orders": current_app.container.loading_planning_service
-                    .purchase_orders_for_proformas(_id_list("proforma_invoice_ids"), g.user.company_id)})
-
-
 @loading_plannings_bp.route("/api/packing-plannings")
 @login_required
 def loading_planning_packing_plannings():
-    """Step 3: the packing plannings covering the ticked purchase orders."""
+    """Step 2: the packing plannings covering the ticked proforma invoices."""
     return jsonify({"packing_plannings": current_app.container.loading_planning_service
-                    .packing_plannings_for_purchase_orders(_id_list("purchase_order_ids"), g.user.company_id)})
+                    .packing_plannings_for_proformas(_id_list("proforma_invoice_ids"), g.user.company_id)})
 
 
 @loading_plannings_bp.route("/api/prefill")
 @login_required
 def loading_planning_prefill():
-    """Step 4: goods and packings for the ticked packing plannings, merged.
+    """Step 3: goods and packings for the ticked packing plannings, merged.
 
     Overwrites only what those documents supply, leaving the loading plan's
     own number/date and its booking untouched, the same rule every other

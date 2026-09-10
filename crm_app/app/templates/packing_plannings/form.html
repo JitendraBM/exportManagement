@@ -85,6 +85,31 @@
     </p>
   </div>
 
+  {# ---- Job ins --------------------------------------------------------
+     A second, parallel source. Jobbed goods never touch a purchase order's
+     production batches - what came back from the manufacturer is typed onto
+     a JOB IN - so this lists the job ins tied to the ticked PIs (through
+     their job works) and loads their returned designs into the table
+     alongside any purchase-order batches. #}
+  <div class="card">
+    <div class="card-header"><h3>Job ins</h3></div>
+    <div class="field">
+      <label>Job ins to load returned products from <span class="text-soft text-sm">(tick which of these this packing run wants)</span></label>
+      <div id="jobin-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;">
+        <div class="text-soft text-sm" id="jobin-picker-empty">List job ins for selected PIs above first.</div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="list-jobins-btn">↻ List job ins for selected PIs</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="load-from-jobins-btn">↻ Load products from selected job ins</button>
+    <p class="hint">
+      One line per design a ticked job in reports came back, with the packing type and whole-unit count filled in
+      for you. Job-in rows have <strong>no batch number or manufacturing date</strong> &mdash; those belong to a
+      fired production batch, not a return &mdash; and nothing requires them. These rows are <strong>added</strong>
+      to whatever purchase-order batches are already loaded; the table is renumbered and any manual grouping is
+      cleared, the same as loading purchase orders.
+    </p>
+  </div>
+
   <div class="card">
     <div class="card-header"><h3>Document</h3></div>
     <div class="form-row">
@@ -203,6 +228,7 @@
 <script type="application/json" id="pp-initial-units">{{ manual_units_json | safe }}</script>
 <script type="application/json" id="pp-initial-types">{{ packing_types_json | safe }}</script>
 <script type="application/json" id="pp-initial-pos">{{ purchase_orders_json | safe }}</script>
+<script type="application/json" id="pp-initial-jobins">{{ job_ins_json | safe }}</script>
 
 <script>
 (function () {
@@ -221,6 +247,7 @@
   var units = readJSON("pp-initial-units", []);
   var packingTypes = readJSON("pp-initial-types", {});
   var purchaseOrders = readJSON("pp-initial-pos", []);
+  var jobIns = readJSON("pp-initial-jobins", []);
 
   function readJSON(id, fallback) {
     var el = document.getElementById(id);
@@ -241,6 +268,15 @@
   function hidden(name, value) {
     return '<input type="hidden" name="' + name + '" value="' +
       esc(value === null || value === undefined ? "" : value) + '">';
+  }
+  var UNIT_LABELS = ["PLT", "CTN", "BOX", "BAG", "PCS", "SET"];
+  function unitLabelOptions(current) {
+    var cur = current || "PLT";
+    var list = UNIT_LABELS.slice();
+    if (list.indexOf(cur) === -1) list.push(cur);   // keep a legacy/custom value
+    return list.map(function (u) {
+      return '<option value="' + esc(u) + '"' + (u === cur ? ' selected' : '') + '>' + esc(u) + '</option>';
+    }).join('');
   }
   function itemBySr(sr) {
     for (var i = 0; i < items.length; i++) { if (num(items[i].sr_no) === num(sr)) return items[i]; }
@@ -329,6 +365,7 @@
           hidden("item_purchase_order_id[]", it.purchase_order_id) +
           hidden("item_po_number[]", it.po_number) +
           hidden("item_purchase_order_item_id[]", it.purchase_order_item_id) +
+          hidden("item_job_in_id[]", it.job_in_id) +
           hidden("item_product_id[]", it.product_id) +
           hidden("item_product_name[]", it.product_name) +
           hidden("item_design_id[]", it.design_id) +
@@ -337,8 +374,7 @@
           hidden("item_production_date[]", it.production_date) +
           hidden("item_ready_quantity[]", ready) +
           hidden("item_quantity_unit[]", it.quantity_unit) +
-          hidden("item_packing_type_name[]", it.packing_type_name) +
-          hidden("item_packing_unit_label[]", it.packing_unit_label) + '</td>' +
+          hidden("item_packing_type_name[]", it.packing_type_name) + '</td>' +
         '<td class="text-sm">' + esc(it.product_name) + '</td>' +
         '<td class="text-sm">' + esc(it.design_name || "—") + '</td>' +
         '<td class="mono text-sm">' + esc(it.batch_number || "—") + '</td>' +
@@ -349,7 +385,10 @@
         '<td class="num"><input type="number" step="any" min="0" class="js-item-cap" data-sr="' + it.sr_no +
           '" name="item_boxes_per_unit[]" value="' + esc(it.boxes_per_unit === null || it.boxes_per_unit === undefined ? "" : it.boxes_per_unit) +
           '" style="max-width:80px;text-align:right;"></td>' +
-        '<td class="num">' + fmt(asPerPl(it), 2) + ' <span class="text-soft text-sm">' + esc(it.packing_unit_label || "") + '</span></td>' +
+        '<td class="num">' + fmt(asPerPl(it), 2) +
+          ' <select class="js-item-unit-label" data-sr="' + it.sr_no +
+          '" name="item_packing_unit_label[]" style="max-width:70px;">' +
+          unitLabelOptions(it.packing_unit_label) + '</select></td>' +
         '<td class="num"><input type="number" step="1" min="0" class="js-item-actual" data-sr="' + it.sr_no +
           '" name="item_actual_packing[]" value="' + esc(parseInt(it.actual_packing, 10) || 0) +
           '" style="max-width:70px;text-align:right;"></td>' +
@@ -428,8 +467,7 @@
           '<input type="number" step="1" min="1" class="js-unit-no" data-idx="' + ui + '" value="' + esc(u.unit_no) + '" style="max-width:80px;">' +
           '<input type="text" class="js-unit-name" data-idx="' + ui + '" value="' + esc(u.packing_type_name || "") + '" placeholder="Type (e.g. Pallet)" style="max-width:140px;">' +
           '<select class="js-unit-label" data-idx="' + ui + '" style="max-width:80px;">' +
-            '<option value="PLT"' + (u.packing_unit_label === "CTN" ? "" : " selected") + '>PLT</option>' +
-            '<option value="CTN"' + (u.packing_unit_label === "CTN" ? " selected" : "") + '>CTN</option>' +
+            unitLabelOptions(u.packing_unit_label) +
           '</select>' +
           '<input type="number" step="any" min="0" class="js-unit-cap" data-idx="' + ui + '" value="' +
             esc(u.capacity_boxes === null || u.capacity_boxes === undefined ? "" : u.capacity_boxes) +
@@ -504,6 +542,38 @@
     pane.innerHTML = html;
   }
 
+  // ---- the job-in picker (a second source, same list->tick->load shape) ---
+  // Like the PO picker it is not part of the items/units render loop and has
+  // nothing for the form to post: only the rows it loads end up on the
+  // document, tagged with item_job_in_id[].
+  function jobinSummary(ji) {
+    var parts = [];
+    Object.keys(ji.ready_totals || {}).forEach(function (unit) {
+      parts.push(fmt(ji.ready_totals[unit], 0) + " " + esc(unit));
+    });
+    var lines = (ji.line_count || 0) + (ji.line_count === 1 ? " design" : " designs");
+    return lines + (parts.length ? " back · " + parts.join(", ") : " back");
+  }
+
+  function renderJobIns() {
+    var pane = document.getElementById("jobin-picker");
+    if (!jobIns.length) {
+      pane.innerHTML = '<div class="text-soft text-sm" id="jobin-picker-empty">List job ins for selected PIs above first.</div>';
+      return;
+    }
+    var html = "";
+    jobIns.forEach(function (ji) {
+      html += '<label class="js-jobin-label" style="display:block;padding:4px 0;cursor:pointer;">' +
+        '<input type="checkbox" class="js-jobin-check" value="' + esc(ji.id) + '"' +
+        (ji.checked !== false ? ' checked' : '') + '>' +
+        ' <strong>' + esc(ji.stock_inward_no) + '</strong> <span class="text-soft">(' + esc(ji.stock_inward_date) + ')</span>' +
+        (ji.delivery_challan_no ? ' <span class="text-soft text-sm">DC ' + esc(ji.delivery_challan_no) + '</span>' : '') +
+        '<br><span class="text-soft text-sm">' + esc(jobinSummary(ji)) + '</span>' +
+        '</label>';
+    });
+    pane.innerHTML = html;
+  }
+
   // ---- render pipeline ---------------------------------------------------
   function renderAll() { renderItems(); renderRemain(); renderUnits(); sync(); }
   function sync() {
@@ -541,7 +611,11 @@
         // old type produced means nothing under a different one.
         it.actual_packing = Math.floor(num(it.ready_quantity) / num(chosen.boxes_per_pallet)) || 0;
       } else if (!t.value) {
-        it.packing_type_id = null; it.packing_type_name = null; it.boxes_per_unit = null; it.actual_packing = 0;
+        // "— none —" = loose: every box is its own unit.
+        it.packing_type_id = null;
+        it.packing_type_name = null;
+        it.boxes_per_unit = 1;
+        it.actual_packing = Math.max(Math.floor(num(it.ready_quantity)), 0);
       }
       renderAll();
     } else if (t.classList.contains("js-item-cap")) {
@@ -550,6 +624,9 @@
       it2.boxes_per_unit = t.value === "" ? null : num(t.value);
       it2.actual_packing = it2.boxes_per_unit ? Math.floor(num(it2.ready_quantity) / it2.boxes_per_unit) : 0;
       renderAll();
+    } else if (t.classList.contains("js-item-unit-label")) {
+      var itUL = itemBySr(t.dataset.sr);
+      if (itUL) { itUL.packing_unit_label = t.value; renderAll(); }
     } else if (t.classList.contains("js-item-actual")) {
       var it3 = itemBySr(t.dataset.sr);
       if (it3) { it3.actual_packing = Math.max(parseInt(t.value, 10) || 0, 0); renderAll(); }
@@ -608,6 +685,10 @@
       listPOs();
     } else if (t.id === "load-from-pos-btn") {
       loadFromPOs();
+    } else if (t.id === "list-jobins-btn") {
+      listJobIns();
+    } else if (t.id === "load-from-jobins-btn") {
+      loadFromJobIns();
     }
   });
 
@@ -682,6 +763,52 @@
       .catch(function () { alert("Could not load batches from the selected purchase orders."); });
   }
 
+  function listJobIns() {
+    // Same first step as listPOs, on the job-work chain instead: which job
+    // ins the ticked PIs' returns trace back to. Touches no goods lines.
+    var ids = [];
+    document.querySelectorAll(".js-pi-check:checked").forEach(function (cb) { ids.push(cb.value); });
+    if (!ids.length) { alert("Tick at least one proforma invoice first."); return; }
+    fetch("{{ url_for('packing_plannings.packing_planning_job_ins') }}?proforma_invoice_ids=" + ids.join(","))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        jobIns = data.job_ins || [];
+        renderJobIns();
+        if (!jobIns.length) {
+          alert("Those proforma invoices have no job ins yet.");
+        }
+      })
+      .catch(function () { alert("Could not list job ins for the selected proforma invoices."); });
+  }
+
+  function loadFromJobIns() {
+    // The returned-goods lines of the ticked job ins, APPENDED to whatever
+    // is already in the table (renderItems renumbers sr_no by position).
+    var ids = [];
+    document.querySelectorAll(".js-jobin-check:checked").forEach(function (cb) { ids.push(cb.value); });
+    if (!ids.length) {
+      alert(jobIns.length ? "Tick at least one job in first."
+                          : "List job ins for selected PIs first.");
+      return;
+    }
+    fetch("{{ url_for('packing_plannings.packing_planning_prefill_job_ins') }}?job_in_ids=" + ids.join(","))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var added = data.items || [];
+        if (!added.length) {
+          alert("Those job ins have no returned product lines.");
+          return;
+        }
+        items = items.concat(added);
+        packingTypes = Object.assign({}, packingTypes, data.packing_types || {});
+        // Manual units referenced the old sr_no numbering, which the append
+        // has just shifted - same reason loadFromPOs clears them.
+        units = [];
+        renderAll();
+      })
+      .catch(function () { alert("Could not load products from the selected job ins."); });
+  }
+
   // ---- buyer filter over the PI picker (same as every other document) -----
   var buyerSelect = document.getElementById("buyer_select");
   if (buyerSelect) {
@@ -697,6 +824,7 @@
 
   document.getElementById("pp-form").addEventListener("submit", sync);
   renderPOs();
+  renderJobIns();
   renderAll();
 })();
 </script>

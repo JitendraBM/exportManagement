@@ -60,7 +60,7 @@ def _extract_items(form) -> list:
     """One line per produced batch. Every column is posted as its own repeated
     field, the same idiom every other line-items form here uses."""
     keys = ("proforma_invoice_id", "purchase_order_id", "po_number", "purchase_order_item_id",
-            "product_id", "product_name", "design_id", "design_name", "batch_number",
+            "job_in_id", "product_id", "product_name", "design_id", "design_name", "batch_number",
             "production_date", "ready_quantity", "quantity_unit", "packing_type_id",
             "packing_type_name", "packing_unit_label", "boxes_per_unit", "actual_packing",
             "packing_no_start")
@@ -120,6 +120,21 @@ def _purchase_orders_json(container, company_id, plan) -> str:
     return json.dumps(rows)
 
 
+def _job_ins_json(container, company_id, plan) -> str:
+    """The job-in equivalent of _purchase_orders_json: seeds the "Job ins"
+    card on an existing document with the job ins it drew rows from,
+    pre-checked, scoped to the plan's own proforma invoices - so opening it
+    for edit shows what was loaded rather than an empty picker."""
+    if not plan:
+        return "[]"
+    service = container.packing_planning_service
+    rows = service.job_ins_for_proformas(plan.proforma_invoice_ids, company_id)
+    used = {i.job_in_id for i in plan.items if i.job_in_id}
+    for row in rows:
+        row["checked"] = row["id"] in used
+    return json.dumps(rows)
+
+
 def _render_form(container, plan, warnings=None, status_code=200):
     """Re-render after a failed POST with exactly what was typed, so nothing
     the operator did is lost - the manual grouping especially, which is the
@@ -135,6 +150,7 @@ def _render_form(container, plan, warnings=None, status_code=200):
         packing_types_json=_packing_types_json(
             container, g.user.company_id, container.packing_planning_service._clean_items(items)),
         purchase_orders_json="[]",
+        job_ins_json="[]",
         selected_proforma_ids=[int(v) for v in request.form.getlist("proforma_invoice_ids[]") if v.isdigit()],
         warnings=warnings or [],
         suggested_number=(plan.packing_planning_number if plan else request.form.get("packing_planning_number")),
@@ -171,6 +187,35 @@ def packing_planning_prefill():
     ids = [p for p in raw.split(",") if p.strip()]
     return jsonify(
         current_app.container.packing_planning_service.build_prefill_from_purchase_orders(ids, g.user.company_id)
+    )
+
+
+@packing_plannings_bp.route("/api/job-ins")
+@login_required
+def packing_planning_job_ins():
+    """The `list job ins for selected PIs` button - the job-in counterpart of
+    packing_planning_purchase_orders. Every job in whose returned goods trace
+    back to the ticked proforma invoices (through their job works), each with
+    a line-count/ready-quantity summary, so the operator can pick which
+    returns this packing run wants."""
+    raw = request.args.get("proforma_invoice_ids", "")
+    ids = [p for p in raw.split(",") if p.strip()]
+    return jsonify({
+        "job_ins": current_app.container.packing_planning_service
+        .job_ins_for_proformas(ids, g.user.company_id)
+    })
+
+
+@packing_plannings_bp.route("/api/prefill-job-ins")
+@login_required
+def packing_planning_prefill_job_ins():
+    """The `load products from selected job ins` button. Arrives auto-filled,
+    same as the purchase-order prefill. The form APPENDS these rows to any
+    purchase-order batch rows already loaded and renumbers the table."""
+    raw = request.args.get("job_in_ids", "")
+    ids = [p for p in raw.split(",") if p.strip()]
+    return jsonify(
+        current_app.container.packing_planning_service.build_prefill_from_job_ins(ids, g.user.company_id)
     )
 
 
@@ -223,6 +268,7 @@ def new_packing_planning():
     return render_template(
         "packing_plannings/form.html", plan=None, form_data=None, items_json="[]",
         manual_units_json="[]", packing_types_json="{}", purchase_orders_json="[]",
+        job_ins_json="[]",
         selected_proforma_ids=[], warnings=[],
         suggested_number=service.next_number(g.user.company_id, today), today=today,
         **_form_context(container, g.user.company_id),
@@ -261,6 +307,7 @@ def edit_packing_planning(packing_planning_id):
         manual_units_json=json.dumps([_unit_json(u) for u in plan.manual_units]),
         packing_types_json=_packing_types_json(container, g.user.company_id, plan.items),
         purchase_orders_json=_purchase_orders_json(container, g.user.company_id, plan),
+        job_ins_json=_job_ins_json(container, g.user.company_id, plan),
         selected_proforma_ids=plan.proforma_invoice_ids,
         warnings=service.packing_warnings(plan),
         suggested_number=plan.packing_planning_number, today=plan.packing_planning_date,
