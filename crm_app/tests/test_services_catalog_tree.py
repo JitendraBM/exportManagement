@@ -378,7 +378,7 @@ class TestCategoryTree:
     def test_foreign_category_id_rejected(self, container, seed):
         other = container.tenant_repo.create("Other", "other")
         other_admin = container.auth_service.create_user(
-            other.id, "oadm", "pw123456", "O", "admin")
+            other.id, "oadm", "pw1234567890", "O", "admin")
         foreign_cat = container.product_service.create_category(other_admin, "Foreign")
         with pytest.raises(NotFoundError):
             container.product_service.create_product(

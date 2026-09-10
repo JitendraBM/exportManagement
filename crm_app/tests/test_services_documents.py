@@ -66,7 +66,7 @@ class TestQuotationBuildItems:
 
     def test_foreign_product_id_is_dropped(self, container, seed):
         other = container.tenant_repo.create("Other", "other")
-        other_admin = container.auth_service.create_user(other.id, "oadmin", "pw123456", "O", "admin")
+        other_admin = container.auth_service.create_user(other.id, "oadmin", "pw12345678", "O", "admin")
         foreign = make_product(container, other_admin)
         items = container.quotation_service._build_items(
             seed.company_id,

@@ -11,6 +11,7 @@
       <button type="button" class="btn-link-danger" id="duplicate-design-close">✕ Close</button>
     </div>
     <form method="POST" id="duplicate-design-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <p class="hint">Copies <strong id="duplicate-design-source">this design</strong> — surface, price, description and both photos — into the product you pick below.</p>
       <div class="field">
         <label for="duplicate-design-name">New design name<span class="required-mark">*</span></label>

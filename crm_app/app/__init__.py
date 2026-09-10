@@ -13,9 +13,15 @@ plus `app/database.py` - routes, services and templates are untouched.
 
 import os
 
-from flask import Flask, g, session, render_template
+from flask import Flask, g, session, render_template, request
+from flask_wtf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
+
+# Module-level so tests and routes can reach it (e.g. @csrf.exempt); wired to
+# the app in create_app via csrf.init_app(app).
+csrf = CSRFProtect()
 from app.database import Database
 from app.repositories import (
     TenantRepository, SqliteUserRepository, SqliteLeadRepository,
@@ -262,6 +268,34 @@ def create_app(config_class=Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # --- refuse to boot a real server on the shipped default secret --------------------------------------------------
+    # A known SECRET_KEY lets anyone forge a signed session cookie. Fine for
+    # local dev / tests (DEBUG or TESTING); a hard stop otherwise.
+    if (
+        app.config.get("SECRET_KEY") == "dev-secret-key-change-me"
+        and not app.debug
+        and not app.config.get("TESTING")
+    ):
+        raise RuntimeError(
+            "SECRET_KEY is still the built-in default. Set a real one in .env "
+            "(python -c \"import secrets; print(secrets.token_hex(32))\") before "
+            "running without DEBUG."
+        )
+
+    # --- trust the reverse proxy's forwarded headers --------------------------------------------------
+    # nginx terminates TLS and forwards over http; without this, request.is_secure
+    # is always False, Secure cookies never get set, and request.remote_addr is
+    # 127.0.0.1 for everyone (which would make the per-IP login throttle useless).
+    # One proxy hop => trust exactly one value of each header.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+    # --- CSRF protection for every POST/PUT/PATCH/DELETE --------------------------------------------------
+    # Templates get {{ csrf_token() }}; forms that extend base.html have the
+    # hidden field injected by a small script in base.html, standalone/print
+    # templates carry it inline, and AJAX writes send it as an X-CSRFToken
+    # header. Honors WTF_CSRF_ENABLED=False, which TestConfig sets.
+    csrf.init_app(app)
+
     # --- database + composition root --------------------------------------------------
     db = Database(config_class.DATABASE_PATH)
     db.init_schema(config_class.SCHEMA_PATH)
@@ -279,6 +313,26 @@ def create_app(config_class=Config) -> Flask:
             session.clear()
             user = None
         g.user = user
+
+    # --- security response headers --------------------------------------------------
+    # Set on every response unless something upstream (nginx) already did. CSP
+    # ships report-only for now - see Config.CONTENT_SECURITY_POLICY.
+    @app.after_request
+    def set_security_headers(response):
+        defaults = {
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+            "Content-Security-Policy-Report-Only": app.config["CONTENT_SECURITY_POLICY"],
+        }
+        # HSTS only makes sense once the connection is actually HTTPS (behind
+        # the proxy, thanks to ProxyFix). Harmless to send always, but this
+        # keeps plain-HTTP local dev clean.
+        if request.is_secure:
+            defaults["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        for name, value in defaults.items():
+            response.headers.setdefault(name, value)
+        return response
 
     # --- make the current user + status constants available in every template --------------------------------------------------
     @app.context_processor
@@ -436,8 +490,17 @@ def create_app(config_class=Config) -> Flask:
     # SECURITY: this traceback page includes an interactive Python console
     # that can execute arbitrary code for anyone who can reach it - only set
     # WERKZEUG_DEBUG=1 while a firewall/VPN restricts access to trusted IPs,
-    # and unset it (then restart) as soon as you're done diagnosing.
-    if os.environ.get("WERKZEUG_DEBUG") == "1":
+    # and unset it (then restart) as soon as you're done diagnosing. As a
+    # backstop against leaving it on by accident on an internet-facing box,
+    # it now ALSO requires WERKZEUG_DEBUG_CONFIRM=1 - two separate env vars
+    # nobody sets without meaning to.
+    if os.environ.get("WERKZEUG_DEBUG") == "1" and os.environ.get("WERKZEUG_DEBUG_CONFIRM") != "1":
+        print(
+            ">>> WERKZEUG_DEBUG=1 is set but WERKZEUG_DEBUG_CONFIRM=1 is NOT - "
+            "refusing to enable the interactive debugger. Set both to proceed. <<<",
+            flush=True,
+        )
+    elif os.environ.get("WERKZEUG_DEBUG") == "1":
         from werkzeug.debug import DebuggedApplication
         app.debug = True
         app.wsgi_app = DebuggedApplication(app.wsgi_app, evalex=True)

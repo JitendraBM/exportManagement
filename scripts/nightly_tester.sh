@@ -33,5 +33,19 @@ else
     echo "FAILURE: Some tests failed!" >> "$LOG_FILE"
 fi
 
+# Security smoke check against staging, if a target is configured. Runs the
+# throttle burst too, since STAGING_URL is by definition not production.
+if [ -n "$STAGING_URL" ]; then
+    echo "Running security probe against $STAGING_URL ..." >> "$LOG_FILE"
+    if ../CRMenv/bin/python "$PROJECT_DIR/scripts/security_probe.py" \
+            --url "$STAGING_URL" --test-throttle >> "$LOG_FILE" 2>&1; then
+        echo "SECURITY PROBE: all checks passed" >> "$LOG_FILE"
+    else
+        echo "SECURITY PROBE: FAILURES - see output above" >> "$LOG_FILE"
+    fi
+else
+    echo "Security probe skipped (set STAGING_URL to enable)" >> "$LOG_FILE"
+fi
+
 echo "Nightly test run completed at $(date)" >> "$LOG_FILE"
 echo "----------------------------------------" >> "$LOG_FILE"

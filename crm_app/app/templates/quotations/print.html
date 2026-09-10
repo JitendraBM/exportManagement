@@ -32,6 +32,7 @@
       <a href="{{ url_for('quotations.edit_quotation', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Edit</a>
       {% if current_user.is_admin %}
       <form method="POST" action="{{ url_for('quotations.duplicate_quotation', quotation_id=quotation.id) }}" onsubmit="return confirmDuplicateWithPassword(this, 'Create a second copy of this quotation?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-ghost btn-sm">⧉ Duplicate</button>
       </form>
       <a href="{{ url_for('quotations.quotation_versions', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Version history</a>
@@ -42,6 +43,7 @@
       <a href="{{ url_for('proforma_invoices.new_proforma_invoice', quotation_id=quotation.id) }}" class="btn btn-ghost btn-sm">Generate Proforma Invoice</a>
       {% endif %}
       <form method="POST" action="{{ url_for('quotations.delete_quotation', quotation_id=quotation.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this quotation? Any documents generated from it will also be deleted.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">Delete</button>
       </form>
       <a href="{{ url_for('quotations.combined_quotation', quotation_id=quotation.id) }}" class="btn btn-primary btn-sm">🖨 Generate combined document</a>

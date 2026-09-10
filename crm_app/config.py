@@ -14,6 +14,7 @@ same code can run in development, testing, or production without edits.
 """
 
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
 # Load variables from a .env file into the process environment, if present.
@@ -28,7 +29,54 @@ class Config:
     scatter os.environ.get() calls throughout the codebase."""
 
     # Flask needs this to sign session cookies. CHANGE THIS IN PRODUCTION.
+    # The literal below is also the sentinel `create_app` refuses to boot on
+    # when DEBUG is off (see app/__init__.py) - a shipped default key means
+    # anyone can forge a session cookie.
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
+
+    # --- session cookie hardening --------------------------------------------------
+    # Secure defaults to ON; a developer running the app over plain HTTP on
+    # localhost sets SESSION_COOKIE_SECURE=false in their .env so the browser
+    # still returns the cookie. Production (behind TLS) leaves it unset.
+    SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    # Sessions become non-permanent-by-default cookies; login() opts each one
+    # in (session.permanent = True) so this lifetime actually applies.
+    PERMANENT_SESSION_LIFETIME = timedelta(hours=12)
+    # url_for(_external=True) built outside a request (there are none today,
+    # but keep it correct) should assume HTTPS.
+    PREFERRED_URL_SCHEME = "https"
+
+    # --- login brute-force limits (see AuthService.authenticate + routes/auth) ----
+    # After this many consecutive failures for one user, the account is locked
+    # for LOGIN_LOCKOUT_MINUTES. A separate per-IP cap (LOGIN_IP_* below)
+    # blunts spraying across many usernames from one host.
+    LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
+    LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
+    LOGIN_IP_MAX_ATTEMPTS = int(os.environ.get("LOGIN_IP_MAX_ATTEMPTS", "20"))
+    LOGIN_IP_WINDOW_SECONDS = int(os.environ.get("LOGIN_IP_WINDOW_SECONDS", "300"))
+
+    # Minimum length for any password the app sets (new user or self-service
+    # change). Kept in one place so both call sites agree.
+    PASSWORD_MIN_LENGTH = int(os.environ.get("PASSWORD_MIN_LENGTH", "10"))
+
+    # Content-Security-Policy. Shipped in report-only mode first (logs
+    # violations in the browser console, breaks nothing) because templates
+    # still carry inline <script>/<style>. Once those are cleaned up this
+    # moves to an enforcing `Content-Security-Policy` header - a one-line
+    # change in app/__init__.py's after_request.
+    CONTENT_SECURITY_POLICY = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
 
     # Path to the SQLite database file.
     DATABASE_PATH = os.environ.get(

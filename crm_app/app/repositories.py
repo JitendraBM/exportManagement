@@ -81,6 +81,15 @@ class UserRepositoryBase(ABC):
     @abstractmethod
     def update_password_hash(self, user_id: int, password_hash: str) -> None: ...
 
+    @abstractmethod
+    def register_failed_login(self, user_id: int) -> None: ...
+
+    @abstractmethod
+    def lock_account(self, user_id: int, locked_until_iso: str) -> None: ...
+
+    @abstractmethod
+    def clear_login_failures(self, user_id: int) -> None: ...
+
 
 class SqliteUserRepository(UserRepositoryBase):
     def __init__(self, db: Database):
@@ -126,6 +135,31 @@ class SqliteUserRepository(UserRepositoryBase):
 
     def update_password_hash(self, user_id: int, password_hash: str) -> None:
         self.db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+
+    # ---- login brute-force state (v101) --------------------------------------------------
+    def register_failed_login(self, user_id: int) -> None:
+        """One more consecutive bad password for this account."""
+        self.db.execute(
+            "UPDATE users SET failed_attempts = failed_attempts + 1, "
+            "last_failed_at = datetime('now') WHERE id = ?",
+            (user_id,),
+        )
+
+    def lock_account(self, user_id: int, locked_until_iso: str) -> None:
+        """Lock until the given ISO datetime and reset the counter, so the
+        next lockout needs a fresh run of failures."""
+        self.db.execute(
+            "UPDATE users SET locked_until = ?, failed_attempts = 0 WHERE id = ?",
+            (locked_until_iso, user_id),
+        )
+
+    def clear_login_failures(self, user_id: int) -> None:
+        """A good login: drop the counter and any lock, stamp last_login_at."""
+        self.db.execute(
+            "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
+            "last_login_at = datetime('now') WHERE id = ?",
+            (user_id,),
+        )
 
 
 # ============================================================

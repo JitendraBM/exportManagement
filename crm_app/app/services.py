@@ -22,15 +22,17 @@ import zipfile
 import tempfile
 import sqlite3
 import dataclasses
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List
+
+from config import Config
 
 import segno   # QR encoding for the Packing Planning label sheet
 import requests
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
-from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
+from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError, AccountLockedError
 from app.models import (
     User, Lead, Party, Supplier, Transporter, Permit, BookingDetail, MiscCurrency, MiscNatureOfContract, MiscPortOfLoading, MiscContainerType, MiscHsnCode, MiscCountry, MiscUnit, DEFAULT_CURRENCIES, DEFAULT_CONTAINER_TYPES, ContactPerson, Communication, PaymentEntry, DocumentEntry,
     LEAD_STATUSES, CLIENT_STATUSES, CLIENT_STATUS_ADVANCE_ON, PRODUCT_UNITS, Category, Product,
@@ -75,19 +77,58 @@ class AuthService:
         self.user_repo = user_repo
         self.tenant_repo = tenant_repo
 
+    # SQLite's datetime('now') writes this shape, in UTC - match it so the
+    # stored `locked_until` compares correctly against a Python-built stamp.
+    _TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+    def _still_locked_minutes(self, user: User) -> int:
+        """Whole minutes remaining on this account's lock, or 0 if not locked."""
+        if not user.locked_until:
+            return 0
+        try:
+            until = datetime.strptime(user.locked_until[:19], self._TS_FMT)
+        except (ValueError, TypeError):
+            return 0
+        remaining = (until - datetime.utcnow()).total_seconds()
+        return int(remaining // 60) + 1 if remaining > 0 else 0
+
     def authenticate(self, company_id: int, username: str, password: str) -> Optional[User]:
+        """Return the User on success, None on a plain bad credential, and
+        raise AccountLockedError when the account is (or has just become)
+        locked. Unknown usernames are never counted - the per-IP throttle in
+        routes/auth.py is what blunts spraying across many of them."""
         if not self.tenant_repo.is_active(company_id):
             return None
         user = self.user_repo.get_by_username(company_id, username)
         if not user or not user.is_active:
             return None
+
+        locked_for = self._still_locked_minutes(user)
+        if locked_for:
+            raise AccountLockedError(locked_for)
+
         if not check_password_hash(user.password_hash, password):
+            self.user_repo.register_failed_login(user.id)
+            # +1 for the failure we just recorded but haven't re-read.
+            if user.failed_attempts + 1 >= Config.LOGIN_MAX_ATTEMPTS:
+                until = datetime.utcnow() + timedelta(minutes=Config.LOGIN_LOCKOUT_MINUTES)
+                self.user_repo.lock_account(user.id, until.strftime(self._TS_FMT))
+                raise AccountLockedError(Config.LOGIN_LOCKOUT_MINUTES)
             return None
+
+        self.user_repo.clear_login_failures(user.id)
         return user
+
+    def _validate_password(self, password: str) -> None:
+        if not password or len(password) < Config.PASSWORD_MIN_LENGTH:
+            raise ValidationError(
+                f"Password must be at least {Config.PASSWORD_MIN_LENGTH} characters."
+            )
 
     def create_user(self, company_id: int, username: str, password: str, full_name: str, role: str) -> User:
         if not username or not password or not full_name:
             raise ValidationError("Username, password and full name are all required.")
+        self._validate_password(password)
         if role not in ("admin", "employee"):
             raise ValidationError("Role must be 'admin' or 'employee'.")
         if self.user_repo.get_by_username(company_id, username):
@@ -122,8 +163,7 @@ class AuthService:
         password, so there's no separate permission check to make here."""
         if not check_password_hash(user.password_hash, current_password):
             raise ValidationError("Current password is incorrect.")
-        if not new_password or len(new_password) < 6:
-            raise ValidationError("New password must be at least 6 characters.")
+        self._validate_password(new_password)
         self.user_repo.update_password_hash(user.id, generate_password_hash(new_password))
 
 

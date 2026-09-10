@@ -115,7 +115,7 @@ class TestLeadReadsAndPermissions:
 
     def test_employee_cannot_modify_another_employees_lead(self, container, seed):
         other_emp = container.auth_service.create_user(
-            seed.company_id, "emp2", "pw123456", "Emp Two", "employee")
+            seed.company_id, "emp2", "pw1234567890", "Emp Two", "employee")
         lead = self._make_lead(container, seed.employee)
         with pytest.raises(PermissionDeniedError):
             container.lead_service.update_status(lead.id, other_emp, "in_follow_up")

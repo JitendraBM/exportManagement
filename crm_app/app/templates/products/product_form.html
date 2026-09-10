@@ -308,7 +308,7 @@
       body.append('name', hsnName.value);
       body.append('gst_slab', hsnSlab.value);
       body.append('related_products', hsnRelated.value);
-      fetch('/misc/api/hsn-codes', { method: 'POST', body: body })
+      fetch('/misc/api/hsn-codes', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: body })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not add the HSN code.'); return; }

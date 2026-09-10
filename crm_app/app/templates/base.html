@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {# CSRF token for this session. The inline script below stamps it into every
+     POST form on the page; AJAX writes read it from here and send it as an
+     X-CSRFToken header. #}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}CRM{% endblock %} · Trade Ledger CRM</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   {# Not deferred: page templates put their scripts inside the content block,
@@ -92,7 +96,11 @@
         <div class="sidebar-user">{{ current_user.full_name }}</div>
         <div class="sidebar-role">{{ current_user.role }}</div>
         <a class="logout-link" style="display:block; margin-bottom:6px;" href="{{ url_for('profile.settings') }}">⚙️ Account settings</a>
-        <a class="logout-link" style="display:block;" href="{{ url_for('auth.logout') }}">Log out →</a>
+        {# POST-only so a third-party page can't force a logout via a bare link. #}
+        <form method="POST" action="{{ url_for('auth.logout') }}" style="margin:0;">
+          <button type="submit" class="logout-link"
+                  style="display:block; background:none; border:0; padding:0; cursor:pointer; font:inherit; color:inherit;">Log out →</button>
+        </form>
       </div>
       {% endif %}
     </aside>
@@ -113,6 +121,37 @@
   </div>
 
   <script>
+    // Stamp the CSRF token into every same-origin POST/PUT/PATCH/DELETE form
+    // that doesn't already carry one. Forms in templates that extend base.html
+    // are covered here; standalone/print templates include the hidden field
+    // themselves. Runs before submit handlers because it's inline in <body>.
+    (function () {
+      var meta = document.querySelector('meta[name="csrf-token"]');
+      if (!meta) return;
+      var token = meta.getAttribute('content');
+      function stamp() {
+        var forms = document.querySelectorAll('form');
+        for (var i = 0; i < forms.length; i++) {
+          var f = forms[i];
+          var method = (f.getAttribute('method') || 'get').toLowerCase();
+          if (method === 'get' || method === 'dialog') continue;
+          if (f.querySelector('input[name="csrf_token"]')) continue;
+          var input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'csrf_token';
+          input.value = token;
+          f.appendChild(input);
+        }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', stamp);
+      } else {
+        stamp();
+      }
+      // Expose for the inline fetch() calls that post JSON/FormData.
+      window.csrfToken = token;
+    })();
+
     // Confirm-then-password gate for the actions that can't simply be undone.
     // The typed password rides along in a hidden field the matching route
     // checks against the signed-in user's own (app/utils.py).

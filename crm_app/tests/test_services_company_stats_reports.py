@@ -128,7 +128,7 @@ class TestCompanySave:
         save_company(container, seed.admin)
         other = container.tenant_repo.create("Other Co", "other-co")
         other_admin = container.auth_service.create_user(
-            other.id, "oadmin", "pw123456", "O Admin", "admin")
+            other.id, "oadmin", "pw1234567890", "O Admin", "admin")
         save_company(container, other_admin, company_name="Other Exports")
         assert container.company_service.get(seed.company_id).company_name == "Acme Exports"
         assert container.company_service.get(other.id).company_name == "Other Exports"

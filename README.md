@@ -47,6 +47,63 @@ database path). See the comments in `config.py` for every available
 setting, including the fallback currency-conversion rates used when there
 is no internet connection.
 
+The password minimum length is 10 characters (`PASSWORD_MIN_LENGTH`), and an
+account is locked for 15 minutes after 5 consecutive failed logins
+(`LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCKOUT_MINUTES`); a per-IP cap on `/login`
+sits in front of that. All are overridable via `.env`.
+
+---
+
+## 1b. Deploying to production
+
+`run.py` is the **development** server only - single-threaded, and with
+`DEBUG=true` it exposes an interactive code-execution console. Never use it
+to serve real traffic. Deploy behind gunicorn + nginx:
+
+```bash
+# 1. Virtualenv + deps
+python -m venv CRMenv && ./CRMenv/bin/pip install -r crm_app/requirements.txt
+
+# 2. Production .env  (in crm_app/)
+cp crm_app/.env.production.example crm_app/.env
+#    then edit it: generate a FRESH SECRET_KEY, different from any dev value -
+#    a known key lets anyone forge a login session:
+python -c "import secrets; print(secrets.token_hex(32))"
+#    The app refuses to start with DEBUG off if SECRET_KEY is still the default.
+
+# 3. Create / migrate the database (runs the idempotent migrations once)
+cd crm_app && ../CRMenv/bin/python -c "from app import create_app; create_app()"
+
+# 4. Serve it
+../CRMenv/bin/gunicorn -c gunicorn.conf.py wsgi:app
+#    ...or install the systemd unit: deploy/crm.service.example
+
+# 5. Reverse proxy: deploy/nginx.conf.example  (TLS, HSTS + security headers,
+#    server_tokens off, client_max_body_size, X-Forwarded-Proto). Then certbot.
+```
+
+`wsgi.py` is the gunicorn entrypoint. `deploy/` holds annotated
+`nginx.conf.example` and `crm.service.example`.
+
+**Never** set `WERKZEUG_DEBUG=1` on an internet-facing host (it also now
+requires `WERKZEUG_DEBUG_CONFIRM=1` as a second deliberate opt-in).
+
+### Security probe
+
+`scripts/security_probe.py` is a non-destructive smoke check - TLS/HSTS,
+security headers, session-cookie flags, CSRF wiring, debug-surface, exposed
+paths. It never submits real credentials and never mutates data. Run it
+right after every deploy:
+
+```bash
+./CRMenv/bin/python scripts/security_probe.py --url https://your-domain
+```
+
+It exits non-zero if any check fails, so it can gate a deploy. The optional
+`--test-throttle` flag sends a burst of bad logins to confirm the throttle
+fires - **staging only**, never production. The nightly job
+(`scripts/nightly_tester.sh`) runs it automatically when `STAGING_URL` is set.
+
 ---
 
 ## 2. Who can do what

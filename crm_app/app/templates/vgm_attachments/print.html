@@ -46,6 +46,7 @@
   {% endwith %}
 
   <form method="POST" id="vgm-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% include 'vgm_attachments/_sheet.html' %}
   </form>
 

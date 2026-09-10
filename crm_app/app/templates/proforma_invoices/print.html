@@ -98,12 +98,14 @@
       {% if invoice.is_confirmed %}
         {% if current_user.is_admin %}
         <form method="POST" action="{{ url_for('proforma_invoices.set_proforma_invoice_status', proforma_invoice_id=invoice.id) }}" onsubmit="return confirm('Move this confirmed invoice back to draft? It becomes editable again.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="status" value="draft">
           <button type="submit" class="btn btn-ghost btn-sm">↩ Move back to draft</button>
         </form>
         {% endif %}
       {% else %}
       <form method="POST" action="{{ url_for('proforma_invoices.set_proforma_invoice_status', proforma_invoice_id=invoice.id) }}" onsubmit="return confirm('Confirm this proforma invoice? It will be locked for editing and will remind you to place purchase orders for every design on its packing list.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="status" value="confirmed">
         <button type="submit" class="btn btn-ghost btn-sm">✓ Confirm invoice</button>
       </form>
@@ -114,6 +116,7 @@
       {% endif %}
       {% if not invoice.is_confirmed %}
       <form method="POST" action="{{ url_for('proforma_invoices.delete_proforma_invoice', proforma_invoice_id=invoice.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this proforma invoice? Any purchase orders/invoices/packing lists generated from it will also be deleted.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">Delete</button>
       </form>
       {% endif %}

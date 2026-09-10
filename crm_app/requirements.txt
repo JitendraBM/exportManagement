@@ -1,6 +1,12 @@
 # Core web framework
 Flask==3.1.3
 
+# CSRF protection for every state-changing form + AJAX write (CSRFProtect).
+# Pulls in WTForms (pinned below); we use only the CSRF half, not the form
+# classes.
+Flask-WTF==1.3.0
+WTForms==3.2.2
+
 # Used by Flask for templating/security (installed automatically with Flask,
 # pinned explicitly here so `pip install -r requirements.txt` is reproducible)
 Jinja2==3.1.6

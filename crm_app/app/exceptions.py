@@ -18,3 +18,16 @@ class PermissionDeniedError(Exception):
 
 class NotFoundError(Exception):
     """Raised when a requested record does not exist."""
+
+
+class AccountLockedError(Exception):
+    """Raised on a login attempt against an account that is temporarily
+    locked after too many consecutive failures. Carries the number of
+    whole minutes still to wait so the login page can say so."""
+
+    def __init__(self, minutes_remaining: int):
+        self.minutes_remaining = max(1, int(minutes_remaining))
+        super().__init__(
+            f"Account temporarily locked. Try again in "
+            f"{self.minutes_remaining} minute(s)."
+        )

@@ -77,6 +77,9 @@ def tmp_config(tmp_path, monkeypatch):
         EXPORT_INVOICE_UPLOAD_FOLDER = export_invoice_uploads
         PERMIT_UPLOAD_FOLDER = permit_uploads
         WTF_CSRF_ENABLED = False
+        # The test client speaks plain HTTP, so a Secure cookie would never
+        # come back and every authenticated test would 302 to /login.
+        SESSION_COOKIE_SECURE = False
 
     return TestConfig
 
