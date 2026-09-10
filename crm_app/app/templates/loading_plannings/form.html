@@ -50,12 +50,12 @@
     </div>
   </div>
 
-  {# ---- Loading, narrowed in three steps ---------------------------------
-     PIs -> their purchase orders -> the packing plannings covering those
-     orders. Exactly the shape packing_plannings uses to reach its batches,
-     and for the same reason: each set below is rarely wanted whole. A
-     container is loaded out of some of a PI's orders, and an order's goods
-     are packed across several runs on different days. #}
+  {# ---- Loading, narrowed in two steps -----------------------------------
+     PIs -> the packing plannings covering them. No purchase-order checkpoint
+     in between: unlike packing_plannings, which picks WHICH orders to draw
+     batches from, this document picks packing runs - already-numbered pallets
+     that name their own orders - so narrowing by order first only asked the
+     operator the same question twice. #}
   <div class="card">
     <div class="card-header"><h3>Reference proforma invoices <span class="text-soft text-sm">— step 1</span></h3></div>
     <div class="field">
@@ -82,18 +82,11 @@
         {% endfor %}
       </div>
     </div>
-    <button type="button" class="btn btn-ghost btn-sm" id="list-pos-btn">↻ List purchase orders for selected PIs</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="list-pps-btn">↻ List packing plannings for selected PIs</button>
   </div>
 
   <div class="card">
-    <div class="card-header"><h3>Purchase orders <span class="text-soft text-sm">— step 2</span></h3></div>
-    <div id="po-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;"></div>
-    <button type="button" class="btn btn-ghost btn-sm" style="margin-top:10px;" id="list-pps-btn">↻ List packing plannings for selected POs</button>
-    <p class="hint">Not every order under a PI belongs in this container load &mdash; one may ship later, or already be loaded on another plan.</p>
-  </div>
-
-  <div class="card">
-    <div class="card-header"><h3>Packing plannings <span class="text-soft text-sm">— step 3</span></h3></div>
+    <div class="card-header"><h3>Packing plannings <span class="text-soft text-sm">— step 2</span></h3></div>
     <div id="pp-picker" style="max-height:220px;overflow:auto;border:1px solid var(--color-line, #ddd);border-radius:6px;padding:6px 10px;"></div>
     <button type="button" class="btn btn-ghost btn-sm" style="margin-top:10px;" id="load-from-pps-btn">↻ Load goods &amp; packings from selected packing plannings</button>
     <p class="hint">
@@ -240,10 +233,9 @@
   // arrays can't carry without a fragile index convention).
   var items = readJSON("lp-initial-items");
   var packings = readJSON("lp-initial-packings");
-  // Step 2 and step 3's lists. Neither is POSTed - only the goods lines and
-  // packings they produced are - so both come back empty after a failed save
-  // and a click re-lists them.
-  var purchaseOrders = [];
+  // Step 2's list. It is not POSTed - only the goods lines and packings it
+  // produced are - so it comes back empty after a failed save and a click
+  // re-lists it.
   var packingPlans = [];
 
   function readJSON(id) {
@@ -316,30 +308,10 @@
     }).map(function (cb) { return cb.value; });
   }
 
-  function renderPOs() {
-    var pane = document.getElementById("po-picker");
-    if (!purchaseOrders.length) {
-      pane.innerHTML = '<div class="text-soft text-sm">Tick proforma invoices above, then press List purchase orders.</div>';
-      return;
-    }
-    pane.innerHTML = purchaseOrders.map(function (po) {
-      var totals = Object.keys(po.ready_totals || {}).map(function (u) {
-        return g(po.ready_totals[u]) + " " + esc(u);
-      }).join(", ");
-      return '<label style="display:block;padding:4px 0;cursor:pointer;">' +
-        '<input type="checkbox" class="js-po-check" value="' + esc(po.id) + '"' +
-        (po.checked === false ? "" : " checked") + "> " +
-        "<strong>" + esc(po.po_number) + "</strong> — " + esc(po.seller_name || "") +
-        (po.proforma_invoice_number ? ' <span class="text-soft">(' + esc(po.proforma_invoice_number) + ")</span>" : "") +
-        ' <span class="text-soft text-sm">· ' + esc(po.batch_count) + " batch(es)" +
-        (totals ? " · " + totals : "") + "</span></label>";
-    }).join("");
-  }
-
   function renderPackingPlans() {
     var pane = document.getElementById("pp-picker");
     if (!packingPlans.length) {
-      pane.innerHTML = '<div class="text-soft text-sm">Tick purchase orders above, then press List packing plannings.</div>';
+      pane.innerHTML = '<div class="text-soft text-sm">Tick proforma invoices above, then press List packing plannings.</div>';
       return;
     }
     pane.innerHTML = packingPlans.map(function (pp) {
@@ -357,7 +329,7 @@
   function renderItems() {
     var body = document.getElementById("items-body");
     if (!items.length) {
-      body.innerHTML = '<tr><td colspan="12" class="text-soft">No goods yet — work down the three pickers above and press Load.</td></tr>';
+      body.innerHTML = '<tr><td colspan="12" class="text-soft">No goods yet — work down the two pickers above and press Load.</td></tr>';
       ["items-total-qty", "items-total-net", "items-total-usd"].forEach(function (id) {
         document.getElementById(id).textContent = "0";
       });
@@ -404,9 +376,43 @@
   var CONTAINER_TINTS = ["#eef4ff", "#eafaf0", "#fff5e8", "#fdeef6",
                          "#f2effc", "#e8fafa", "#fcfae6", "#eef9ee"];
 
+  // Which packing groups are showing their member rows, keyed by the group's
+  // first Loading no. It lives out here because renderPackings() runs again on
+  // every assignment change and would otherwise forget what the operator opened.
+  var expandedPackingGroups = {};
+
   // Packings in the order the assignment boxes read against: Loading no. order.
   function orderedPackings() {
     return packings.slice().sort(function (a, b) { return a.packing_no - b.packing_no; });
+  }
+
+  // A packing's identity for grouping: two packings collapse into one line only
+  // when everything a reader would compare is the same. Contents are sorted so
+  // the order they happen to sit in the array never splits a group.
+  function packingSignature(p) {
+    var contents = (p.contents || []).slice().sort(function (a, b) {
+      return num(a.item_sr_no) - num(b.item_sr_no);
+    }).map(function (c) {
+      return String(c.item_sr_no) + ":" + g(c.quantity_boxes);
+    }).join("|");
+    return [p.container_sr_no || "", p.packing_unit_label || "", p.is_manual ? "1" : "0",
+            p.packing_type_name || "",
+            (p.tare_weight_kg === null || p.tare_weight_kg === undefined) ? "" : g(p.tare_weight_kg),
+            p.packing_planning_number || "", contents].join("");
+  }
+
+  // Runs of identical packings that are *consecutive* in Loading no. order, so a
+  // group's first and last really do bound it and nothing else falls between —
+  // the same positional reading the assignment boxes give "A - B".
+  function packingGroups() {
+    var groups = [], prev = null;
+    orderedPackings().forEach(function (p) {
+      var sig = packingSignature(p);
+      if (!groups.length || sig !== prev) groups.push({ key: String(p.packing_no), packings: [p] });
+      else groups[groups.length - 1].packings.push(p);
+      prev = sig;
+    });
+    return groups;
   }
 
   function containerLabel(srNo) {
@@ -418,36 +424,97 @@
   function renderPackings() {
     var pane = document.getElementById("packings-pane");
     if (!packings.length) {
-      pane.innerHTML = '<p class="text-soft text-sm">No packings yet — work down the three pickers above and press Load.</p>';
+      pane.innerHTML = '<p class="text-soft text-sm">No packings yet — work down the two pickers above and press Load.</p>';
       return;
     }
     var labelBySr = {};
     containerRows().forEach(function (c) { labelBySr[String(c.sr_no)] = c.container_no || ("Container " + c.sr_no); });
-    var rows = orderedPackings().map(function (p) {
-      var contents = (p.contents || []).map(function (c) {
-        return esc(labelFor(c.item_sr_no)) + " &times; " + g(c.quantity_boxes);
-      }).join("<br>") || '<span class="text-soft">empty</span>';
-      var no = (p.source_packing_no === null || p.source_packing_no === undefined)
+
+    // The number printed on the physical label, falling back to the Loading no.
+    function sourceNo(p) {
+      return (p.source_packing_no === null || p.source_packing_no === undefined)
         ? p.packing_no : p.source_packing_no;
-      var srNo = p.container_sr_no;
-      // A loaded packing gets a pale row tint, cycling per container so a big
-      // plan's containers stay visually distinct, and its container number.
-      var rowStyle = srNo ? ' style="background:' + CONTAINER_TINTS[(srNo - 1) % CONTAINER_TINTS.length] + ';"' : "";
-      var assigned = srNo
+    }
+    // A loaded packing gets a pale row tint, cycling per container so a big
+    // plan's containers stay visually distinct.
+    function tint(srNo) {
+      return srNo ? ' style="background:' + CONTAINER_TINTS[(srNo - 1) % CONTAINER_TINTS.length] + ';"' : "";
+    }
+    function containerCell(srNo) {
+      return srNo
         ? '<strong>#' + esc(srNo) + "</strong> &middot; " + esc(labelBySr[String(srNo)] || ("Container " + srNo))
         : '<span class="text-soft">—</span>';
-      return "<tr" + rowStyle + '><td class="num"><strong>' + esc(p.packing_no) + "</strong></td>" +
-        "<td><strong>" + esc(no) + "</strong> " +
+    }
+    function contentsCell(p) {
+      return (p.contents || []).map(function (c) {
+        return esc(labelFor(c.item_sr_no)) + " &times; " + g(c.quantity_boxes);
+      }).join("<br>") || '<span class="text-soft">empty</span>';
+    }
+    function range(a, b) { return esc(a) + " &ndash; " + esc(b); }
+
+    // A group of one renders exactly as the table always has.
+    function soloRow(p) {
+      var srNo = p.container_sr_no;
+      return "<tr" + tint(srNo) + '><td class="num"><strong>' + esc(p.packing_no) + "</strong></td>" +
+        "<td><strong>" + esc(sourceNo(p)) + "</strong> " +
         '<span class="text-sm">' + esc(p.packing_unit_label || "PLT") + "</span>" +
         (p.is_manual ? ' <span class="text-soft text-sm">mixed</span>' : "") +
         (p.packing_planning_number ? '<br><span class="text-soft text-sm mono">' +
           esc(p.packing_planning_number) + "</span>" : "") + "</td>" +
         '<td class="mono text-sm">' + esc(p.unique_packing_id || "—") + "</td>" +
-        "<td>" + contents + "</td>" +
+        "<td>" + contentsCell(p) + "</td>" +
         '<td class="num">' + g(packingBoxes(p)) + "</td>" +
         '<td class="num">' + fmt(packingGross(p)) + "</td>" +
-        "<td>" + assigned + "</td></tr>";
+        "<td>" + containerCell(srNo) + "</td></tr>";
+    }
+
+    // One member of an expanded group: same columns, indented and quietened so
+    // the group's own line still reads as the heading.
+    function memberRow(p) {
+      var srNo = p.container_sr_no;
+      return "<tr" + tint(srNo) + '><td class="num" style="padding-left:28px;">' + esc(p.packing_no) + "</td>" +
+        "<td>" + esc(sourceNo(p)) + ' <span class="text-sm">' + esc(p.packing_unit_label || "PLT") + "</span>" +
+        (p.is_manual ? ' <span class="text-soft text-sm">mixed</span>' : "") + "</td>" +
+        '<td class="mono text-sm">' + esc(p.unique_packing_id || "—") + "</td>" +
+        '<td class="text-soft text-sm">' + contentsCell(p) + "</td>" +
+        '<td class="num">' + g(packingBoxes(p)) + "</td>" +
+        '<td class="num">' + fmt(packingGross(p)) + "</td>" +
+        "<td>" + containerCell(srNo) + "</td></tr>";
+    }
+
+    var rows = packingGroups().map(function (grp) {
+      if (grp.packings.length === 1) return soloRow(grp.packings[0]);
+      var first = grp.packings[0], last = grp.packings[grp.packings.length - 1];
+      var n = grp.packings.length;
+      var srNo = first.container_sr_no;
+      var open = !!expandedPackingGroups[grp.key];
+      var boxes = grp.packings.reduce(function (s, p) { return s + packingBoxes(p); }, 0);
+      var gross = grp.packings.reduce(function (s, p) { return s + packingGross(p); }, 0);
+      // type="button": a bare <button> in here would submit the form.
+      var caret = '<button type="button" class="js-pk-toggle" data-key="' + esc(grp.key) + '"' +
+        ' aria-expanded="' + (open ? "true" : "false") + '"' +
+        ' title="' + (open ? "Hide" : "Show") + ' the ' + n + ' packings" ' +
+        'style="background:none;border:0;padding:0 5px 0 0;font:inherit;color:inherit;cursor:pointer;">' +
+        (open ? "&#9662;" : "&#9656;") + "</button>";
+      var uids = (first.unique_packing_id && last.unique_packing_id)
+        ? range(first.unique_packing_id, last.unique_packing_id)
+        : '<span class="text-soft">—</span>';
+      var head = "<tr" + tint(srNo) + '><td class="num">' + caret +
+        "<strong>" + range(first.packing_no, last.packing_no) + "</strong></td>" +
+        "<td><strong>" + range(sourceNo(first), sourceNo(last)) + "</strong> " +
+        '<span class="text-sm">' + esc(first.packing_unit_label || "PLT") + "</span>" +
+        (first.is_manual ? ' <span class="text-soft text-sm">mixed</span>' : "") +
+        (first.packing_planning_number ? '<br><span class="text-soft text-sm mono">' +
+          esc(first.packing_planning_number) + "</span>" : "") + "</td>" +
+        '<td class="mono text-sm">' + uids + "</td>" +
+        "<td>" + contentsCell(first) +
+        '<br><span class="text-soft text-sm">&times; ' + n + " packings</span></td>" +
+        '<td class="num">' + g(boxes) + "</td>" +
+        '<td class="num">' + fmt(gross) + "</td>" +
+        "<td>" + containerCell(srNo) + "</td></tr>";
+      return head + (open ? grp.packings.map(memberRow).join("") : "");
     }).join("");
+
     pane.innerHTML = '<table class="ledger"><thead><tr>' +
       '<th class="num">Loading no.</th><th>Packing no.</th><th>Unique packing id</th><th>Contents</th>' +
       '<th class="num">Qty</th><th class="num">Gross kg</th><th>Container</th>' +
@@ -703,13 +770,17 @@
 
   document.addEventListener("click", function (e) {
     var t = e.target;
-    if (t.classList && t.classList.contains("js-remove-cd")) {
+    if (t.classList && t.classList.contains("js-pk-toggle")) {
+      // Display only — nothing about the packings themselves changes, so this
+      // redraws the one table and leaves sync() and the boxes alone.
+      var key = t.getAttribute("data-key");
+      expandedPackingGroups[key] = !expandedPackingGroups[key];
+      renderPackings();
+    } else if (t.classList && t.classList.contains("js-remove-cd")) {
       var tr = t.closest("tr");
       if (tr) tr.remove();
       renumberContainers();
       renderAll();
-    } else if (t.id === "list-pos-btn") {
-      listPurchaseOrders();
     } else if (t.id === "list-pps-btn") {
       listPackingPlannings();
     } else if (t.id === "load-from-pps-btn") {
@@ -745,35 +816,17 @@
     });
   }
 
-  function listPurchaseOrders() {
+  function listPackingPlannings() {
     var ids = checkedValues(".js-pi-check");
     if (!ids.length) { alert("Tick at least one proforma invoice."); return; }
-    fetch("{{ url_for('loading_plannings.loading_planning_purchase_orders') }}?proforma_invoice_ids=" +
-          encodeURIComponent(ids.join(",")))
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.error) { alert(d.error); return; }
-        purchaseOrders = d.purchase_orders || [];
-        // A narrower PI set can only make the lists below it wrong.
-        packingPlans = [];
-        renderPOs();
-        renderPackingPlans();
-        if (!purchaseOrders.length) alert("Those proforma invoices have no purchase orders.");
-      })
-      .catch(function () { alert("Couldn't list the purchase orders."); });
-  }
-
-  function listPackingPlannings() {
-    var ids = checkedValues(".js-po-check");
-    if (!ids.length) { alert("Tick at least one purchase order."); return; }
-    fetch("{{ url_for('loading_plannings.loading_planning_packing_plannings') }}?purchase_order_ids=" +
+    fetch("{{ url_for('loading_plannings.loading_planning_packing_plannings') }}?proforma_invoice_ids=" +
           encodeURIComponent(ids.join(",")))
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d.error) { alert(d.error); return; }
         packingPlans = d.packing_plannings || [];
         renderPackingPlans();
-        if (!packingPlans.length) alert("No packing planning covers those purchase orders yet.");
+        if (!packingPlans.length) alert("No packing planning covers those proforma invoices yet.");
       })
       .catch(function () { alert("Couldn't list the packing plannings."); });
   }
@@ -868,7 +921,6 @@
     });
   }
 
-  renderPOs();
   renderPackingPlans();
   renderAll();
 })();

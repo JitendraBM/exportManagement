@@ -1346,13 +1346,13 @@ CREATE TABLE IF NOT EXISTS export_packing_list_item_designs (
 -- It sits between Packing Planning and the export invoice, and is built in
 -- two passes:
 --
---   1. IMPORT, narrowed in three steps the same way Packing Planning narrows
---      its own: tick the reference PROFORMA INVOICES, list the PURCHASE
---      ORDERS they pulled in and tick those, then list the PACKING PLANNINGS
---      covering those orders and tick which to load. Each checkpoint exists
---      because the set below it is rarely wanted whole - a container is
---      loaded out of some of a PI's orders, and an order's goods are packed
---      across several packing runs on different days.
+--   1. IMPORT, narrowed in two steps: tick the reference PROFORMA INVOICES,
+--      then list the PACKING PLANNINGS covering them and tick which to load.
+--      There is no purchase-order checkpoint in between - unlike Packing
+--      Planning, which picks WHICH orders to draw batches from, this document
+--      picks packing runs, and a run already names the orders it holds, so
+--      narrowing by order first only asked the operator the same question
+--      twice.
 --
 --      SEVERAL packing plannings load at once, because one container load
 --      routinely draws on more than one packing run. Those documents have
@@ -1570,6 +1570,9 @@ CREATE TABLE IF NOT EXISTS packing_planning_items (
     purchase_order_id       INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL,
     po_number               TEXT,          -- provenance, kept even if the PO is deleted
     purchase_order_item_id  INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL,
+    -- Set instead of the purchase-order columns when the row was loaded from a
+    -- JOB IN's returned goods; such a row carries no batch_number/production_date.
+    job_in_id               INTEGER REFERENCES job_ins(id) ON DELETE SET NULL,
     product_id              INTEGER REFERENCES products(id) ON DELETE SET NULL,
     product_name            TEXT NOT NULL, -- DESCRIPTION OF GOODS
     design_id               INTEGER REFERENCES designs(id) ON DELETE SET NULL,

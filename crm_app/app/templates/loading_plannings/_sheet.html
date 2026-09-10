@@ -86,19 +86,24 @@
           <th class="num">Qty</th><th class="num">Net kg</th><th class="num">Gross kg</th></tr>
     </thead>
     <tbody>
-      {% for packing in plan.packings_for_container(row.sr_no) %}
+      {# Identical packings print as one line with the id range and a count -
+         twenty pallets of one batch are twenty labels, but one instruction. #}
+      {% for group in plan.packing_groups_for_container(row.sr_no, by_sr) %}
+      {% set head = group.first %}{% set tail = group.last %}
       <tr>
-        <td class="num">{{ packing.packing_no }}</td>
-        <td>{{ packing.label }} <span class="text-sm">{{ packing.packing_unit_label }}</span></td>
-        <td class="mono text-sm">{{ packing.unique_packing_id or '—' }}</td>
+        <td class="num">{{ head.packing_no }}{% if group.count > 1 %} – {{ tail.packing_no }}{% endif %}</td>
+        <td>{{ head.label }}{% if group.count > 1 %} – {{ tail.source_packing_no if tail.source_packing_no is not none else tail.packing_no }}{% endif %}
+            <span class="text-sm">{{ head.packing_unit_label }}</span></td>
+        <td class="mono text-sm">{{ head.unique_packing_id or '—' }}{% if group.count > 1 and head.unique_packing_id and tail.unique_packing_id %} – {{ tail.unique_packing_id }}{% endif %}</td>
         <td>
-          {% for line in packing.contents %}
+          {% for line in head.contents %}
           {{ by_sr[line.item_sr_no].label if line.item_sr_no in by_sr else '?' }} × {{ '%g' % line.quantity_boxes }}{% if not loop.last %}<br>{% endif %}
           {% endfor %}
+          {% if group.count > 1 %}<br><span class="text-sm">× {{ group.count }} {{ head.packing_unit_label }}s</span>{% endif %}
         </td>
-        <td class="num">{{ '%g' % packing.packed_boxes }}</td>
-        <td class="num">{{ '%.3f' % packing.net_weight_kg(by_sr) }}</td>
-        <td class="num">{{ '%.3f' % packing.gross_weight_kg(by_sr) }}</td>
+        <td class="num">{{ '%g' % group.boxes }}</td>
+        <td class="num">{{ '%.3f' % group.net_weight_kg }}</td>
+        <td class="num">{{ '%.3f' % group.gross_weight_kg }}</td>
       </tr>
       {% else %}
       <tr><td colspan="7"><em>No packings assigned.</em></td></tr>

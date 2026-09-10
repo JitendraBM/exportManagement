@@ -799,3 +799,97 @@ def test_a_duplicated_packing_number_still_saves_and_labels(container, seed, til
     assert numbers == sorted(set(numbers))            # no duplicate label rows
     assert numbers.count(50) == 1
     assert any("used more than once" in w for w in svc(container).packing_warnings(plan))
+
+
+# --------------------------------------------------------------------------
+# Loading products from JOB INS: PI -> job work -> its purchase invoice ->
+# job out -> job in. A second, parallel source alongside purchase orders.
+# --------------------------------------------------------------------------
+def _job_in_chain(container, seed, *, boxes_by_design):
+    """The whole chain, planted the way test_services_export_invoices does:
+    one proforma invoice, a job work raised off it, that job work's own
+    purchase invoice (linked), a job out on that invoice, and one job in
+    carrying the given designs. Returns (pi, product, job_in)."""
+    pallet = [{"name": "Pallet", "boxes_per_pallet": "32", "weight_kg": "20", "unit_kind": "pallet"}]
+    product = make_product(container, seed, "GVT/PGVT 600X1200MM JOB", "69072100", 27.0, "BOX", "1.44", pallet)
+    designs = {name: make_design(container, seed, product, name) for name in boxes_by_design}
+
+    pi = container.proforma_invoice_service.create(
+        seed.admin,
+        {"consignee_name": "ROBUST INTERNATIONAL LIMITADA", "invoice_date": "2026-08-27",
+         "invoice_number": "PIJOB20260827", "currency_code": "USD"},
+        [{"product_id": str(product.id), "product_name": product.product_name, "hsn_code": "69072100",
+          "quantity_boxes": str(sum(boxes_by_design.values())), "quantity_unit": "BOX",
+          "quantity_value": "1", "unit": "SQM", "price_usd": "5"}],
+    )
+
+    job_work_id = container.db.execute(
+        "INSERT INTO job_works (company_id, job_work_number, job_work_date, seller_name, "
+        "created_by, proforma_invoice_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (seed.company_id, "JW20260827001", "2026-08-27", "ALIVE GRANITO LLP", seed.admin.id, pi.id))
+
+    jw_pinv = container.purchase_invoice_service.create(
+        seed.admin,
+        {"seller_name": "ALIVE GRANITO LLP", "invoice_number": "JW/PINV/1", "invoice_date": "2026-08-28",
+         "seller_gstin": "24ABVFA1170D1ZO", "currency_code": "INR"},
+        [{"product_name": product.product_name, "product_id": str(product.id), "quantity_value": "144",
+          "price_inr": "400", "price_per": "BOX", "quantity_boxes": "100"}], [])
+    container.db.execute(
+        "INSERT INTO purchase_invoice_job_work_links (purchase_invoice_id, job_work_id) VALUES (?, ?)",
+        (jw_pinv.id, job_work_id))
+
+    job_out = container.job_out_service.create(current_user=seed.admin, fields={
+        "purchase_invoice_id": str(jw_pinv.id),
+        "delivery_challan_no": "DC/OUT/1", "delivery_challan_date": "2026-08-29"})
+
+    job_in = container.job_in_service.create(current_user=seed.admin, fields={
+        "job_out_id": str(job_out.id),
+        "stock_inward_no": "STINW-1", "stock_inward_date": "2026-08-30",
+    }, raw_items=[{
+        "product_id": str(product.id), "product_name": product.product_name,
+        "design_id": str(designs[name].id), "design_name": name, "quantity_boxes": str(b),
+    } for name, b in boxes_by_design.items()])
+    return pi, product, job_in
+
+
+def test_job_ins_are_listed_for_the_ticked_proformas(container, seed):
+    pi, _product, job_in = _job_in_chain(container, seed, boxes_by_design={"ARKOSE": 300, "ATLANTA": 100})
+    rows = svc(container).job_ins_for_proformas([pi.id], seed.company_id)
+    assert [r["id"] for r in rows] == [job_in.id]
+    assert rows[0]["stock_inward_no"] == "STINW-1"
+    assert rows[0]["line_count"] == 2
+    assert rows[0]["ready_totals"] == {"BOX": 400}
+
+
+def test_job_in_prefill_is_one_auto_filled_row_per_design_with_no_batch(container, seed):
+    """The whole point of the job-in path: returned designs pack the same
+    way PO batches do, but a return has no batch number or manf. date."""
+    _pi, _product, job_in = _job_in_chain(container, seed, boxes_by_design={"ARKOSE": 300, "ATLANTA": 100})
+    items = svc(container).build_prefill_from_job_ins([job_in.id], seed.company_id)["items"]
+    assert len(items) == 2
+    for it in items:
+        assert it["batch_number"] is None
+        assert it["production_date"] is None
+        assert it["job_in_id"] == job_in.id
+        assert it["purchase_order_id"] is None
+        assert it["boxes_per_unit"] == 32          # auto-fill found the pallet type
+    arkose = next(i for i in items if i["design_name"] == "ARKOSE")
+    assert arkose["ready_quantity"] == 300
+    assert arkose["actual_packing"] == 9           # 300 // 32
+
+
+def test_job_in_rows_persist_with_their_provenance_and_no_batch_error(container, seed):
+    _pi, _product, job_in = _job_in_chain(container, seed, boxes_by_design={"ARKOSE": 300})
+    items = svc(container)._clean_items(
+        svc(container).build_prefill_from_job_ins([job_in.id], seed.company_id)["items"])
+    plan = save(container, seed, items)
+    reloaded = svc(container).get(plan.id, seed.company_id)
+    assert [i.job_in_id for i in reloaded.items] == [job_in.id]
+    assert reloaded.items[0].batch_number is None
+
+
+def test_another_companys_job_ins_are_never_reachable(container, seed):
+    pi, _product, job_in = _job_in_chain(container, seed, boxes_by_design={"ARKOSE": 300})
+    other = container.tenant_repo.create("OTHER CO", "other")
+    assert svc(container).job_ins_for_proformas([pi.id], other.id) == []
+    assert svc(container).build_prefill_from_job_ins([job_in.id], other.id)["items"] == []

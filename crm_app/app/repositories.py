@@ -4069,6 +4069,46 @@ class JobInRepository:
         )
         return [JobIn.from_row(r) for r in rows]
 
+    def list_for_proformas(self, proforma_ids, company_id: int) -> List[JobIn]:
+        """Every job in whose returned goods trace back to one of these
+        proforma invoices, newest first - the source list for a Packing
+        Planning's "Job ins" card.
+
+        The walk is PI -> its job works (job_works.proforma_invoice_id) ->
+        their purchase invoices (purchase_invoice_job_work_links) -> the job
+        outs raised on those invoices (job_outs.purchase_invoice_id) -> the
+        job ins received against them (job_ins.job_out_id). That is
+        ExportInvoiceRepository.source_job_work_ids' walk carried one hop
+        further, down to the returns themselves.
+
+        Company-scoped on both the job in and its job work, so a crafted
+        proforma id can never surface another tenant's job in. Returns []
+        for an empty or unparseable selection."""
+        ids = []
+        for value in dict.fromkeys(proforma_ids or []):
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.db.query(
+            self._SELECT + f"""
+                WHERE ji.company_id = ?
+                  AND ji.job_out_id IN (
+                        SELECT jo.id FROM job_outs jo
+                         WHERE jo.purchase_invoice_id IN (
+                               SELECT l.purchase_invoice_id
+                                 FROM purchase_invoice_job_work_links l
+                                 JOIN job_works jw ON jw.id = l.job_work_id
+                                WHERE jw.company_id = ?
+                                  AND jw.proforma_invoice_id IN ({placeholders})))
+                ORDER BY ji.stock_inward_date DESC, ji.id DESC""",
+            (company_id, company_id, *ids),
+        )
+        return [JobIn.from_row(r) for r in rows]
+
     def find_by_inward_no(self, company_id: int, stock_inward_no: str) -> Optional[JobIn]:
         """Backs the friendly duplicate-number message in JobInService - the
         UNIQUE (company_id, stock_inward_no) constraint would otherwise
@@ -5002,15 +5042,15 @@ class PackingPlanningRepository:
                 conn.execute(
                     """INSERT INTO packing_planning_items
                        (packing_planning_id, sr_no, proforma_invoice_id, purchase_order_id, po_number,
-                        purchase_order_item_id, product_id, product_name, design_id, design_name,
+                        purchase_order_item_id, job_in_id, product_id, product_name, design_id, design_name,
                         batch_number, production_date, ready_quantity, quantity_unit, packing_type_id,
                         packing_type_name, packing_unit_label, boxes_per_unit, actual_packing,
                         packing_no_start)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (packing_planning_id, i, item.proforma_invoice_id, item.purchase_order_id,
-                     item.po_number, item.purchase_order_item_id, item.product_id, item.product_name,
-                     item.design_id, item.design_name, item.batch_number, item.production_date,
-                     item.ready_quantity, item.quantity_unit, item.packing_type_id,
+                     item.po_number, item.purchase_order_item_id, item.job_in_id, item.product_id,
+                     item.product_name, item.design_id, item.design_name, item.batch_number,
+                     item.production_date, item.ready_quantity, item.quantity_unit, item.packing_type_id,
                      item.packing_type_name, item.packing_unit_label, item.boxes_per_unit,
                      item.actual_packing, item.packing_no_start),
                 )
@@ -5051,14 +5091,27 @@ class PackingPlanningRepository:
     # Deliberately NOT part of _replace_children: every other child list is
     # wholesale deleted and re-inserted on each save, which is exactly what
     # must never happen to an id already printed on a pallet.
-    def list_for_purchase_orders(self, company_id: int, purchase_order_ids: list) -> List[dict]:
-        """Every packing planning holding a batch of any of these purchase
-        orders - step 3 of a Loading Planning's narrowing.
+    def list_for_proformas(self, company_id: int, proforma_invoice_ids: list) -> List[dict]:
+        """Every packing planning raised against any of these proforma
+        invoices - step 2 of a Loading Planning's narrowing.
 
-        Reported per plan with the orders it actually covers, because an
-        order's goods are routinely packed across several runs on different
-        days, and a run routinely covers several orders."""
-        ids = [int(i) for i in dict.fromkeys(purchase_order_ids or [])]
+        Matched on the plan's OWN proforma links, not on where its lines came
+        from. A plan's lines are two kinds: batch rows carrying a
+        purchase_order_id, and JOB IN rows, which carry neither an order nor
+        a proforma invoice (see PackingPlanningService's job-in loader - a
+        job-in row is keyed to its job in). Walking PI -> purchase orders ->
+        items would therefore silently hide any plan packed out of returned
+        job-work goods, while packing_planning_proforma_links is the ticked
+        set the document itself records and covers both kinds.
+
+        The counts alongside are over the whole plan, and po_numbers lists
+        the orders its batch rows name - blank for a wholly job-in plan."""
+        ids = []
+        for value in dict.fromkeys(proforma_invoice_ids or []):
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
         if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
@@ -5067,8 +5120,9 @@ class PackingPlanningRepository:
                        GROUP_CONCAT(DISTINCT i.po_number) AS po_numbers,
                        COUNT(DISTINCT i.sr_no) AS batch_count
                 FROM packing_plannings pp
-                JOIN packing_planning_items i ON i.packing_planning_id = pp.id
-                WHERE pp.company_id = ? AND i.purchase_order_id IN ({placeholders})
+                JOIN packing_planning_proforma_links pl ON pl.packing_planning_id = pp.id
+                LEFT JOIN packing_planning_items i ON i.packing_planning_id = pp.id
+                WHERE pp.company_id = ? AND pl.proforma_invoice_id IN ({placeholders})
                 GROUP BY pp.id
                 ORDER BY pp.packing_planning_date DESC, pp.id DESC""",
             tuple([company_id] + ids),
