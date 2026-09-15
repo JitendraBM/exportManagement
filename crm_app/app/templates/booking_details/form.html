@@ -188,7 +188,7 @@
     const formData = new FormData();
     formData.append('excel_file', file);
     cdExcelStatus.textContent = 'Reading ' + file.name + '…';
-    fetch('{{ url_for("booking_details.parse_container_details_excel") }}', { method: 'POST', body: formData })
+    fetch('{{ url_for("booking_details.parse_container_details_excel") }}', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: formData })
       .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
       .then(({ ok, data }) => {
         if (!ok) throw new Error(data.error || 'Could not read that file.');

@@ -53,6 +53,12 @@ class User:
     role: str  # 'admin' | 'employee'
     is_active: bool = True
     created_at: Optional[str] = None
+    # v101: login brute-force state. Defaulted so a User built by hand (tests,
+    # a SELECT of an older column set) still constructs.
+    failed_attempts: int = 0
+    locked_until: Optional[str] = None
+    last_failed_at: Optional[str] = None
+    last_login_at: Optional[str] = None
 
     @property
     def is_admin(self) -> bool:
@@ -60,6 +66,7 @@ class User:
 
     @staticmethod
     def from_row(row) -> "User":
+        keys = row.keys()
         return User(
             id=row["id"],
             company_id=row["company_id"],
@@ -69,6 +76,10 @@ class User:
             role=row["role"],
             is_active=bool(row["is_active"]),
             created_at=row["created_at"],
+            failed_attempts=row["failed_attempts"] if "failed_attempts" in keys else 0,
+            locked_until=row["locked_until"] if "locked_until" in keys else None,
+            last_failed_at=row["last_failed_at"] if "last_failed_at" in keys else None,
+            last_login_at=row["last_login_at"] if "last_login_at" in keys else None,
         )
 
 

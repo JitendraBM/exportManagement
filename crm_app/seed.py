@@ -36,7 +36,9 @@ def _create_admin_for(container, company_id: int, company_name: str) -> None:
     print(f"\nLet's create the first admin login for '{company_name}'.\n")
     username = input("Admin username: ").strip() or "admin"
     full_name = input("Admin full name: ").strip() or "Administrator"
-    password = getpass.getpass("Admin password: ").strip() or "admin123"
+    # Minimum length is enforced by AuthService (Config.PASSWORD_MIN_LENGTH,
+    # currently 10) - the dev fallback has to clear it too.
+    password = getpass.getpass("Admin password (min 10 chars): ").strip() or "changeme-admin"
 
     container.auth_service.create_user(
         company_id=company_id, username=username, password=password,

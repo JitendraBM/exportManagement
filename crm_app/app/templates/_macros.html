@@ -80,7 +80,7 @@
       const body = new FormData();
       body.append('name', nameEl.value);
       body.append('symbol', symbolEl.value);
-      fetch('/misc/api/currencies', { method: 'POST', body: body })
+      fetch('/misc/api/currencies', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: body })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not add the currency.'); return; }
@@ -178,7 +178,7 @@
       const body = new FormData();
       body.append('name', nameEl.value);
       body.append('pin_code', pinEl.value);
-      fetch('/misc/api/ports-of-loading', { method: 'POST', body: body })
+      fetch('/misc/api/ports-of-loading', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: body })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not add the port.'); return; }
@@ -261,7 +261,7 @@
     function addCountry() {
       const body = new FormData();
       body.append('name', nameEl.value);
-      fetch('/misc/api/countries', { method: 'POST', body: body })
+      fetch('/misc/api/countries', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: body })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not add the country.'); return; }

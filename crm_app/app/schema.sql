@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS users (
     role            TEXT NOT NULL CHECK (role IN ('admin', 'employee')),
     is_active       INTEGER NOT NULL DEFAULT 1,   -- 1 = can log in, 0 = disabled
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    -- v101: login brute-force state (see AuthService.authenticate)
+    failed_attempts INTEGER NOT NULL DEFAULT 0,   -- consecutive bad-password count
+    locked_until    TEXT,                         -- ISO datetime; NULL = not locked
+    last_failed_at  TEXT,
+    last_login_at   TEXT,
     UNIQUE (company_id, username)
 );
 

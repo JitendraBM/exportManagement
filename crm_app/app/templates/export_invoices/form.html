@@ -360,7 +360,7 @@
             const body = new FormData();
             body.append('name', nameEl.value);
             body.append('symbol', symbolEl.value);
-            fetch('/misc/api/currencies', { method: 'POST', body: body })
+            fetch('/misc/api/currencies', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: body })
               .then(r => r.json().then(data => ({ ok: r.ok, data })))
               .then(({ ok, data }) => {
                 if (!ok) { alert(data.error || 'Could not add the currency.'); return; }

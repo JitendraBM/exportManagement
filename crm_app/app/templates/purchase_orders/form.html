@@ -461,7 +461,7 @@
       }
       const formData = new FormData();
       sellerAddFieldNames.forEach((name) => formData.append(name, sellerAddInput(name).value));
-      fetch('/suppliers/api/quick-create', { method: 'POST', body: formData })
+      fetch('/suppliers/api/quick-create', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: formData })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not create the supplier.'); return; }

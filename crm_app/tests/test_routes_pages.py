@@ -164,7 +164,7 @@ class TestClientRoutes:
         # An employee can't convert a lead, so seed the buyer with an admin
         # of the SAME tenant and view it as the employee.
         admin = container.auth_service.create_user(
-            company_id, "empco-admin", "pass-1", "Emp Co Admin", "admin")
+            company_id, "empco-admin", "pass-123456", "Emp Co Admin", "admin")
         c = container.buyer_service.convert_lead(new_lead(container, emp).id, admin)
         assert f"/buyers/{c.id}/delete" not in client.get(f"/buyers/{c.id}").get_data(as_text=True)
 
@@ -185,7 +185,7 @@ class TestClientRoutes:
     def test_employee_cannot_post_a_delete(self, employee_ctx):
         client, container, emp, company_id = employee_ctx
         admin = container.auth_service.create_user(
-            company_id, "empco-admin2", "pass-1", "Emp Co Admin", "admin")
+            company_id, "empco-admin2", "pass-123456", "Emp Co Admin", "admin")
         c = container.buyer_service.convert_lead(new_lead(container, emp).id, admin)
         resp = client.post(f"/buyers/{c.id}/delete", data={"delete_password": "emp-pass-1"})
         assert resp.status_code == 403
@@ -535,7 +535,7 @@ class TestTenantIsolationOverHttp:
         # A lead belonging to a different tenant.
         other = container.tenant_repo.create("Rival", "rival")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival", "pw123456", "Rival", "admin")
+            other.id, "rival", "pw1234567890", "Rival", "admin")
         rival_lead = new_lead(container, rival_admin)
         # The logged-in admin from admin_ctx must not see it.
         assert client.get(f"/leads/{rival_lead.id}").status_code == 404
@@ -1809,7 +1809,7 @@ class TestTaxInvoiceRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-ti-edit")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-ti-edit", "pw123456", "Rival", "admin")
+            other.id, "rival-ti-edit", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000002", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -1821,7 +1821,7 @@ class TestTaxInvoiceRoutes:
         _, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-ti")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-ti", "pw123456", "Rival", "admin")
+            other.id, "rival-ti", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000001", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -1930,7 +1930,7 @@ class TestBlDraftRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-bl")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-bl", "pw123456", "Rival", "admin")
+            other.id, "rival-bl", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000003", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2038,7 +2038,7 @@ class TestVgmAttachmentRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-vgm")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-vgm", "pw123456", "Rival", "admin")
+            other.id, "rival-vgm", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000004", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2178,7 +2178,7 @@ class TestVgmDeclarationRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-vgmd")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-vgmd", "pw123456", "Rival", "admin")
+            other.id, "rival-vgmd", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000005", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2364,7 +2364,7 @@ class TestEsealRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-es")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-es", "pw123456", "Rival", "admin")
+            other.id, "rival-es", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000006", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2421,7 +2421,7 @@ class TestEwayBillRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-ewb")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-ewb", "pw123456", "Rival", "admin")
+            other.id, "rival-ewb", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000007", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2506,7 +2506,7 @@ class TestCommercialInvoiceRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-ci")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-ci", "pw123456", "Rival", "admin")
+            other.id, "rival-ci", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000008", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2595,7 +2595,7 @@ class TestCommercialPackingListRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-cpl")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-cpl", "pw123456", "Rival", "admin")
+            other.id, "rival-cpl", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000009", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},
@@ -2725,7 +2725,7 @@ class TestCustomerInvoiceRoutes:
         client, container, admin, _ = admin_ctx
         other = container.tenant_repo.create("Rival", "rival-cust")
         rival_admin = container.auth_service.create_user(
-            other.id, "rival-cust", "pw123456", "Rival", "admin")
+            other.id, "rival-cust", "pw1234567890", "Rival", "admin")
         rival = container.export_invoice_service.create(
             rival_admin, {"export_invoice_number": "9000000010", "invoice_date": "2026-03-01",
                           "consignee_name": "RIVAL BUYER", "exchange_rate": "80"},

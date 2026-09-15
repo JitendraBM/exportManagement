@@ -1,0 +1,68 @@
+# deploy/nginx.conf.example
+# -------------------------
+# Reverse proxy for the Ledger CRM. Copy to
+#   /etc/nginx/sites-available/crm  (then symlink into sites-enabled/)
+# adjust server_name and the certificate paths, and reload nginx.
+#
+# The app also sets these security headers itself (app/__init__.py); nginx
+# sets them here too so they are present even on responses nginx serves
+# directly (errors, static files) and cannot be forgotten if the app is
+# swapped out.
+
+# --- HTTP: redirect everything to HTTPS -------------------------------------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name aayutiles.in www.aayutiles.in;
+
+    # Let certbot answer ACME challenges over plain HTTP.
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+
+    location / { return 301 https://$host$request_uri; }
+}
+
+# --- HTTPS: the real listener --------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name aayutiles.in www.aayutiles.in;
+
+    ssl_certificate     /etc/letsencrypt/live/aayutiles.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/aayutiles.in/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    # Don't advertise the exact nginx build.
+    server_tokens off;
+
+    # Large enough for a Database Backup restore (whole DB + every product
+    # image in one zip). Keep in step with MAX_UPLOAD_MB / MAX_CONTENT_LENGTH.
+    client_max_body_size 550m;
+
+    # Security headers (mirrored by the app).
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # CSP is shipped report-only for now - see Config.CONTENT_SECURITY_POLICY.
+    # Once inline scripts/styles are cleaned up, switch the app to an enforcing
+    # header and (optionally) add a matching enforcing one here.
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_redirect off;
+    }
+
+    # Serve the app's static files straight from disk.
+    location /static/ {
+        alias /opt/crm/crm_app/app/static/;
+        expires 7d;
+        access_log off;
+    }
+}

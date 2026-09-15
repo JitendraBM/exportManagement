@@ -34,6 +34,7 @@
       <a href="{{ url_for('job_ins.job_in_versions', job_in_id=job_in.id) }}" class="btn btn-ghost btn-sm">Version history</a>
       {% endif %}
       <form method="POST" action="{{ url_for('job_ins.delete_job_in', job_in_id=job_in.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this job in? The stock it added will be removed.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">Delete</button>
       </form>
       {% endif %}

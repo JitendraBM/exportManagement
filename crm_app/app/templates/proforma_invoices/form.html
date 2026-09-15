@@ -849,7 +849,7 @@
     addNewForm.addEventListener('submit', (e) => {
       e.preventDefault();
       const formData = new FormData(addNewForm);
-      fetch('/products/api/quick-create', { method: 'POST', body: formData })
+      fetch('/products/api/quick-create', { method: 'POST', headers: { 'X-CSRFToken': window.csrfToken }, body: formData })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
           if (!ok) { alert(data.error || 'Could not create the product.'); return; }

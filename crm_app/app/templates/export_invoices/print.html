@@ -61,6 +61,7 @@
       <a href="{{ url_for('export_invoices.export_invoice_versions', export_invoice_id=invoice.id) }}" class="btn btn-ghost btn-sm">Version history</a>
       {% endif %}
       <form method="POST" action="{{ url_for('export_invoices.delete_export_invoice', export_invoice_id=invoice.id) }}" onsubmit="return confirmDeleteWithPassword(this, 'Delete this export invoice?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">Delete</button>
       </form>
       {% endif %}

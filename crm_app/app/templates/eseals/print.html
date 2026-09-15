@@ -53,6 +53,7 @@
   {% endwith %}
 
   <form method="POST" id="eseal-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% include 'eseals/_sheet.html' %}
   </form>
 

@@ -142,7 +142,7 @@ class TestPackingListBuildItems:
     def test_foreign_product_reference_dropped(self, container, seed):
         other = container.tenant_repo.create("Other", "other")
         other_admin = container.auth_service.create_user(
-            other.id, "oadm", "pw123456", "O", "admin")
+            other.id, "oadm", "pw1234567890", "O", "admin")
         foreign = make_product(container, other_admin)
         items = self._build(container, seed, [
             {"product_name": "Tiles", "product_id": str(foreign.id),

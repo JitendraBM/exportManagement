@@ -77,7 +77,7 @@ class TestLoginFlow:
         company_id = self._seed_user(app)
         client.post("/login", data={
             "company_id": company_id, "username": "boss", "password": "boss-pass-1"})
-        client.get("/logout")
+        client.post("/logout")  # POST-only since the CSRF/logout hardening
         with client.session_transaction() as sess:
             assert sess.get("user_id") is None
 

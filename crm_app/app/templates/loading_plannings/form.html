@@ -852,7 +852,7 @@
     if (!containerRows().length) { alert("Pick a booking first, so there are containers to assign to."); return; }
     fetch("{{ url_for('loading_plannings.loading_planning_auto_assign') }}", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-CSRFToken": window.csrfToken },
       body: JSON.stringify({ items: items, packings: packings, containers: containerRows() })
     })
       .then(function (r) { return r.json(); })

@@ -2097,6 +2097,19 @@ class Database:
             if existing and "job_in_id" not in existing:
                 conn.execute("ALTER TABLE packing_planning_items "
                              "ADD COLUMN job_in_id INTEGER REFERENCES job_ins(id)")
+            # v101: login brute-force state on `users` - a consecutive-failure
+            # counter and a lockout timestamp, plus a last-login stamp. All
+            # NULL/0 on every existing row, which reads as "never failed, not
+            # locked" - see AuthService.authenticate.
+            existing = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+            if existing and "failed_attempts" not in existing:
+                conn.execute("ALTER TABLE users ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0")
+            if existing and "locked_until" not in existing:
+                conn.execute("ALTER TABLE users ADD COLUMN locked_until TEXT")
+            if existing and "last_failed_at" not in existing:
+                conn.execute("ALTER TABLE users ADD COLUMN last_failed_at TEXT")
+            if existing and "last_login_at" not in existing:
+                conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
 
             # v101: quotation_items/proforma_invoice_items.packing_unit - the
             # unit a "Manual - Packing" line's typed figure counts. NULL on

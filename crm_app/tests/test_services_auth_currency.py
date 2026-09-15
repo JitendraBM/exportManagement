@@ -19,9 +19,9 @@ from app.exceptions import ValidationError, PermissionDeniedError, NotFoundError
 class TestAuthCreateUser:
     def test_create_user_hashes_password(self, container, seed):
         u = container.auth_service.create_user(
-            seed.company_id, "newuser", "secret123", "New User", "employee")
+            seed.company_id, "newuser", "secret123456", "New User", "employee")
         assert u.id is not None
-        assert u.password_hash != "secret123"  # never stored in the clear
+        assert u.password_hash != "secret123456"  # never stored in the clear
 
     def test_duplicate_username_rejected(self, container, seed):
         with pytest.raises(ValidationError):
@@ -35,12 +35,12 @@ class TestAuthCreateUser:
     def test_invalid_role_rejected(self, container, seed):
         with pytest.raises(ValidationError):
             container.auth_service.create_user(
-                seed.company_id, "u2", "pw123456", "Name", "superuser")
+                seed.company_id, "u2", "pw1234567890", "Name", "superuser")
 
     def test_same_username_ok_in_different_company(self, container, seed):
         other = container.tenant_repo.create("Other Co", "other-co")
         # 'admin' already exists in seed.company_id but not in `other`.
-        u = container.auth_service.create_user(other.id, "admin", "pw123456", "Other Admin", "admin")
+        u = container.auth_service.create_user(other.id, "admin", "pw1234567890", "Other Admin", "admin")
         assert u.company_id == other.id
 
 
@@ -87,7 +87,7 @@ class TestAuthChangeUsername:
 
     def test_cross_company_target_is_not_found(self, container, seed):
         other = container.tenant_repo.create("Other", "other")
-        stranger = container.auth_service.create_user(other.id, "stranger", "pw123456", "S", "admin")
+        stranger = container.auth_service.create_user(other.id, "stranger", "pw1234567890", "S", "admin")
         with pytest.raises(NotFoundError):
             container.auth_service.change_username(seed.admin, stranger.id, "renamed")
 
