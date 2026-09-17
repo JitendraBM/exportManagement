@@ -45,6 +45,11 @@
   .epl-unit-sm { font-size: .85em; text-transform: uppercase; font-weight: normal; }
   .epl-items thead td { font-weight: normal; text-align: center; vertical-align: middle; }
   .epl-items tbody td { vertical-align: top; }
+  /* The container split prints small so long descriptions keep to one or
+     two lines; the quantity columns (Packing / Qty / Alt. Qty) right-align
+     with the weight columns, rows and TOTAL alike. Headers stay centred. */
+  .epl-items td { font-size: 8px; }
+  .epl-items tbody td.epl-cnum { text-align: right; }
   .epl-tot td { font-weight: bold; }
   @media print { .epl-sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
 </style>
@@ -155,8 +160,8 @@
   <!-- ============ THE SPLIT: one block of rows per physical container, grouped by HSN ============ -->
   <table class="epl-items">
     <colgroup>
-      <col style="width:11%"><col style="width:11%"><col style="width:12%"><col style="width:22%"><col style="width:8%">
-      <col style="width:6%"><col style="width:7%"><col style="width:8%"><col style="width:7.5%"><col style="width:7.5%">
+      <col style="width:10%"><col style="width:8%"><col style="width:11%"><col style="width:31%"><col style="width:7%">
+      <col style="width:5%"><col style="width:6%"><col style="width:8%"><col style="width:6.5%"><col style="width:7.5%">
     </colgroup>
     <thead>
       <tr>
@@ -255,7 +260,11 @@
     <colgroup><col style="width:14%"><col style="width:56%"><col style="width:30%"></colgroup>
     <tr>
       <td class="epl-lbl epl-mid">Self Sealing<br>Declaration</td>
-      <td class="epl-left" style="height:70px;">
+      {# No fixed height here any more - it forced 70px regardless of how
+         short the declaration text was, leaving a big blank gap above
+         "Stuff At". The cell now sizes to its own content, same as every
+         other cell on this sheet. #}
+      <td class="epl-left">
         {{ (invoice.self_sealing_declaration or (company.self_sealing_declaration if company else '') or '-')|replace('\n', '<br>')|safe }}
       </td>
       <td rowspan="2" class="epl-r epl-sign" style="text-align:right; padding:4px 6px; position:relative;">
